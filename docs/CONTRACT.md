@@ -121,6 +121,14 @@ every returned byte slice with `credential.NewMaterial`, so `String()`
 redaction and `Zero()` wiping hold exactly the same as for a native connector
 — see [`SECURITY.md`](SECURITY.md).
 
+**Error strings are not redacted.** Unlike `Material`, an `error` a provider
+returns crosses the wire verbatim: `transport.ErrToStatus`/`ErrFromStatus`
+carry `err.Error()` as the gRPC status message, unmodified in both
+directions, and a host may log a received error as part of its audit trail.
+A connector author MUST NOT embed secret material in an error string — see
+[`SECURITY.md`](SECURITY.md#track-b-error-strings-cross-the-wire-verbatim)
+for the full rule.
+
 **Reference provider.** [`examples/credentialloader-provider/`](../examples/credentialloader-provider/main.go)
 is a complete, vendor-free `CredentialLoader` provider: a `memLoader` over a
 fixed map of placeholder `op://` refs, served via `goplugin.Serve`. Copy

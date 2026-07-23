@@ -12,3 +12,12 @@ lint:
   # here since it is a known, accepted consequence of the chosen layout.
   except:
     - PACKAGE_DIRECTORY_MATCH
+    # SERVICE_SUFFIX wants every service named "*Service" (e.g.
+    # CredentialLoaderService). We deliberately name it "CredentialLoader"
+    # instead, to mirror the credential.CredentialLoader Go interface 1:1 --
+    # the proto service and the Go interface it backs share one name across
+    # the wire boundary, which is the whole point of the Track-B contract.
+    # Renaming the service to satisfy the linter would break that mirroring
+    # for no benefit, so the rule is excepted here rather than the code
+    # changed.
+    - SERVICE_SUFFIX
