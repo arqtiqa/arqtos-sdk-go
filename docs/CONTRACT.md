@@ -90,14 +90,49 @@ backoff, may succeed without any change in caller behavior.
 
 ## Versioning
 
-This module defines the **Go semantic contract** only — interfaces, value
-types, and the error taxonomy. It intentionally does not define:
+This module defines the **Go semantic contract** above: interfaces, value
+types, and the error taxonomy. Everything on this page applies identically
+whether a `CredentialLoader` is compiled into the host (native) or runs
+out-of-process (Track-B) — the wire layer below only ever marshals to/from
+the same `credential.CredentialLoader`, `ref.Ref`, `credential.Lease`, and
+`cerr.Error` types.
 
-- a wire protocol (`.proto`/gRPC) for out-of-process connectors,
-- a connector registry or manifest format,
-- host/connector version negotiation (`min_host_version`).
+### Track-B: the out-of-process wire contract
 
-Those land in a separate, later contract (Story #808). A connector built
-against this module today is forward-compatible with that protocol: the Go
-interfaces here are what the wire protocol will marshal to/from, not something
-it replaces.
+A Track-B connector is a separate binary — a **provider** — that a host
+launches as a subprocess and talks to over gRPC via
+[`hashicorp/go-plugin`](https://github.com/hashicorp/go-plugin). The wire
+layer composes go-plugin rather than reinventing process/handshake/transport
+management; this module adds only the pieces specific to the
+`CredentialLoader` class:
+
+| Layer | Package | What it is |
+|---|---|---|
+| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`). Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
+| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — errors cross the wire as gRPC status, never as strings for the caller to pattern-match. |
+| Transport binding | [`plugin/`](../plugin/plugin.go) | `plugin.Handshake` (the go-plugin magic-cookie handshake both sides must share), `plugin.CredentialLoaderName`, and `plugin.PluginMap(impl)`. A provider passes `plugin.PluginMap(impl)` to `goplugin.ServeConfig.Plugins`; the host's `Dispense(plugin.CredentialLoaderName)` returns a value that itself satisfies `credential.CredentialLoader` — from the host's point of view, calling a Track-B provider looks identical to calling a native connector. |
+| Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), `capabilities`, `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
+
+**Refs-only over the wire.** The `Resolve`/`Lease` RPCs take a `Ref` and
+return only the `Material` the caller asked for — a provider never returns
+unrequested material, and the wire carries raw bytes with no logging or
+serialization step that could leak them. The host-side `grpcClient` re-wraps
+every returned byte slice with `credential.NewMaterial`, so `String()`
+redaction and `Zero()` wiping hold exactly the same as for a native connector
+— see [`SECURITY.md`](SECURITY.md).
+
+**Reference provider.** [`examples/credentialloader-provider/`](../examples/credentialloader-provider/main.go)
+is a complete, vendor-free `CredentialLoader` provider: a `memLoader` over a
+fixed map of placeholder `op://` refs, served via `goplugin.Serve`. Copy
+`main.go` as the starting point for a real provider (Infisical, Vault, ...) —
+swap `memLoader`'s method bodies for calls to the actual backing store; the
+`plugin.Handshake` + `plugin.PluginMap(...)` + `goplugin.Serve` wiring does
+not change. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
+in the same directory builds that binary and drives it as a real subprocess
+the way a host would — dial, `Dispense`, `Resolve`, `Kill` — confirming the
+process actually exits (dies-with-session).
+
+Out of scope here (a separate, later Story): the host-side registry, the
+go-plugin dial + broker wiring, and a `secrets.Provider` adapter — this
+module ships only the provider-side wire contract and a self-contained
+reference implementation.
