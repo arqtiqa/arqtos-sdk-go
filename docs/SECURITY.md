@@ -94,6 +94,33 @@ for the exact `ref.Ref` (or `Lease`) it asked about. A connector must not:
   NOT embed resolved material — wrap the underlying store error's message,
   not the secret value.
 
+## Track-B: error strings cross the wire verbatim
+
+Over the Track-B gRPC transport, only `Material` is treated as sensitive and
+handled specially: it crosses the wire as the redacted-on-format
+`credential.Material` the host itself asked for (see `Material` redacted +
+wiped, above), never logged or serialized as a bare string en route.
+
+A provider's **error messages do not get that treatment**. `transport.ErrToStatus`
+preserves `err.Error()` verbatim into the gRPC status message it sends back
+to the host, and `transport.ErrFromStatus` reconstructs the error from that
+same status message on the way in — the string makes a full round trip
+unredacted, and a host is free to log a received error (this is exactly what
+the PERMAFROST audit trail above does for every action). Consequently:
+
+- A connector implementation MUST NOT embed secret material — a resolved
+  value, a raw credential, a token, a password — in any `error` it returns
+  from a `CredentialLoader` method, including errors wrapped via `cerr.New`.
+  This applies identically whether the connector runs natively or as a
+  Track-B provider; Track-B just makes the leak also cross a process
+  boundary and land in a gRPC status the host may persist.
+- If the backing store's own error includes secret-shaped material (some
+  APIs echo the failing credential back in an error body), the connector
+  MUST strip or redact it before wrapping, not pass it through.
+- See [`docs/CONTRACT.md`](CONTRACT.md#track-b-the-out-of-process-wire-contract)
+  for how `transport.ErrToStatus`/`ErrFromStatus` map every `cerr.Kind` to a
+  gRPC code and carry the message across.
+
 ## Placeholders in examples and docs
 
 Any example, test fixture, or doc snippet that needs to show a secret

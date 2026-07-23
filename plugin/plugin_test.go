@@ -80,10 +80,19 @@ func (m *memLoader) Close() error { return nil }
 func newTestClient(t *testing.T, impl credential.CredentialLoader) credential.CredentialLoader {
 	t.Helper()
 
-	client, server := goplugin.TestPluginGRPCConn(t, false, PluginMap(impl))
+	// The server return value is intentionally unused: client.Close() below
+	// tears the server down for us (see the Cleanup comment).
+	client, _ := goplugin.TestPluginGRPCConn(t, false, PluginMap(impl))
 	t.Cleanup(func() {
+		// client.Close() sends the go-plugin controller Shutdown RPC, whose
+		// server-side handler calls GRPCServer.Stop() itself (see
+		// grpc_controller.go in hashicorp/go-plugin). Also calling
+		// server.Stop() here from the test goroutine races that handler
+		// goroutine on GRPCServer's internal broker field -- observed under
+		// `go test -race` in ~2/3 of runs. client.Close() alone is
+		// sufficient to tear the in-process server down; do not add a
+		// second, redundant Stop() call.
 		_ = client.Close()
-		server.Stop()
 	})
 
 	raw, err := client.Dispense(CredentialLoaderName)
