@@ -33,8 +33,8 @@ func NewMaterial(b []byte) *Material {
 
 func (m *Material) Reveal() []byte { return m.b }
 
-func (m *Material) String() string   { return "[REDACTED credential]" }
-func (m *Material) GoString() string { return "[REDACTED credential]" }
+func (m Material) String() string   { return "[REDACTED credential]" }
+func (m Material) GoString() string { return "[REDACTED credential]" }
 
 func (m *Material) Zero() {
 	for i := range m.b {

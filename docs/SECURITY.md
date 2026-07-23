@@ -26,11 +26,15 @@ Resolved secret material is always wrapped in
 [`credential.Material`](../credential/credential.go), never passed around as a
 bare `[]byte` or `string`:
 
-- `Material.String()` / `Material.GoString()` always return a fixed redacted
-  placeholder. This means `Material` is safe to pass to `fmt.Sprintf("%v", …)`,
-  a logger, `%+v` in a panic trace, or any other `%v`/`%s`-style formatting
-  without leaking the secret — accidental logging of a `Material` value cannot
-  print the secret.
+- `Material.String()` / `Material.GoString()` are defined on the **value**
+  receiver, so both a `Material` value and a `*Material` pointer — including a
+  `Material` embedded by value in another struct — satisfy `fmt.Stringer` /
+  `fmt.GoStringer` and always render the fixed redacted placeholder. This
+  means `Material` (value or pointer) is safe to pass to `fmt.Sprintf("%v", …)`,
+  a logger, `%+v` in a panic trace, `%#v`, or any other `%v`/`%+v`/`%#v`/`%s`-style
+  formatting without leaking the secret — accidental logging of a `Material`
+  cannot print the secret. The backing `b []byte` field is unexported, so
+  there is no field-access path around this either.
 - The raw bytes are reachable only through the explicit `Reveal()` call. Any
   code path that needs the actual secret value must call `Reveal()`
   deliberately and hold the result for the shortest possible scope.

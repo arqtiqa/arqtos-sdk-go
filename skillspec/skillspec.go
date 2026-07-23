@@ -1,6 +1,6 @@
 // Package skillspec is the skill.yml schema shipped alongside the connector SDK
 // (one repo holds both the connector contract and the skill format). The client-native
-// SKILL.md is synthesised elsewhere (arqtos-cli skillsresolve) — this is just the schema.
+// SKILL.md is synthesised by the arqtos host, not here — this is just the schema.
 package skillspec
 
 import (
