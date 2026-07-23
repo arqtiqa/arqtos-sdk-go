@@ -1,0 +1,23 @@
+version: v2
+modules:
+  - path: proto/connector/v1
+lint:
+  use: [STANDARD]
+  # Module root is narrowed to proto/connector/v1 (rather than proto/) so that
+  # paths=source_relative in buf.gen.yaml emits flat files directly into
+  # connectorpb/ (AC: import "github.com/arqtiqa/arqtos-sdk-go/connectorpb"
+  # resolves) instead of nesting under connectorpb/connector/v1/. That
+  # deliberately puts the single proto file at the module root while its
+  # package is connector.v1, which trips PACKAGE_DIRECTORY_MATCH — excepted
+  # here since it is a known, accepted consequence of the chosen layout.
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+    # SERVICE_SUFFIX wants every service named "*Service" (e.g.
+    # CredentialLoaderService). We deliberately name it "CredentialLoader"
+    # instead, to mirror the credential.CredentialLoader Go interface 1:1 --
+    # the proto service and the Go interface it backs share one name across
+    # the wire boundary, which is the whole point of the Track-B contract.
+    # Renaming the service to satisfy the linter would break that mirroring
+    # for no benefit, so the rule is excepted here rather than the code
+    # changed.
+    - SERVICE_SUFFIX
