@@ -117,10 +117,22 @@ invariants — independent of which backing store the connector talks to.
 ## Versioning and the wire protocol
 
 This module is the **Go semantic contract**: interfaces, types, and error
-taxonomy. It does not define a wire protocol, a broker, or a connector registry —
-an out-of-process connector's `.proto`/gRPC transport and its
-`min_host_version` negotiation are a separate, later contract (see
-[`docs/CONTRACT.md`](docs/CONTRACT.md#versioning)).
+taxonomy. That contract applies identically whether a `CredentialLoader` is
+compiled into the host (native) or runs out-of-process as a separate
+provider binary (Track-B), talked to over gRPC via
+[`hashicorp/go-plugin`](https://github.com/hashicorp/go-plugin).
+
+This module also ships the Track-B wire layer built on top of that same
+contract: the `.proto`/generated stubs (`proto/`, `connectorpb/`), the
+marshalling and error-mapping helpers (`transport/`), the go-plugin
+handshake and dispense wiring (`plugin/`), and the provider manifest schema
+(`manifest/`). See
+[`docs/CONTRACT.md`](docs/CONTRACT.md#track-b-the-out-of-process-wire-contract)
+for the full layer-by-layer breakdown, and
+[`examples/credentialloader-provider/`](examples/credentialloader-provider/main.go)
+for a complete, vendor-free reference provider to copy as a starting point
+for a real one. Out of scope here (a separate, later contract): the
+host-side registry and dial/broker wiring, and a `secrets.Provider` adapter.
 
 ## License
 
