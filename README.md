@@ -26,7 +26,7 @@ never fetches the module — measured, not assumed. The SDK is visible to
 
 | Package | Purpose |
 |---|---|
-| [`ref`](ref/) | The `op://vault/item/field` secret-reference type (`Ref`, `Parse`). A `Ref` is a *reference* to a secret — connectors never receive raw credential material as input, only refs. |
+| [`ref`](ref/) | The `op://<vault>/<item>/<field>` secret-reference type (`Ref`, `Parse`). A `Ref` is a *reference* to a secret — connectors never receive raw credential material as input, only refs. |
 | [`cerr`](cerr/) | The connector error taxonomy: `Kind` (NotFound / Unauthorized / Unavailable / Unsupported / Invalid / Timeout / Unknown), `Error`, `New`, `KindOf`, `Retryable`. Callers classify errors by kind, never by string-matching. |
 | [`connector`](connector/) | The base contract every connector implements regardless of class: `Class`, `Capability` / `Capabilities`, `Health` / `HealthStatus`, and the `Connector` interface (`Implements`, `Capabilities`, `Health`, `Close`). |
 | [`credential`](credential/) | The `CredentialLoader` connector class: `Resolve` / `List` / `Lease` / `Renew` / `Revoke`, plus `Material` (redacted, revealable-on-demand, wipeable secret bytes) and `Lease`. |
