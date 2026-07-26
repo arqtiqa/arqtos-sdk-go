@@ -97,7 +97,7 @@ var _ credential.CredentialLoader = (*memLoader)(nil)
 func main() {
 	impl := &memLoader{
 		vals: map[string]string{
-			referenceRef:                   referencePlaceholder,
+			referenceRef:                        referencePlaceholder,
 			"op://<vault>/<other-item>/<field>": "placeholder-api-token",
 		},
 	}
