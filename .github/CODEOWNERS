@@ -1,0 +1,14 @@
+# Code owners for arqtiqa/arqtos-sdk-go
+#
+# @mw-io is the REVIEWING identity for arqtiqa repositories; @mw-aqa is the
+# authoring identity. The split is deliberate: GitHub does not let a pull
+# request author approve their own PR, so a repository whose only owner is also
+# its only author has an unsatisfiable review requirement and every merge
+# becomes an admin bypass. Two identities make the review rule real instead of
+# ceremonial.
+#
+# Keep this file in step with the branch-protection setting
+# `require_code_owner_reviews` — a protection rule that points at a CODEOWNERS
+# file which does not exist reads stricter than it enforces.
+
+* @mw-io

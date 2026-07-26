@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/ref"
@@ -79,10 +80,12 @@ func TestLeaseExpired(t *testing.T) {
 // Compile-time proof a type can satisfy CredentialLoader.
 type stubLoader struct{ connector.Connector }
 
-func (stubLoader) Resolve(context.Context, ref.Ref) (*credential.Material, error) { return nil, nil }
-func (stubLoader) List(context.Context, string) ([]ref.Ref, error)                { return nil, nil }
-func (stubLoader) Lease(context.Context, ref.Ref) (*credential.Material, credential.Lease, error) {
-	return nil, credential.Lease{}, nil
+func (stubLoader) Resolve(context.Context, ref.Ref) (credential.Resolution, error) {
+	return credential.Resolved(credential.NewMaterial([]byte("placeholder")))
+}
+func (stubLoader) List(context.Context, string) ([]ref.Ref, error) { return nil, nil }
+func (stubLoader) Lease(context.Context, ref.Ref) (credential.Resolution, credential.Lease, error) {
+	return credential.Resolution{}, credential.Lease{}, cerr.New(cerr.KindUnsupported, "Lease", nil)
 }
 func (stubLoader) Renew(context.Context, credential.Lease) (credential.Lease, error) {
 	return credential.Lease{}, nil

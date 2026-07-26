@@ -2,6 +2,7 @@ package transport_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/arqtiqa/arqtos-sdk-go/cerr"
+	"github.com/arqtiqa/arqtos-sdk-go/connectorpb"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/ref"
 	"github.com/arqtiqa/arqtos-sdk-go/transport"
@@ -78,6 +80,20 @@ func TestKindCodeMappingDistinct(t *testing.T) {
 		cerr.KindUnsupported,
 		cerr.KindInvalid,
 		cerr.KindTimeout,
+		cerr.KindRateLimited,
+		cerr.KindContractViolation,
+	}
+
+	// Every Kind in the closed vocabulary except Unknown must have a distinct
+	// code: a Kind that quietly falls through to codes.Unknown loses its
+	// classification the moment it crosses a process boundary.
+	for _, k := range cerr.Kinds() {
+		if k == cerr.KindUnknown {
+			continue
+		}
+		if !slices.Contains(kinds, k) {
+			t.Fatalf("Kind %v is in the vocabulary but not in this mapping test", k)
+		}
 	}
 
 	seenCodes := make(map[codes.Code]cerr.Kind, len(kinds))
@@ -140,4 +156,204 @@ func TestErrFromStatusFromNil(t *testing.T) {
 	if got := transport.ErrFromStatus(nil); got != nil {
 		t.Fatalf("ErrFromStatus(nil) = %v, want nil", got)
 	}
+}
+
+// TestResolutionPresenceCrossesTheWire is the contract at the process
+// boundary. The wire distinguishes the three states, and emptiness is
+// ASSERTED rather than inferred from the length of a byte field:
+//
+//	no Material message                     -> nothing was resolved
+//	Material, no bytes, empty_by_assertion  -> a deliberately-empty value
+//	Material, no bytes, NO assertion        -> nothing was resolved
+//	Material with bytes                     -> a value
+//
+// Presence alone cannot carry this. proto3 does not put a zero-length bytes
+// field on the wire, so a conformant ResolvedEmpty and a provider that
+// resolved nothing and sent a default-constructed Material serialize
+// IDENTICALLY. Reading "present, no bytes" as deliberately-empty therefore
+// hands the host an empty credential for a read that produced nothing — the
+// conflation the contract refuses in-process, reopened at the boundary where
+// the host cannot inspect the sender.
+func TestResolutionPresenceCrossesTheWire(t *testing.T) {
+	t.Run("unresolved sends no material message", func(t *testing.T) {
+		if pb := transport.ResolutionToPB(credential.Resolution{}); pb != nil {
+			t.Fatalf("an unresolved Resolution must not be sent as material, got %v", pb)
+		}
+		if _, err := transport.ResolutionFromPB(nil).Value(); err == nil {
+			t.Fatalf("an absent material message must not read as an empty credential")
+		}
+	})
+
+	t.Run("deliberately empty asserts itself on the wire", func(t *testing.T) {
+		pb := transport.ResolutionToPB(credential.ResolvedEmpty())
+		if pb == nil {
+			t.Fatalf("a deliberately-empty value must cross as a present material message")
+		}
+		if len(pb.GetValue()) != 0 {
+			t.Fatalf("value = %q, want empty", pb.GetValue())
+		}
+		if !pb.GetEmptyByAssertion() {
+			t.Fatalf("a deliberately-empty value must set empty_by_assertion; without it the receiver " +
+				"cannot tell it from a provider that resolved nothing")
+		}
+		mat, err := transport.ResolutionFromPB(pb).Value()
+		if err != nil {
+			t.Fatalf("round-trip of a deliberately-empty value: %v", err)
+		}
+		if len(mat.Reveal()) != 0 {
+			t.Fatalf("round-tripped material = %q, want empty", mat.Reveal())
+		}
+	})
+
+	t.Run("an unasserted empty material reads as unresolved", func(t *testing.T) {
+		// The encoding a foreign author produces by accident. It must mean
+		// the SAFE thing.
+		for _, pb := range []*connectorpb.Material{
+			{},
+			{Value: []byte{}},
+			{Value: nil},
+		} {
+			res := transport.ResolutionFromPB(pb)
+			if _, err := res.Value(); err == nil {
+				t.Fatalf("Material %v read as a readable credential; without empty_by_assertion it is unresolved", pb)
+			}
+			// And the host guard names whoever sent it.
+			if _, err := credential.CheckResolution("placeholder-provider", "Resolve", res, nil); err == nil {
+				t.Fatalf("CheckResolution accepted an unasserted empty material")
+			}
+		}
+	})
+
+	t.Run("bytes win over a contradictory assertion", func(t *testing.T) {
+		res := transport.ResolutionFromPB(&connectorpb.Material{Value: []byte("v"), EmptyByAssertion: true})
+		mat, err := res.Value()
+		if err != nil {
+			t.Fatalf("material with bytes must be a value: %v", err)
+		}
+		if string(mat.Reveal()) != "v" {
+			t.Fatalf("Reveal() = %q, want %q", mat.Reveal(), "v")
+		}
+	})
+
+	t.Run("a value round-trips", func(t *testing.T) {
+		in, err := credential.Resolved(credential.NewMaterial([]byte("placeholder-value")))
+		if err != nil {
+			t.Fatalf("Resolved: %v", err)
+		}
+		mat, err := transport.ResolutionFromPB(transport.ResolutionToPB(in)).Value()
+		if err != nil {
+			t.Fatalf("round-trip: %v", err)
+		}
+		if string(mat.Reveal()) != "placeholder-value" {
+			t.Fatalf("Reveal = %q", mat.Reveal())
+		}
+	})
+}
+
+// TestBatchResultCrossesTheWire covers the batch marshalling: exactly one
+// outcome per result, the same Material presence rules one level down, and a
+// per-reference failure that keeps its classification.
+func TestBatchResultCrossesTheWire(t *testing.T) {
+	r := ref.Ref{Vault: "<vault>", Item: "<item>", Field: "<field>"}
+
+	t.Run("a value", func(t *testing.T) {
+		res, err := credential.Resolved(credential.NewMaterial([]byte("placeholder-value")))
+		if err != nil {
+			t.Fatalf("Resolved: %v", err)
+		}
+		in, err := credential.BatchResolved(r, res)
+		if err != nil {
+			t.Fatalf("BatchResolved: %v", err)
+		}
+		got := transport.BatchResultFromPB(transport.BatchResultToPB(in))
+		if got.Ref() != r {
+			t.Fatalf("Ref() = %v, want %v", got.Ref(), r)
+		}
+		if got.Err() != nil {
+			t.Fatalf("Err() = %v, want nil", got.Err())
+		}
+		mat, verr := got.Resolution().Value()
+		if verr != nil || string(mat.Reveal()) != "placeholder-value" {
+			t.Fatalf("round-trip lost the value: %v %v", mat, verr)
+		}
+	})
+
+	t.Run("a deliberately-empty value", func(t *testing.T) {
+		in, err := credential.BatchResolved(r, credential.ResolvedEmpty())
+		if err != nil {
+			t.Fatalf("BatchResolved: %v", err)
+		}
+		pb := transport.BatchResultToPB(in)
+		if !pb.GetMaterial().GetEmptyByAssertion() {
+			t.Fatalf("a deliberately-empty batch result must assert its emptiness on the wire")
+		}
+		mat, verr := transport.BatchResultFromPB(pb).Resolution().Value()
+		if verr != nil || len(mat.Reveal()) != 0 {
+			t.Fatalf("want readable, empty material; got %v %v", mat, verr)
+		}
+	})
+
+	t.Run("a typed failure keeps its Kind", func(t *testing.T) {
+		in, err := credential.BatchFailed(r, cerr.New(cerr.KindRateLimited, "ResolveBatch", errors.New("quota")))
+		if err != nil {
+			t.Fatalf("BatchFailed: %v", err)
+		}
+		got := transport.BatchResultFromPB(transport.BatchResultToPB(in))
+		if got.Err() == nil {
+			t.Fatalf("the failure did not survive the wire")
+		}
+		if cerr.KindOf(got.Err()) != cerr.KindRateLimited {
+			t.Fatalf("KindOf = %v, want KindRateLimited — a classification lost on the wire is a breaker that never opens",
+				cerr.KindOf(got.Err()))
+		}
+		if _, verr := got.Resolution().Value(); verr == nil {
+			t.Fatalf("a failed result must not carry a readable resolution")
+		}
+	})
+
+	t.Run("a blank result stays blank", func(t *testing.T) {
+		// A foreign provider sending a result with no failure and no asserted
+		// material. It must not become an empty credential.
+		got := transport.BatchResultFromPB(&connectorpb.ResolveBatchResult{
+			Ref: transport.RefToPB(r), Material: &connectorpb.Material{},
+		})
+		if got.Err() != nil {
+			t.Fatalf("Err() = %v, want nil", got.Err())
+		}
+		if _, verr := got.Resolution().Value(); verr == nil {
+			t.Fatalf("a blank wire result produced a READABLE credential")
+		}
+		// It keeps the ref, so CheckBatch reports the empty outcome rather
+		// than a correspondence mismatch.
+		if got.Ref() != r {
+			t.Fatalf("Ref() = %v, want %v", got.Ref(), r)
+		}
+		_, err := credential.CheckBatch("placeholder-provider", []ref.Ref{r}, []credential.BatchResult{got}, nil)
+		if err == nil {
+			t.Fatalf("CheckBatch accepted a result carrying no outcome")
+		}
+	})
+
+	t.Run("nil messages", func(t *testing.T) {
+		if got := transport.BatchResultFromPB(nil); got.Err() != nil {
+			t.Fatalf("BatchResultFromPB(nil).Err() = %v, want nil", got.Err())
+		}
+		if _, verr := transport.BatchResultFromPB(nil).Resolution().Value(); verr == nil {
+			t.Fatalf("BatchResultFromPB(nil) must not be readable")
+		}
+		if got := transport.FailureToPB(nil); got != nil {
+			t.Fatalf("FailureToPB(nil) = %v, want nil", got)
+		}
+		if got := transport.FailureFromPB(nil); got != nil {
+			t.Fatalf("FailureFromPB(nil) = %v, want nil", got)
+		}
+	})
+
+	t.Run("an OK-coded failure is not a failure", func(t *testing.T) {
+		// A provider that filled in the failure message with zeroes has not
+		// reported a failure, and must not be read as having done so.
+		if got := transport.FailureFromPB(&connectorpb.Failure{}); got != nil {
+			t.Fatalf("FailureFromPB(zero) = %v, want nil", got)
+		}
+	})
 }
