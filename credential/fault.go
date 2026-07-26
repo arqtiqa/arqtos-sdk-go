@@ -19,7 +19,8 @@ type Fault string
 
 const (
 	// FaultUnresolved is a connector reporting success while carrying no
-	// value — the shape REQ-ARQ-P-17 exists to eliminate.
+	// value — the (empty value, no error) shape this contract exists to
+	// eliminate.
 	FaultUnresolved Fault = "unresolved-without-error"
 	// FaultBatchMismatch is a batch whose results do not correspond to the
 	// references that were requested: a different count, or a different
@@ -74,8 +75,8 @@ func (e *FaultError) Error() string {
 // code sees cerr.KindContractViolation without knowing this type exists.
 func (e *FaultError) Unwrap() error { return cerr.New(cerr.KindContractViolation, e.Op, nil) }
 
-// CheckResolution is the host-side guard REQ-ARQ-P-17 requires: it rejects a
-// return the contract does not admit, and names the connector that made it.
+// CheckResolution is the host-side guard: it rejects a return the contract
+// does not admit, and names the connector that made it.
 //
 // Pass it whatever a connector returned from Resolve or Lease, together with
 // the name the host knows that connector by. It returns:
@@ -128,23 +129,23 @@ func CheckBatch(connectorName string, refs []ref.Ref, results []BatchResult, err
 		}
 	}
 	for i, got := range results {
-		if got.Ref != refs[i] {
+		if got.r != refs[i] {
 			return nil, &FaultError{
 				Connector: connectorName,
 				Op:        op,
 				Fault:     FaultBatchMismatch,
-				Detail:    fmt.Sprintf("result %d is for %s, but %s was requested at that position", i, got.Ref, refs[i]),
+				Detail:    fmt.Sprintf("result %d is for %s, but %s was requested at that position", i, got.r, refs[i]),
 			}
 		}
-		if got.Err != nil {
+		if got.err != nil {
 			continue
 		}
-		if !got.Resolution.present() {
+		if !got.res.present() {
 			return nil, &FaultError{
 				Connector: connectorName,
 				Op:        op,
 				Fault:     FaultUnresolved,
-				Detail:    fmt.Sprintf("result %d (%s) carries neither a value nor a failure", i, got.Ref),
+				Detail:    fmt.Sprintf("result %d (%s) carries neither a value nor a failure", i, got.r),
 			}
 		}
 	}

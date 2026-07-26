@@ -30,13 +30,13 @@
 //   - [CheckCapabilityHonesty] — what the manifest declares and what the
 //     running connector reports are the same set.
 //   - [CheckBatchDeclared] — batch resolution is declared exactly when it is
-//     implemented (REQ-ARQ-P-20).
+//     implemented.
 //   - [CheckResolveNoEmptySuccess] — a reference the connector can resolve
-//     comes back with a value, never as a success carrying nothing
-//     (REQ-ARQ-P-17).
+//     comes back carrying material, never as a success carrying nothing and
+//     never as a deliberately-empty assertion.
 //   - [CheckFailureTyped] — a reference the connector cannot resolve fails
 //     with a classified error from the closed vocabulary, so a host never
-//     parses vendor prose (REQ-ARQ-P-19).
+//     parses vendor prose.
 //   - [CheckBatchShape] — batch results correspond one-for-one, in order,
 //     with the references requested.
 //
@@ -83,7 +83,7 @@ const (
 	// it is implemented.
 	CheckBatchDeclared = "batch/declared-is-implemented"
 	// CheckResolveNoEmptySuccess covers a resolvable reference coming back
-	// with a value rather than as a success carrying nothing.
+	// carrying material, rather than as a success carrying nothing.
 	CheckResolveNoEmptySuccess = "resolve/no-empty-success"
 	// CheckFailureTyped covers an unresolvable reference failing with a
 	// classified error from the closed vocabulary.
@@ -240,20 +240,12 @@ func checkManifest(rep *Report, m manifest.Doc) {
 			m.Implements, connector.ClassCredentialLoader))
 		return
 	}
-	known := credential.KnownCapabilities()
-	var unknown []string
-	for _, c := range m.Capabilities {
-		if !known.Has(c) {
-			unknown = append(unknown, string(c))
-		}
-	}
-	if len(unknown) > 0 {
-		rep.add(CheckManifest, false, fmt.Sprintf(
-			"declares capabilit(ies) outside the %s vocabulary: %s. A host ignores what it does not recognise, "+
-				"so a misspelling is indistinguishable from a capability that was never declared",
-			connector.ClassCredentialLoader, strings.Join(unknown, ", ")))
-		return
-	}
+	// Capability-vocabulary closure is not re-implemented here.
+	// manifest.Doc.Validate, called above, rejects a capability outside the
+	// vocabulary of the class the manifest implements — which is where the
+	// check belongs, because a host runs Validate before it loads anything,
+	// with no connector and no fixtures. Duplicating it in the harness would
+	// be a second copy of a closed vocabulary, free to drift from the first.
 	rep.add(CheckManifest, true, "")
 }
 
@@ -333,6 +325,21 @@ func declaredIn(inManifest, atRuntime bool) string {
 	}
 }
 
+// checkResolveNoEmptySuccess requires every reference the run declares
+// resolvable to come back carrying ACTUAL BYTES.
+//
+// Presence alone is not enough, and the gap is not theoretical. A connector
+// can answer every read with credential.ResolvedEmpty() — present, readable,
+// zero bytes — and that is exactly the move an author reaches for when
+// credential.Resolved refuses their signed-out backend: it makes the error go
+// away without making the credential exist. Checked for presence only, such a
+// connector scored a fully green report while serving "" to every caller.
+//
+// ResolvedEmpty is a legitimate assertion about a secret an operator really
+// did store empty. It is not a legitimate answer for a reference the author
+// nominated as the proof that this connector resolves things. The fixture is
+// the one place the run gets to say "this must work", so it must demand the
+// strongest form of working.
 func checkResolveNoEmptySuccess(ctx context.Context, rep *Report, c credential.CredentialLoader, opts Options) {
 	name := opts.Manifest.Name
 	for _, r := range opts.Resolvable {
@@ -340,7 +347,7 @@ func checkResolveNoEmptySuccess(ctx context.Context, rep *Report, c credential.C
 		// CheckResolution is the host's own guard, run here against the
 		// connector under test: if it rejects the return, so would every host
 		// that loads this connector.
-		_, err := credential.CheckResolution(name, "Resolve", got, resolveErr)
+		res, err := credential.CheckResolution(name, "Resolve", got, resolveErr)
 		if err != nil {
 			var fe *credential.FaultError
 			if errors.As(err, &fe) {
@@ -353,8 +360,18 @@ func checkResolveNoEmptySuccess(ctx context.Context, rep *Report, c credential.C
 				"%s is declared resolvable by this run, and the connector failed on it: %v", r, err))
 			return
 		}
+		mat, valueErr := res.Value()
+		if valueErr != nil || len(mat.Reveal()) == 0 {
+			rep.add(CheckResolveNoEmptySuccess, false, fmt.Sprintf(
+				"%s is declared resolvable by this run, and the connector resolved it to NO MATERIAL. "+
+					"credential.ResolvedEmpty asserts that a secret is genuinely stored empty; it is not an answer for a "+
+					"reference this run nominates as one the connector must resolve, and a connector that answers every "+
+					"read that way serves \"\" to every caller while passing a presence-only check. Point Resolvable at a "+
+					"reference that holds a value, or fix the read", r))
+			return
+		}
 	}
-	rep.add(CheckResolveNoEmptySuccess, true, fmt.Sprintf("%d reference(s) resolved to a value", len(opts.Resolvable)))
+	rep.add(CheckResolveNoEmptySuccess, true, fmt.Sprintf("%d reference(s) resolved to non-empty material", len(opts.Resolvable)))
 }
 
 func checkFailureTyped(ctx context.Context, rep *Report, c credential.CredentialLoader, opts Options) {
@@ -395,9 +412,9 @@ func checkBatchShape(ctx context.Context, rep *Report, b credential.BatchResolve
 	// the single Resolve returns is a second code path with a different
 	// answer, and the host would get whichever one it happened to call.
 	for i, got := range results {
-		if got.Err != nil {
+		if err := got.Err(); err != nil {
 			rep.add(CheckBatchShape, false, fmt.Sprintf(
-				"%s is declared resolvable by this run, and the batch failed on it: %v", opts.Resolvable[i], got.Err))
+				"%s is declared resolvable by this run, and the batch failed on it: %v", opts.Resolvable[i], err))
 			return
 		}
 	}

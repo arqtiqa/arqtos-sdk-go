@@ -237,37 +237,39 @@ func TestCheckBatch(t *testing.T) {
 		t.Fatalf("Resolved: %v", err)
 	}
 
+	resolvedA := mustBatchResolved(t, a, ok)
+	resolvedB := mustBatchResolved(t, b, ok)
+	failedB := mustBatchFailed(t, b, cerr.New(cerr.KindNotFound, "ResolveBatch", nil))
+
 	t.Run("accepts results that correspond to the request", func(t *testing.T) {
-		in := []credential.BatchResult{
-			{Ref: a, Resolution: ok},
-			{Ref: b, Err: cerr.New(cerr.KindNotFound, "ResolveBatch", nil)},
-		}
+		in := []credential.BatchResult{resolvedA, failedB}
 		if _, err := credential.CheckBatch("placeholder-loader", []ref.Ref{a, b}, in, nil); err != nil {
 			t.Fatalf("conformant batch rejected: %v", err)
 		}
 	})
 
 	t.Run("rejects a short result set", func(t *testing.T) {
-		in := []credential.BatchResult{{Ref: a, Resolution: ok}}
+		in := []credential.BatchResult{resolvedA}
 		_, err := credential.CheckBatch("placeholder-loader", []ref.Ref{a, b}, in, nil)
 		assertFault(t, err, credential.FaultBatchMismatch)
 	})
 
 	t.Run("rejects results out of order", func(t *testing.T) {
-		in := []credential.BatchResult{
-			{Ref: b, Resolution: ok},
-			{Ref: a, Resolution: ok},
-		}
+		in := []credential.BatchResult{resolvedB, resolvedA}
 		_, err := credential.CheckBatch("placeholder-loader", []ref.Ref{a, b}, in, nil)
 		assertFault(t, err, credential.FaultBatchMismatch)
 	})
 
 	t.Run("rejects an element with neither value nor error", func(t *testing.T) {
-		in := []credential.BatchResult{
-			{Ref: a, Resolution: ok},
-			{Ref: b},
+		// The blank a refusing constructor hands back: it keeps the ref, so
+		// the batch lines up positionally and the fault is the empty outcome
+		// rather than a mismatch.
+		blank, err := credential.BatchResolved(b, credential.Resolution{})
+		if err == nil {
+			t.Fatalf("BatchResolved must refuse an unresolved Resolution")
 		}
-		_, err := credential.CheckBatch("placeholder-loader", []ref.Ref{a, b}, in, nil)
+		in := []credential.BatchResult{resolvedA, blank}
+		_, err = credential.CheckBatch("placeholder-loader", []ref.Ref{a, b}, in, nil)
 		assertFault(t, err, credential.FaultUnresolved)
 	})
 
@@ -304,5 +306,177 @@ func TestFaultErrorMessageNamesConnectorOpAndFault(t *testing.T) {
 	// An unnamed fault (raised inside a connector) still renders.
 	if (&credential.FaultError{Fault: credential.FaultUnresolved}).Error() == "" {
 		t.Fatalf("an unattributed fault must still render")
+	}
+}
+
+// mustBatchResolved builds a resolved BatchResult, failing the test if the
+// constructor refuses it.
+func mustBatchResolved(t *testing.T, r ref.Ref, res credential.Resolution) credential.BatchResult {
+	t.Helper()
+	b, err := credential.BatchResolved(r, res)
+	if err != nil {
+		t.Fatalf("BatchResolved(%s): %v", r, err)
+	}
+	return b
+}
+
+// mustBatchFailed builds a failed BatchResult, failing the test if the
+// constructor refuses it.
+func mustBatchFailed(t *testing.T, r ref.Ref, err error) credential.BatchResult {
+	t.Helper()
+	b, cerr := credential.BatchFailed(r, err)
+	if cerr != nil {
+		t.Fatalf("BatchFailed(%s): %v", r, cerr)
+	}
+	return b
+}
+
+// TestBatchResultCannotCarryBothOutcomes: "never both and never neither" was
+// a doc comment before it was a property. With three exported fields a
+// connector could fill in a resolution AND an error, and two hosts reading
+// the same result would disagree about what happened. There is now no way to
+// express it: each constructor sets exactly one outcome, and nothing else
+// can set either.
+func TestBatchResultCannotCarryBothOutcomes(t *testing.T) {
+	r := mustRef(t, "op://<vault>/<item>/<field>")
+	ok, err := credential.Resolved(credential.NewMaterial([]byte("placeholder-value")))
+	if err != nil {
+		t.Fatalf("Resolved: %v", err)
+	}
+
+	resolved := mustBatchResolved(t, r, ok)
+	if resolved.Err() != nil {
+		t.Fatalf("a resolved BatchResult carries an error: %v", resolved.Err())
+	}
+	mat, verr := resolved.Resolution().Value()
+	if verr != nil || string(mat.Reveal()) != "placeholder-value" {
+		t.Fatalf("resolved BatchResult did not keep its value: %v %v", mat, verr)
+	}
+	if resolved.Ref() != r {
+		t.Fatalf("Ref() = %v, want %v", resolved.Ref(), r)
+	}
+
+	failure := cerr.New(cerr.KindNotFound, "ResolveBatch", nil)
+	failed := mustBatchFailed(t, r, failure)
+	if !errors.Is(failed.Err(), failure) {
+		t.Fatalf("Err() = %v, want the failure it was built with", failed.Err())
+	}
+	if _, verr := failed.Resolution().Value(); verr == nil {
+		t.Fatalf("a failed BatchResult must not carry a readable resolution")
+	}
+	if failed.Ref() != r {
+		t.Fatalf("Ref() = %v, want %v", failed.Ref(), r)
+	}
+}
+
+// TestBatchResultCannotCarryNeitherOutcome: the other half. A constructor
+// asked for an outcome that is not one refuses, and — mirroring
+// credential.Resolved — the value it hands back alongside the error carries
+// no outcome, so ignoring the error cannot launder a blank into a result.
+func TestBatchResultCannotCarryNeitherOutcome(t *testing.T) {
+	r := mustRef(t, "op://<vault>/<item>/<field>")
+
+	t.Run("resolved with nothing resolved", func(t *testing.T) {
+		got, err := credential.BatchResolved(r, credential.Resolution{})
+		if err == nil {
+			t.Fatalf("BatchResolved accepted an unresolved Resolution")
+		}
+		var fe *credential.FaultError
+		if !errors.As(err, &fe) || fe.Fault != credential.FaultUnresolved {
+			t.Fatalf("error is %v (%T), want a FaultUnresolved *FaultError", err, err)
+		}
+		if got.Err() != nil {
+			t.Fatalf("the refused result carries an error outcome: %v", got.Err())
+		}
+		if _, verr := got.Resolution().Value(); verr == nil {
+			t.Fatalf("the refused result carries a readable resolution")
+		}
+		if got.Ref() != r {
+			t.Fatalf("the refused result must keep its ref for attribution, got %v", got.Ref())
+		}
+	})
+
+	t.Run("failed with a nil error", func(t *testing.T) {
+		got, err := credential.BatchFailed(r, nil)
+		if err == nil {
+			t.Fatalf("BatchFailed accepted a nil error")
+		}
+		var fe *credential.FaultError
+		if !errors.As(err, &fe) || fe.Fault != credential.FaultUnresolved {
+			t.Fatalf("error is %v (%T), want a FaultUnresolved *FaultError", err, err)
+		}
+		if got.Err() != nil {
+			t.Fatalf("the refused result carries an error outcome: %v", got.Err())
+		}
+		if _, verr := got.Resolution().Value(); verr == nil {
+			t.Fatalf("the refused result carries a readable resolution")
+		}
+	})
+
+	t.Run("the zero BatchResult is caught by CheckBatch", func(t *testing.T) {
+		_, err := credential.CheckBatch("placeholder-loader", []ref.Ref{{}}, []credential.BatchResult{{}}, nil)
+		assertFault(t, err, credential.FaultUnresolved)
+	})
+}
+
+// TestBatchResolvedAcceptsADeliberatelyEmptySecret: a secret an operator
+// really did store empty is a VALUE, and a batch must be able to carry it.
+// Refusing it here would push authors back towards reporting a failure for a
+// secret that resolved perfectly well.
+func TestBatchResolvedAcceptsADeliberatelyEmptySecret(t *testing.T) {
+	r := mustRef(t, "op://<vault>/<item>/<field>")
+	got := mustBatchResolved(t, r, credential.ResolvedEmpty())
+	mat, err := got.Resolution().Value()
+	if err != nil {
+		t.Fatalf("a deliberately-empty batch result must be readable: %v", err)
+	}
+	if len(mat.Reveal()) != 0 {
+		t.Fatalf("material = %q, want empty", mat.Reveal())
+	}
+	if _, err := credential.CheckBatch("placeholder-loader", []ref.Ref{r}, []credential.BatchResult{got}, nil); err != nil {
+		t.Fatalf("CheckBatch rejected a deliberately-empty result: %v", err)
+	}
+}
+
+// TestBatchResultRedacts: a BatchResult travels through host code that logs,
+// and it holds material. It must be no more revealing than the Resolution
+// inside it, while still saying which reference it is for.
+func TestBatchResultRedacts(t *testing.T) {
+	const secret = "placeholder-do-not-log"
+	r := mustRef(t, "op://<vault>/<item>/<field>")
+	ok, err := credential.Resolved(credential.NewMaterial([]byte(secret)))
+	if err != nil {
+		t.Fatalf("Resolved: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		br   credential.BatchResult
+	}{
+		{"resolved", mustBatchResolved(t, r, ok)},
+		{"failed", mustBatchFailed(t, r, cerr.New(cerr.KindNotFound, "ResolveBatch", nil))},
+		{"no outcome", credential.BatchResult{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, s := range []string{
+				fmt.Sprintf("%v", tc.br),
+				tc.br.String(),
+				fmt.Sprintf("%#v", tc.br),
+				fmt.Sprint([]credential.BatchResult{tc.br}),
+				// Inside a struct, where fmt reaches the value through an
+				// unexported field and cannot call String() on it.
+				fmt.Sprintf("%+v", struct{ B credential.BatchResult }{tc.br}),
+			} {
+				if strings.Contains(s, secret) {
+					t.Fatalf("BatchResult leaked material: %s", s)
+				}
+			}
+		})
+	}
+
+	// It still has to be useful in a log: the reference is diagnosis, not
+	// material.
+	if !strings.Contains(fmt.Sprintf("%v", mustBatchResolved(t, r, ok)), r.String()) {
+		t.Fatalf("a redacted BatchResult must still name its reference")
 	}
 }

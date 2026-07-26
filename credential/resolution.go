@@ -29,7 +29,20 @@ package credential
 // [Resolution.Value] and handle its error — which is a different question,
 // asked of the connector rather than of the secret.
 //
-// Realizes REQ-ARQ-P-17.
+// # The guarantee is a CONSTRUCTION-TIME one
+//
+// "Readable implies non-empty" holds for a Resolution as it is built. It is
+// not maintained for the lifetime of the value, and one operation breaks it
+// on purpose: [Material.Zero] wipes the bytes a Resolution already holds, so
+// a Resolution built from a real secret and then Zero()ed reads back as
+// present-and-empty.
+//
+// That is intended — Zero() is the dies-with-session wipe, and a caller
+// reaching for it is saying "this material is finished with", not "this
+// credential was always empty". What it means in practice: hold a resolved
+// value for as long as you need it, then Zero() it, and do not read through
+// the same Resolution afterwards. The guarantee this type gives is about
+// what a CONNECTOR can hand you, not about what you can do to it later.
 type Resolution struct {
 	// m is nil exactly when nothing was resolved. A non-nil m of length zero
 	// is a deliberately-empty value from [ResolvedEmpty].

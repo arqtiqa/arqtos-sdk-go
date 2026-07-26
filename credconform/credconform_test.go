@@ -111,10 +111,24 @@ func (l *batchLoader) Capabilities() connector.Capabilities {
 func (l *batchLoader) ResolveBatch(ctx context.Context, refs []ref.Ref) ([]credential.BatchResult, error) {
 	out := make([]credential.BatchResult, 0, len(refs))
 	for _, r := range refs {
-		res, err := l.Resolve(ctx, r)
-		out = append(out, credential.BatchResult{Ref: r, Resolution: res, Err: err})
+		out = append(out, batchOne(ctx, l, r))
 	}
 	return out, nil
+}
+
+// batchOne is the shape a real ResolveBatch has: one outcome per reference,
+// built through the constructor that matches it. The discarded errors cannot
+// fire — BatchFailed is reached only with a non-nil error, and BatchResolved
+// only with what Resolve returned as a success — and a result that did carry
+// no outcome would be caught by credential.CheckBatch anyway.
+func batchOne(ctx context.Context, c credential.CredentialLoader, r ref.Ref) credential.BatchResult {
+	res, err := c.Resolve(ctx, r)
+	if err != nil {
+		failed, _ := credential.BatchFailed(r, err)
+		return failed
+	}
+	resolved, _ := credential.BatchResolved(r, res)
+	return resolved
 }
 
 var _ credential.BatchResolver = (*batchLoader)(nil)
@@ -142,6 +156,22 @@ type signedOutLoader struct{ baseLoader }
 
 func (l *signedOutLoader) Resolve(context.Context, ref.Ref) (credential.Resolution, error) {
 	return credential.Resolution{}, nil // empty output, exit code 0
+}
+
+// dodgingLoader is the escape hatch a presence-only check cannot see. It
+// answers every read it can with credential.ResolvedEmpty() — present,
+// readable, zero bytes — and fails correctly on the reference it should fail
+// on. That is the move an author reaches for when credential.Resolved refuses
+// their signed-out backend: it silences the constructor without producing a
+// credential, and it used to score a fully green report while serving "" to
+// every caller.
+type dodgingLoader struct{ baseLoader }
+
+func (l *dodgingLoader) Resolve(_ context.Context, r ref.Ref) (credential.Resolution, error) {
+	if _, ok := l.vals()[r.String()]; !ok {
+		return credential.Resolution{}, cerr.New(cerr.KindNotFound, "Resolve", nil)
+	}
+	return credential.ResolvedEmpty(), nil
 }
 
 // vendorTextLoader is REQ-ARQ-P-19's failure: it fails with the backend's own
@@ -188,7 +218,10 @@ func (l *emptyBatchElementLoader) ResolveBatch(ctx context.Context, refs []ref.R
 	if err != nil || len(full) == 0 {
 		return full, err
 	}
-	full[0] = credential.BatchResult{Ref: full[0].Ref}
+	// The blank a refusing constructor returns: it keeps the ref, so the
+	// results still line up positionally and the fault is the empty outcome
+	// rather than a mismatch.
+	full[0], _ = credential.BatchResolved(full[0].Ref(), credential.Resolution{})
 	return full, nil
 }
 
@@ -235,7 +268,7 @@ func (l *halfBatchingLoader) ResolveBatch(ctx context.Context, refs []ref.Ref) (
 	if err != nil || len(out) == 0 {
 		return out, err
 	}
-	out[0] = credential.BatchResult{Ref: out[0].Ref, Err: cerr.New(cerr.KindNotFound, "ResolveBatch", nil)}
+	out[0], _ = credential.BatchFailed(out[0].Ref(), cerr.New(cerr.KindNotFound, "ResolveBatch", nil))
 	return out, nil
 }
 
@@ -267,6 +300,12 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 		{
 			name:     "success carrying no value (REQ-ARQ-P-17)",
 			loader:   &signedOutLoader{},
+			manifest: manifestFor(credential.CapRead),
+			wantFail: credconform.CheckResolveNoEmptySuccess,
+		},
+		{
+			name:     "answers every resolvable reference with ResolvedEmpty",
+			loader:   &dodgingLoader{},
 			manifest: manifestFor(credential.CapRead),
 			wantFail: credconform.CheckResolveNoEmptySuccess,
 		},
@@ -519,4 +558,51 @@ func failed(rep credconform.Report, name string) bool {
 
 func ran(rep credconform.Report, name string) bool {
 	return slices.ContainsFunc(rep.Results, func(r credconform.Result) bool { return r.Name == name })
+}
+
+// TestAllEmptyConnectorIsNotGreen is the escape hatch closed, stated on its
+// own because a table row is easy to lose. A connector that answers every
+// read with credential.ResolvedEmpty() used to produce a REPORT WITH NO
+// FAILURES — every check green, including the one named for this exact
+// property — while serving an empty credential to every caller that used it.
+//
+// Nothing about the connector is otherwise wrong: its manifest is honest, its
+// failures are typed, it fails on the reference it should fail on. That is
+// what made it dangerous. The check has to demand material, not presence.
+func TestAllEmptyConnectorIsNotGreen(t *testing.T) {
+	rep, err := credconform.Run(context.Background(), &dodgingLoader{}, opts(t, manifestFor(credential.CapRead)))
+	if err != nil {
+		t.Fatalf("the harness could not run: %v", err)
+	}
+	if rep.OK() {
+		t.Fatalf("a connector that resolves everything to an empty value scored a green report:\n%s", rep)
+	}
+	if !failed(rep, credconform.CheckResolveNoEmptySuccess) {
+		t.Fatalf("%q must be the check that fails:\n%s", credconform.CheckResolveNoEmptySuccess, rep)
+	}
+	// The report has to tell the author what to do about it, not just that
+	// something is wrong.
+	detail := detailOf(rep, credconform.CheckResolveNoEmptySuccess)
+	if !strings.Contains(detail, "ResolvedEmpty") {
+		t.Fatalf("the failure must name the construct the author reached for, got: %s", detail)
+	}
+}
+
+// TestDeliberatelyEmptyIsStillExpressible is the guard on the guard. Refusing
+// an empty resolvable FIXTURE must not become refusing an empty SECRET: an
+// operator who really did store an empty value has one, and a connector that
+// reports it correctly is conformant. The fixture is the only place the
+// stronger demand applies.
+func TestDeliberatelyEmptyIsStillExpressible(t *testing.T) {
+	if _, err := credential.CheckResolution("placeholder-credential-loader", "Resolve", credential.ResolvedEmpty(), nil); err != nil {
+		t.Fatalf("the host guard must still accept a deliberately-empty secret: %v", err)
+	}
+	r := mustRef(t, refPresentA)
+	got, err := credential.BatchResolved(r, credential.ResolvedEmpty())
+	if err != nil {
+		t.Fatalf("a batch must still be able to carry a deliberately-empty secret: %v", err)
+	}
+	if _, err := credential.CheckBatch("placeholder-credential-loader", []ref.Ref{r}, []credential.BatchResult{got}, nil); err != nil {
+		t.Fatalf("CheckBatch rejected a deliberately-empty result: %v", err)
+	}
 }

@@ -7,6 +7,11 @@
 // inside a Resolution, whose presence rules the wire has to preserve
 // ([ResolutionToPB]), and the receiving side re-wraps the bytes through
 // credential.NewMaterial so redaction and Zero() hold host-side.
+//
+// The single most important thing in this package is [ResolutionFromPB]: it
+// is where a foreign provider's bytes become a host-side credential, and the
+// only place that decides whether "no bytes" means a deliberately-empty
+// secret or nothing at all. Read its comment before changing it.
 package transport
 
 import (
@@ -62,30 +67,62 @@ func LeaseFromPB(pb *connectorpb.Lease) credential.Lease {
 
 // ResolutionToPB converts a credential.Resolution to the wire Material.
 //
-// Presence carries the distinction the contract makes in-process: a
-// resolution that carries no value becomes a NIL message — no Material at all
-// — while a deliberately-empty value becomes a present message with no bytes.
-// A receiver therefore cannot mistake one for the other, and cannot read
-// "nothing was resolved" as an empty credential.
+// The three in-process states cross as three distinct encodings:
+//
+//	unresolved           -> nil message (no Material at all)
+//	deliberately empty   -> present message, no bytes, EmptyByAssertion set
+//	a value              -> present message carrying the bytes
+//
+// The assertion flag is what makes the distinction survive a foreign sender.
+// Presence alone cannot: proto3 does not put a zero-length bytes field on the
+// wire, so a conformant ResolvedEmpty and a provider that resolved nothing
+// and sent a default-constructed Material would be byte-identical. Writing
+// the flag here is the sending half of that; ResolutionFromPB is the half
+// that matters.
 func ResolutionToPB(r credential.Resolution) *connectorpb.Material {
 	mat, err := r.Value()
 	if err != nil {
 		// Nothing was resolved. Sending an empty Material here is exactly the
-		// conflation REQ-ARQ-P-17 forbids, so nothing is sent.
+		// conflation the contract forbids, so nothing is sent.
 		return nil
 	}
-	return &connectorpb.Material{Value: mat.Reveal()}
+	b := mat.Reveal()
+	if len(b) == 0 {
+		// Readable and zero-length: the sender asserted a deliberately-empty
+		// secret. Say so explicitly, because the bytes cannot.
+		return &connectorpb.Material{EmptyByAssertion: true}
+	}
+	return &connectorpb.Material{Value: b}
 }
 
-// ResolutionFromPB converts a wire Material back to a credential.Resolution,
-// reading presence the same way ResolutionToPB writes it: a nil message is
-// unresolved (and stays unreadable), a present message with no bytes is a
-// deliberately-empty value.
+// ResolutionFromPB converts a wire Material back to a credential.Resolution.
+//
+// It reads FOUR cases, and the fourth is the point:
+//
+//	nil message                        -> unresolved (unreadable)
+//	bytes present                      -> a value
+//	no bytes, EmptyByAssertion set     -> a deliberately-empty value
+//	no bytes, NO assertion             -> unresolved (unreadable)
+//
+// That last case is what a confused or lazy foreign provider sends when it
+// resolved nothing: an empty, default-constructed Material. Reading it as a
+// deliberately-empty credential — which an earlier revision of this function
+// did — reopens, at the one boundary where the host cannot inspect the
+// sender's code, precisely the (empty value, no error) bug the contract
+// exists to eliminate. Emptiness has to be ASSERTED, never inferred, or the
+// dangerous meaning is the one an author reaches by accident.
+//
+// The host does not merely refuse the value: credential.CheckResolution turns
+// the unresolved reading into a named fault, so the operator learns WHICH
+// connector did it rather than watching a credential be quietly empty.
 func ResolutionFromPB(pb *connectorpb.Material) credential.Resolution {
 	if pb == nil {
 		return credential.Resolution{}
 	}
 	if len(pb.GetValue()) == 0 {
+		if !pb.GetEmptyByAssertion() {
+			return credential.Resolution{}
+		}
 		return credential.ResolvedEmpty()
 	}
 	res, err := credential.Resolved(credential.NewMaterial(pb.GetValue()))
@@ -94,6 +131,73 @@ func ResolutionFromPB(pb *connectorpb.Material) credential.Resolution {
 		// keeps the failure unreadable rather than inventing a value.
 		return credential.Resolution{}
 	}
+	return res
+}
+
+// FailureToPB encodes a PER-REFERENCE failure for a batch response, where the
+// RPC itself succeeded and one reference did not.
+//
+// It carries the same classification a whole-call failure would: the error is
+// mapped through ErrToStatus, and the resulting gRPC code travels as a
+// number. A host maps it back with FailureFromPB and acts on the Kind, never
+// on the message text. A nil error yields a nil message.
+func FailureToPB(err error) *connectorpb.Failure {
+	if err == nil {
+		return nil
+	}
+	st := status.Convert(ErrToStatus(err))
+	return &connectorpb.Failure{Code: int32(st.Code()), Message: st.Message()}
+}
+
+// FailureFromPB reconstructs a per-reference failure as a *cerr.Error, the
+// reverse of FailureToPB. A nil message — and a message whose code is OK,
+// which is not a failure at all — yields a nil error, so a result that
+// carries no real failure reads as carrying none, and credential.CheckBatch
+// then reports it as the empty outcome it is.
+func FailureFromPB(pb *connectorpb.Failure) error {
+	if pb == nil {
+		return nil
+	}
+	return ErrFromStatus(status.Error(codes.Code(pb.GetCode()), pb.GetMessage()))
+}
+
+// BatchResultToPB converts one credential.BatchResult to the wire.
+//
+// Exactly one of material/failure is set, mirroring the type: a result that
+// carries a failure sends the failure, and any other result sends its
+// material under ResolutionToPB's presence rules — including the assertion
+// flag for a deliberately-empty value.
+func BatchResultToPB(b credential.BatchResult) *connectorpb.ResolveBatchResult {
+	out := &connectorpb.ResolveBatchResult{Ref: RefToPB(b.Ref())}
+	if err := b.Err(); err != nil {
+		out.Failure = FailureToPB(err)
+		return out
+	}
+	out.Material = ResolutionToPB(b.Resolution())
+	return out
+}
+
+// BatchResultFromPB converts one wire result back to a
+// credential.BatchResult.
+//
+// A result that carries neither a failure nor readable material comes back as
+// a BatchResult with no outcome — never as an empty credential. That is the
+// same refusal ResolutionFromPB makes, one level down: credential.CheckBatch
+// then faults the batch and names the connector and the position.
+func BatchResultFromPB(pb *connectorpb.ResolveBatchResult) credential.BatchResult {
+	if pb == nil {
+		return credential.BatchResult{}
+	}
+	r := RefFromPB(pb.GetRef())
+	if err := FailureFromPB(pb.GetFailure()); err != nil {
+		// Cannot fault: err is non-nil.
+		res, _ := credential.BatchFailed(r, err)
+		return res
+	}
+	// A blank result yields a BatchResult carrying no outcome, which is what
+	// the discarded error says. CheckBatch is where that is reported, with
+	// the position and the connector's name attached.
+	res, _ := credential.BatchResolved(r, ResolutionFromPB(pb.GetMaterial()))
 	return res
 }
 
