@@ -19,12 +19,22 @@
 // state accumulated earlier in a session is not usable as a connector backend
 // even if it works interactively.
 //
-// [Run] exercises that assumption directly: it makes one connection, runs the
-// per-session checks, closes it, and then makes a second, independent
-// connection and requires the server to present the same tools. That is why
-// [Run] takes a transport *factory* rather than a single [mcp.Transport] — a
-// transport is consumed by a connection, and the point of the check is that a
-// second connection stands on its own.
+// [Run] exercises that assumption with two distinct checks, because it is two
+// distinct properties:
+//
+//   - [CheckSessionIndependent] POSTs a bare tools/list — no initialize, no
+//     Mcp-Session-Id — and requires a non-error result. This is the stateless
+//     core itself. It cannot be checked through the SDK's Go client, which
+//     always performs the handshake, so [SessionIndependence] speaks raw HTTP.
+//   - [CheckToolsStableAcrossReconnect] opens a second, independent connection
+//     and requires the server to present the same tools. That is why [Run]
+//     takes a transport *factory* rather than a single [mcp.Transport] — a
+//     transport is consumed by a connection.
+//
+// The second does not imply the first. Two handshaken sessions agreeing about
+// the tool set says nothing about whether the server needs the handshake, and
+// an earlier version of this package let a session-holding server score a clean
+// sweep on exactly the property it fails.
 //
 // # Protocol compatibility
 //
@@ -49,8 +59,10 @@ package mcpconform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -72,10 +84,18 @@ const (
 	// CheckRequiredTools covers Options.RequireTools being present in
 	// tools/list. It is only reported when RequireTools is non-empty.
 	CheckRequiredTools = "tools/required"
-	// CheckStatelessReconnect covers a second, independent connection
-	// presenting the same tools as the first — the property arqtos relies on
-	// when it does not hold a session open.
-	CheckStatelessReconnect = "stateless-reconnect"
+	// CheckSessionIndependent covers the stateless core itself: a tools/list
+	// that carries no initialize handshake and no Mcp-Session-Id is answered
+	// with a result rather than refused. See [SessionIndependence].
+	CheckSessionIndependent = "session-independent"
+	// CheckToolsStableAcrossReconnect covers a second, independent connection
+	// presenting the same tools as the first, so a caller that reconnects
+	// between calls sees one tool set rather than a per-session one.
+	//
+	// It is deliberately *not* named for statelessness: both connections
+	// perform the handshake, so this check cannot detect a server that
+	// requires one. [CheckSessionIndependent] is the check for that.
+	CheckToolsStableAcrossReconnect = "tools-stable-across-reconnect"
 )
 
 // A TransportFactory opens a fresh, unconnected transport to the server under
@@ -111,6 +131,101 @@ func StreamableHTTPWithClient(endpoint string, hc *http.Client) TransportFactory
 			DisableStandaloneSSE: true,
 		}, nil
 	}
+}
+
+// SessionIndependence checks the property the stateless core actually names:
+// that the MCP server at endpoint answers a tools/list which carries no
+// initialize handshake and no Mcp-Session-Id. A nil hc means
+// [http.DefaultClient].
+//
+// This is the one check that cannot be made through the SDK's Go client. That
+// client always performs initialize, so every connection it opens is a
+// handshaken session — a check built on it can only ever compare sessions to
+// each other. This function POSTs the JSON-RPC call directly, which is what a
+// stateless client looks like on the wire and what arqtos does when it has no
+// session to reuse.
+//
+// It is exported so a connector author can run it on its own, against a
+// deployed endpoint, without the rest of a [Run].
+//
+// A server built with the SDK's streamable-HTTP handler passes this only when
+// it was constructed with mcp.StreamableHTTPOptions{Stateless: true}. The
+// default handler mints a session id for a request that arrives without one and
+// then refuses the call as "invalid during session initialization" — so
+// "we keep no state, therefore we are stateless" does not pass, and is not
+// meant to.
+func SessionIndependence(ctx context.Context, endpoint string, hc *http.Client) Result {
+	fail := func(format string, args ...any) Result {
+		return Result{Name: CheckSessionIndependent, Detail: fmt.Sprintf(format, args...)}
+	}
+
+	// No initialize before it, no Mcp-Session-Id on it. That is the whole probe.
+	msg := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+	resp, err := postJSONRPC(ctx, hc, endpoint, map[string]string{headerProtocolVersion: probeProtocolVersion}, msg)
+	if err != nil {
+		return fail("handshake-less tools/list could not be sent: %v", err)
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		// The server does not recognise the announced revision. That is a
+		// version-negotiation refusal, not session dependence, and reporting
+		// it as the latter would blame the server for something it was never
+		// asked. Re-probe with no version header, where a handler falls back
+		// to the last revision that predates it.
+		_ = resp.Body.Close()
+		resp, err = postJSONRPC(ctx, hc, endpoint, nil, msg)
+		if err != nil {
+			return fail("handshake-less tools/list could not be sent: %v", err)
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fail("handshake-less tools/list answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	rpc, err := decodeJSONRPC(resp)
+	if err != nil {
+		return fail("handshake-less tools/list: %v", err)
+	}
+	if rpc.Error != nil {
+		return fail("the server refused a tools/list carrying no initialize handshake and no Mcp-Session-Id: %s. "+
+			"It depends on a session arqtos does not promise. "+
+			"Serving with the Go SDK, set mcp.StreamableHTTPOptions{Stateless: true}.",
+			rpc.Error)
+	}
+	var listed struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(rpc.Result, &listed); err != nil {
+		return fail("handshake-less tools/list returned a result that is not a tool list: %v", err)
+	}
+	return Result{
+		Name:   CheckSessionIndependent,
+		Pass:   true,
+		Detail: fmt.Sprintf("%d tool(s) listed with no handshake and no session id", len(listed.Tools)),
+	}
+}
+
+// sessionIndependence runs [SessionIndependence] against the endpoint the given
+// transport talks to.
+//
+// A transport that is not streamable HTTP has no endpoint to POST to, so the
+// check reports "not verified" — a failure, not an omission. Silently dropping
+// the core check for such a transport would put back the hole this check was
+// added to close: a report that is green because nothing looked.
+func sessionIndependence(ctx context.Context, t mcp.Transport) Result {
+	st, ok := t.(*mcp.StreamableClientTransport)
+	if !ok || st.Endpoint == "" {
+		return Result{
+			Name: CheckSessionIndependent,
+			Detail: fmt.Sprintf("not verified: session independence is probed over streamable HTTP, "+
+				"and the transport factory returned %T", t),
+		}
+	}
+	return SessionIndependence(ctx, st.Endpoint, st.HTTPClient)
 }
 
 // Options tunes a conformance run. A nil *Options is valid and means defaults.
@@ -230,7 +345,7 @@ func Run(ctx context.Context, newTransport TransportFactory, opts *Options) (Rep
 
 	var rep Report
 
-	first, err := connect(ctx, newTransport, opts)
+	first, firstTransport, err := connect(ctx, newTransport, opts)
 	if err != nil {
 		var he *harnessError
 		if errors.As(err, &he) {
@@ -282,12 +397,17 @@ func Run(ctx context.Context, newTransport TransportFactory, opts *Options) (Rep
 		}
 	}
 
+	// The stateless core, checked before the reconnect: it needs nothing from
+	// a second connection, so a factory that breaks on its second call must
+	// not be able to stop the run's most important check from happening.
+	rep.Results = append(rep.Results, sessionIndependence(ctx, firstTransport))
+
 	// Close the first session before opening the second: the point of the
 	// check is that the second connection does not inherit anything.
 	// ClientSession.Close is idempotent, so the deferred close above stays.
 	_ = first.Close()
 
-	second, err := connect(ctx, newTransport, opts)
+	second, _, err := connect(ctx, newTransport, opts)
 	if err != nil {
 		var he *harnessError
 		if errors.As(err, &he) {
@@ -296,7 +416,7 @@ func Run(ctx context.Context, newTransport TransportFactory, opts *Options) (Rep
 			// never mistaken for a non-conformant server.
 			return rep, he.err
 		}
-		rep.add(CheckStatelessReconnect, false, "second, independent connection failed: "+err.Error())
+		rep.add(CheckToolsStableAcrossReconnect, false, "second, independent connection failed: "+err.Error())
 		return rep, nil
 	}
 	defer second.Close()
@@ -304,17 +424,17 @@ func Run(ctx context.Context, newTransport TransportFactory, opts *Options) (Rep
 	secondTools, err := toolNames(ctx, second)
 	switch {
 	case err != nil:
-		rep.add(CheckStatelessReconnect, false, "tools/list on a second, independent connection failed: "+err.Error())
+		rep.add(CheckToolsStableAcrossReconnect, false, "tools/list on a second, independent connection failed: "+err.Error())
 	case listErr != nil:
 		// Without a first tool set there is nothing to compare against;
 		// saying the sets differ would misattribute the earlier failure.
-		rep.add(CheckStatelessReconnect, false, "not verified: tools/list failed on the first connection")
+		rep.add(CheckToolsStableAcrossReconnect, false, "not verified: tools/list failed on the first connection")
 	case !slices.Equal(firstTools, secondTools):
-		rep.add(CheckStatelessReconnect, false, fmt.Sprintf(
-			"tool set depends on session state: first connection saw [%s], second saw [%s]",
+		rep.add(CheckToolsStableAcrossReconnect, false, fmt.Sprintf(
+			"tool set is not stable across reconnects: first connection saw [%s], second saw [%s]",
 			strings.Join(firstTools, " "), strings.Join(secondTools, " ")))
 	default:
-		rep.add(CheckStatelessReconnect, true, "")
+		rep.add(CheckToolsStableAcrossReconnect, true, "")
 	}
 
 	return rep, nil
@@ -332,15 +452,23 @@ func (e *harnessError) Error() string { return e.err.Error() }
 
 func (e *harnessError) Unwrap() error { return e.err }
 
-func connect(ctx context.Context, newTransport TransportFactory, opts *Options) (*mcp.ClientSession, error) {
+// connect opens one session and also hands back the transport it was opened
+// on, so a check that has to address the same server outside the SDK client —
+// [sessionIndependence] — can do so without asking the factory for an extra
+// transport it was never promised.
+func connect(ctx context.Context, newTransport TransportFactory, opts *Options) (*mcp.ClientSession, mcp.Transport, error) {
 	t, err := newTransport()
 	if err != nil {
-		return nil, &harnessError{cerr.New(cerr.KindInvalid, "mcpconform.Run", fmt.Errorf("transport factory: %w", err))}
+		return nil, nil, &harnessError{cerr.New(cerr.KindInvalid, "mcpconform.Run", fmt.Errorf("transport factory: %w", err))}
 	}
 	if t == nil {
-		return nil, &harnessError{cerr.New(cerr.KindInvalid, "mcpconform.Run", fmt.Errorf("transport factory returned nil transport"))}
+		return nil, nil, &harnessError{cerr.New(cerr.KindInvalid, "mcpconform.Run", fmt.Errorf("transport factory returned nil transport"))}
 	}
-	return mcp.NewClient(opts.client(), nil).Connect(ctx, t, nil)
+	cs, err := mcp.NewClient(opts.client(), nil).Connect(ctx, t, nil)
+	if err != nil {
+		return nil, t, err
+	}
+	return cs, t, nil
 }
 
 // toolNames lists every tool the server exposes, following pagination, and
