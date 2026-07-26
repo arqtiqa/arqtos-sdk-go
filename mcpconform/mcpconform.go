@@ -253,10 +253,10 @@ func Run(ctx context.Context, newTransport TransportFactory, opts *Options) (Rep
 		rep.add(CheckPing, true, "")
 	}
 
-	firstTools, err := toolNames(ctx, first)
+	firstTools, listErr := toolNames(ctx, first)
 	switch {
-	case err != nil:
-		rep.add(CheckListTools, false, err.Error())
+	case listErr != nil:
+		rep.add(CheckListTools, false, listErr.Error())
 	case len(firstTools) == 0:
 		rep.add(CheckListTools, false, "server exposes no tools; a declarative connector maps its operations onto tools")
 	default:
@@ -270,9 +270,14 @@ func Run(ctx context.Context, newTransport TransportFactory, opts *Options) (Rep
 				missing = append(missing, name)
 			}
 		}
-		if len(missing) > 0 {
+		switch {
+		case listErr != nil:
+			// Reporting every required tool as "missing" here would blame the
+			// server for tools it was never asked about.
+			rep.add(CheckRequiredTools, false, "not verified: tools/list failed")
+		case len(missing) > 0:
 			rep.add(CheckRequiredTools, false, "missing tool(s): "+strings.Join(missing, ", "))
-		} else {
+		default:
 			rep.add(CheckRequiredTools, true, "")
 		}
 	}
@@ -300,6 +305,10 @@ func Run(ctx context.Context, newTransport TransportFactory, opts *Options) (Rep
 	switch {
 	case err != nil:
 		rep.add(CheckStatelessReconnect, false, "tools/list on a second, independent connection failed: "+err.Error())
+	case listErr != nil:
+		// Without a first tool set there is nothing to compare against;
+		// saying the sets differ would misattribute the earlier failure.
+		rep.add(CheckStatelessReconnect, false, "not verified: tools/list failed on the first connection")
 	case !slices.Equal(firstTools, secondTools):
 		rep.add(CheckStatelessReconnect, false, fmt.Sprintf(
 			"tool set depends on session state: first connection saw [%s], second saw [%s]",
