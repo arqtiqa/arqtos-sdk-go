@@ -32,7 +32,7 @@ func newFixtureServer(name string, toolNames ...string) *mcp.Server {
 	for _, tool := range toolNames {
 		mcp.AddTool(s, &mcp.Tool{Name: tool, Description: "echoes its input"},
 			func(_ context.Context, _ *mcp.CallToolRequest, in echoInput) (*mcp.CallToolResult, echoOutput, error) {
-				return nil, echoOutput{Text: in.Text}, nil
+				return nil, echoOutput(in), nil
 			})
 	}
 	return s
@@ -91,7 +91,8 @@ func TestRun_WhenServerIsStateless_AllChecksPass(t *testing.T) {
 		mcpconform.CheckPing,
 		mcpconform.CheckListTools,
 		mcpconform.CheckRequiredTools,
-		mcpconform.CheckStatelessReconnect,
+		mcpconform.CheckSessionIndependent,
+		mcpconform.CheckToolsStableAcrossReconnect,
 	} {
 		result(t, rep, want)
 	}
@@ -106,10 +107,25 @@ func TestRun_WhenServerIsStateless_AllChecksPass(t *testing.T) {
 	}
 }
 
-// The same checks must pass against a session-holding server: arqtos does not
-// require a connector backend to be stateless, only that it not *depend* on a
-// session it cannot be guaranteed.
-func TestRun_WhenServerHoldsSessions_AllChecksPass(t *testing.T) {
+// The regression this package was rewritten around.
+//
+// A session-holding server — mcp.StreamableHTTPOptions{Stateless: false}, which
+// is the SDK's own default — used to score a clean sweep here, while the same
+// server refused a handshake-less tools/list with "method ... is invalid during
+// session initialization" (pinned by
+// TestDefaultWrapper_RejectsClientThatSkipsHandshake). The gate reported green
+// on precisely the failure class it exists to catch, because every connection
+// the SDK's Go client opens performs initialize, so "a second, independent
+// connection" was a second handshaken session.
+//
+// It must now FAIL, and fail on the session-independence check specifically:
+//
+//   - session-independent  FAILS — the server needs a handshake;
+//   - tools-stable-across-reconnect PASSES — its tool set really is stable.
+//
+// The second assertion is the point of the rename. The reconnect check measures
+// a real property; it just is not this one, and it must not stand in for it.
+func TestRun_WhenServerHoldsSessions_SessionIndependenceFails(t *testing.T) {
 	t.Parallel()
 
 	url := serve(t, newFixtureServer("stateful-fixture", "list_items"), false)
@@ -118,8 +134,31 @@ func TestRun_WhenServerHoldsSessions_AllChecksPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !rep.OK() {
-		t.Fatalf("expected a conformant server, got failures:\n%s", rep)
+	if rep.OK() {
+		t.Fatalf("a session-holding server passed every check; that is the bug this test exists for.\n%s", rep)
+	}
+
+	got := result(t, rep, mcpconform.CheckSessionIndependent)
+	if got.Pass {
+		t.Fatalf("check %q passed against a server that requires the handshake; report:\n%s", got.Name, rep)
+	}
+	if !strings.Contains(got.Detail, "no initialize handshake and no Mcp-Session-Id") {
+		t.Errorf("check %q detail = %q, want it to name the handshake-less probe", got.Name, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "during session initialization") {
+		t.Errorf("check %q detail = %q, want it to carry the server's own refusal", got.Name, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "Stateless: true") {
+		t.Errorf("check %q detail = %q, want it to name the fix", got.Name, got.Detail)
+	}
+
+	// The property the old name claimed, measured separately, still holds.
+	if stable := result(t, rep, mcpconform.CheckToolsStableAcrossReconnect); !stable.Pass {
+		t.Errorf("check %q failed; it measures tool-set stability, which this server has:\n%s", stable.Name, rep)
+	}
+
+	if cerr.KindOf(rep.Err()) != cerr.KindInvalid {
+		t.Errorf("Report.Err() kind = %v, want %v", cerr.KindOf(rep.Err()), cerr.KindInvalid)
 	}
 	// RequireTools was not set, so that check must not appear.
 	for _, r := range rep.Results {
@@ -129,9 +168,10 @@ func TestRun_WhenServerHoldsSessions_AllChecksPass(t *testing.T) {
 	}
 }
 
-// The check that earns the package: a server whose tool set is only correct
-// inside the first session is rejected.
-func TestRun_WhenToolSetDependsOnSession_StatelessReconnectFails(t *testing.T) {
+// A server whose tool set is only correct inside the first session is rejected.
+// The server here is session-holding, so session-independent fails too; the
+// assertions are scoped to the reconnect check, which is what this test is for.
+func TestRun_WhenToolSetDependsOnSession_ToolsStableAcrossReconnectFails(t *testing.T) {
 	t.Parallel()
 
 	var sessions atomic.Int64
@@ -147,14 +187,131 @@ func TestRun_WhenToolSetDependsOnSession_StatelessReconnectFails(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if rep.OK() {
-		t.Fatalf("expected the stateless-reconnect check to fail, report:\n%s", rep)
+		t.Fatalf("expected the reconnect check to fail, report:\n%s", rep)
 	}
-	got := result(t, rep, mcpconform.CheckStatelessReconnect)
+	got := result(t, rep, mcpconform.CheckToolsStableAcrossReconnect)
 	if got.Pass {
 		t.Fatalf("check %q passed; report:\n%s", got.Name, rep)
 	}
+	if !strings.Contains(got.Detail, "not stable across reconnects") {
+		t.Errorf("check %q detail = %q, want it to name the drift", got.Name, got.Detail)
+	}
 	if cerr.KindOf(rep.Err()) != cerr.KindInvalid {
 		t.Errorf("Report.Err() kind = %v, want %v", cerr.KindOf(rep.Err()), cerr.KindInvalid)
+	}
+}
+
+// SessionIndependence is exported so a connector author can point it at a
+// deployed endpoint on its own. It must reach the same verdict there as it does
+// inside Run.
+func TestSessionIndependence_AgreesWithTheHandlerMode(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		stateless bool
+		wantPass  bool
+	}{
+		{"stateless handler", true, true},
+		{"session-holding handler", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			url := serve(t, newFixtureServer("direct-fixture", "list_items"), tc.stateless)
+
+			got := mcpconform.SessionIndependence(t.Context(), url, nil)
+			if got.Name != mcpconform.CheckSessionIndependent {
+				t.Errorf("Name = %q, want %q", got.Name, mcpconform.CheckSessionIndependent)
+			}
+			if got.Pass != tc.wantPass {
+				t.Fatalf("Pass = %v, want %v; detail: %s", got.Pass, tc.wantPass, got.Detail)
+			}
+			if got.Detail == "" {
+				t.Error("expected a Detail either way")
+			}
+			if tc.wantPass && !strings.Contains(got.Detail, "1 tool(s)") {
+				t.Errorf("Detail = %q, want it to report the tools listed without a handshake", got.Detail)
+			}
+		})
+	}
+}
+
+// A dead endpoint is a transport failure, not a refusal. It must still be a
+// failed check with a Detail that does not accuse the server of holding a
+// session it never got the chance to hold.
+func TestSessionIndependence_WhenEndpointIsDead_FailsWithoutBlamingSessions(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.NotFoundHandler())
+	url := ts.URL
+	ts.Close()
+
+	got := mcpconform.SessionIndependence(t.Context(), url, nil)
+	if got.Pass {
+		t.Fatalf("check passed against a dead endpoint; detail: %s", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "could not be sent") {
+		t.Errorf("Detail = %q, want it to name the transport failure", got.Detail)
+	}
+	if strings.Contains(got.Detail, "Stateless: true") {
+		t.Errorf("Detail misattributes a transport failure to session dependence: %q", got.Detail)
+	}
+}
+
+// A non-200 that is not a JSON-RPC refusal is reported as the HTTP failure it
+// is, again without inventing a session-dependence verdict.
+func TestSessionIndependence_WhenEndpointIsNotMCP_ReportsTheHTTPStatus(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "no MCP here", http.StatusTeapot)
+	}))
+	t.Cleanup(ts.Close)
+
+	got := mcpconform.SessionIndependence(t.Context(), ts.URL, nil)
+	if got.Pass {
+		t.Fatalf("check passed against a non-MCP endpoint; detail: %s", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "418") || !strings.Contains(got.Detail, "no MCP here") {
+		t.Errorf("Detail = %q, want the HTTP status and body", got.Detail)
+	}
+}
+
+// A transport that is not streamable HTTP has no endpoint to POST to. The check
+// must then say it was not verified — and count as a failure. Dropping it
+// silently would restore the hole: a report green because nothing looked.
+func TestRun_WhenTransportIsNotHTTP_SessionIndependenceIsNotVerified(t *testing.T) {
+	t.Parallel()
+
+	srv := newFixtureServer("in-memory-fixture", "list_items")
+	factory := func() (mcp.Transport, error) {
+		clientT, serverT := mcp.NewInMemoryTransports()
+		ss, err := srv.Connect(context.Background(), serverT, nil)
+		if err != nil {
+			return nil, err
+		}
+		t.Cleanup(func() { _ = ss.Close() })
+		return clientT, nil
+	}
+
+	rep, err := mcpconform.Run(t.Context(), factory, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := result(t, rep, mcpconform.CheckSessionIndependent)
+	if got.Pass {
+		t.Fatalf("check %q passed over a transport it cannot probe; report:\n%s", got.Name, rep)
+	}
+	if !strings.Contains(got.Detail, "not verified") {
+		t.Errorf("check %q detail = %q, want it to say the check was not verified", got.Name, got.Detail)
+	}
+	if rep.OK() {
+		t.Error("Report.OK() = true although the core check was never verified")
+	}
+	// Everything the SDK client can reach still ran and passed.
+	if stable := result(t, rep, mcpconform.CheckToolsStableAcrossReconnect); !stable.Pass {
+		t.Errorf("check %q failed over an in-memory transport; report:\n%s", stable.Name, rep)
 	}
 }
 
@@ -308,9 +465,14 @@ func TestRun_WhenSecondConnectionFactoryFails_ReturnsHarnessErrorWithPartialRepo
 		t.Error("expected the checks that did run to be reported")
 	}
 	for _, r := range rep.Results {
-		if r.Name == mcpconform.CheckStatelessReconnect {
+		if r.Name == mcpconform.CheckToolsStableAcrossReconnect {
 			t.Errorf("a harness failure must not be recorded as check %q", r.Name)
 		}
+	}
+	// The stateless core needs only the first connection, so a factory that
+	// breaks on its second call must not be able to skip it.
+	if got := result(t, rep, mcpconform.CheckSessionIndependent); !got.Pass {
+		t.Errorf("check %q did not run or did not pass despite the first connection working; report:\n%s", got.Name, rep)
 	}
 }
 
@@ -364,7 +526,7 @@ func TestRun_WhenListToolsFails_DependentChecksReportNotVerified(t *testing.T) {
 		t.Fatalf("expected tools/list to fail; report:\n%s", rep)
 	}
 
-	for _, name := range []string{mcpconform.CheckRequiredTools, mcpconform.CheckStatelessReconnect} {
+	for _, name := range []string{mcpconform.CheckRequiredTools, mcpconform.CheckToolsStableAcrossReconnect} {
 		got := result(t, rep, name)
 		if got.Pass {
 			t.Errorf("check %q passed; report:\n%s", name, rep)
@@ -372,8 +534,14 @@ func TestRun_WhenListToolsFails_DependentChecksReportNotVerified(t *testing.T) {
 		if !strings.Contains(got.Detail, "not verified") {
 			t.Errorf("check %q detail = %q, want it to say the check was not verified", name, got.Detail)
 		}
-		if strings.Contains(got.Detail, "missing tool") || strings.Contains(got.Detail, "depends on session state") {
+		if strings.Contains(got.Detail, "missing tool") || strings.Contains(got.Detail, "not stable across reconnects") {
 			t.Errorf("check %q misattributes the tools/list failure: %q", name, got.Detail)
 		}
+	}
+
+	// Session independence is measured on its own wire probe, so a broken
+	// tools/list on the SDK client's connection does not stop it from passing.
+	if got := result(t, rep, mcpconform.CheckSessionIndependent); !got.Pass {
+		t.Errorf("check %q failed; it does not depend on the SDK client's tools/list: %q", got.Name, got.Detail)
 	}
 }

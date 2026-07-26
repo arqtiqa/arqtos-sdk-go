@@ -10,13 +10,13 @@ package mcpconform_test
 // on the wire.
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/arqtiqa/arqtos-sdk-go/mcpconform"
 )
 
 // Protocol versions as they appear on the wire. Kept as literals rather than
@@ -35,35 +35,16 @@ const (
 	protocol20260630 = "2026-06-30"
 )
 
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Result  json.RawMessage `json:"result"`
-	Error   *rpcError       `json:"error"`
-}
+// post and readRPC are thin t.Fatalf wrappers over the package's own wire code
+// (mcpconform.PostJSONRPC / DecodeJSONRPC, exported for tests in
+// export_test.go). They are deliberately not a second implementation: the
+// session-independence check speaks the wire through exactly this code, so
+// these tests pin what the shipped check does rather than a lookalike.
 
 // post sends a single JSON-RPC message to an MCP streamable-HTTP endpoint.
 func post(t *testing.T, url string, headers map[string]string, msg map[string]any) *http.Response {
 	t.Helper()
-	body, err := json.Marshal(msg)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mcpconform.PostJSONRPC(t.Context(), nil, url, headers, msg)
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -74,31 +55,13 @@ func post(t *testing.T, url string, headers map[string]string, msg map[string]an
 // readRPC decodes the first JSON-RPC message from a response, handling both
 // framings the handler can use: a plain JSON body, and an SSE stream (the
 // default) whose payload rides in a "data:" line.
-func readRPC(t *testing.T, resp *http.Response) rpcResponse {
+func readRPC(t *testing.T, resp *http.Response) mcpconform.RPCResponse {
 	t.Helper()
-	body, err := io.ReadAll(resp.Body)
+	rpc, err := mcpconform.DecodeJSONRPC(resp)
 	if err != nil {
-		t.Fatalf("read body: %v", err)
+		t.Fatalf("%v", err)
 	}
-	raw := body
-	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		raw = nil
-		sc := bufio.NewScanner(bytes.NewReader(body))
-		for sc.Scan() {
-			if after, ok := strings.CutPrefix(sc.Text(), "data:"); ok {
-				raw = []byte(strings.TrimSpace(after))
-				break
-			}
-		}
-		if raw == nil {
-			t.Fatalf("no data frame in SSE response: %q", body)
-		}
-	}
-	var out rpcResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("decode JSON-RPC response %q: %v", raw, err)
-	}
-	return out
+	return rpc
 }
 
 func mustResult(t *testing.T, resp *http.Response, into any) {
@@ -251,6 +214,20 @@ func TestStreamableHandler_WhenProtocolHeaderAbsent_ServesPreHeaderClient(t *tes
 	}), &tools)
 	if got := toolNamesOf(tools); len(got) != 1 {
 		t.Fatalf("tools = %v, want one tool", got)
+	}
+}
+
+// The handshake-less probe in SessionIndependence announces a fixed revision.
+// It has to be one the acceptance table below shows is negotiable, or the probe
+// would draw a 400 that has nothing to do with session dependence. Pinning the
+// two together means the SDK dropping the revision surfaces here, next to the
+// evidence, rather than as a mystery conformance failure in a connector's CI.
+func TestProbeProtocolVersion_IsARevisionTheHandlerAccepts(t *testing.T) {
+	t.Parallel()
+
+	if mcpconform.ProbeProtocolVersion != protocol20251125 {
+		t.Fatalf("probe announces %q, but this file pins %q as the newest negotiable revision",
+			mcpconform.ProbeProtocolVersion, protocol20251125)
 	}
 }
 

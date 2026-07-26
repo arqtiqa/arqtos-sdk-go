@@ -16,6 +16,12 @@ them — `gopkg.in/yaml.v3` for the schemas, the gRPC/go-plugin stack for the
 Track-B wire layer, and the official MCP Go SDK for the declarative-connector
 protocol surface.
 
+Those are per-package costs, not per-consumer ones. Under Go's module-graph
+pruning, a consumer that imports only `ref` + `cerr` + `credential` compiles
+**no** MCP SDK package, records **no** MCP SDK line in its own `go.sum`, and
+never fetches the module — measured, not assumed. The SDK is visible to
+`go list -m all` as a graph node and nothing more.
+
 ## Packages
 
 | Package | Purpose |
@@ -24,7 +30,7 @@ protocol surface.
 | [`cerr`](cerr/) | The connector error taxonomy: `Kind` (NotFound / Unauthorized / Unavailable / Unsupported / Invalid / Timeout / Unknown), `Error`, `New`, `KindOf`, `Retryable`. Callers classify errors by kind, never by string-matching. |
 | [`connector`](connector/) | The base contract every connector implements regardless of class: `Class`, `Capability` / `Capabilities`, `Health` / `HealthStatus`, and the `Connector` interface (`Implements`, `Capabilities`, `Health`, `Close`). |
 | [`credential`](credential/) | The `CredentialLoader` connector class: `Resolve` / `List` / `Lease` / `Renew` / `Revoke`, plus `Material` (redacted, revealable-on-demand, wipeable secret bytes) and `Lease`. |
-| [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks, built on the official MCP Go SDK, that an MCP server can be driven by arqtos — including that it does not depend on a session it will not get. |
+| [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
 
 See [`docs/CONTRACT.md`](docs/CONTRACT.md) for the full method-by-method semantics
@@ -148,6 +154,23 @@ if err := report.Err(); err != nil {
 	return err // the server answered, and is not conformant
 }
 ```
+
+The check that decides it is `session-independent`: a raw `tools/list` POST with
+**no `initialize` and no `Mcp-Session-Id`**, which must come back with a result.
+It has to speak the wire rather than use the SDK's Go client, because that
+client always performs the handshake — every connection it opens is a session,
+so a check built on it can only compare sessions to each other. It is exported
+as `mcpconform.SessionIndependence` for pointing at a deployed endpoint on its
+own:
+
+```go
+if res := mcpconform.SessionIndependence(ctx, endpoint, nil); !res.Pass {
+	return fmt.Errorf("%s: %s", res.Name, res.Detail)
+}
+```
+
+A server built with `mcp.StreamableHTTPOptions{Stateless: false}` — the SDK's
+default — **fails** this check, which is the point.
 
 See [`docs/CONTRACT.md`](docs/CONTRACT.md#declarative-connectors-the-mcp-protocol-surface)
 for the full check list and the protocol-version compatibility notes.
