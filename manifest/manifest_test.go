@@ -203,3 +203,84 @@ func TestDeclaresOnAManifestWithNoCapabilities(t *testing.T) {
 		t.Fatalf("an empty manifest declares nothing")
 	}
 }
+
+// TestValidateRejectsCapabilitiesOutsideTheClassVocabulary is the gap the
+// typed Capabilities field did NOT close. connector.Capability is a string
+// type, so YAML unmarshals anything at all into it: a Doc declaring
+// "batch-resolve" (hyphen), "reed", or arbitrary text validated CLEAN, and
+// only a full credconform run — which needs a live connector plus both
+// fixtures — ever objected.
+//
+// Validate is what a host runs before it loads anything. A capability it does
+// not recognise is one it will not use, so a misspelling silently becomes an
+// undeclared capability and the connector loses the behaviour its author
+// believed they had declared.
+func TestValidateRejectsCapabilitiesOutsideTheClassVocabulary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		caps []connector.Capability
+	}{
+		{"a plausible misspelling", []connector.Capability{credential.CapRead, "batch-resolve"}},
+		{"a typo", []connector.Capability{"reed"}},
+		{"arbitrary text", []connector.Capability{credential.CapRead, "rm -rf /"}},
+		{"the empty capability", []connector.Capability{""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := manifest.Doc{
+				Name:         "placeholder-credential-loader",
+				Implements:   connector.ClassCredentialLoader,
+				Kind:         manifest.KindNative,
+				Capabilities: tc.caps,
+			}
+			err := d.Validate()
+			if err == nil {
+				t.Fatalf("a capability outside the vocabulary must fail Validate: %v", tc.caps)
+			}
+			if !strings.Contains(err.Error(), "capabilit") {
+				t.Fatalf("the error must say what is wrong: %v", err)
+			}
+			// It must name the offending value, or an author with a long
+			// capability list has to bisect it by hand.
+			if !strings.Contains(err.Error(), string(tc.caps[len(tc.caps)-1])) {
+				t.Fatalf("the error must name the offending capability: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateAcceptsEveryPublishedCapability is the control: closing the
+// vocabulary must not reject the vocabulary. Declaring the whole published
+// set at once has to validate, or the check is just a different bug.
+func TestValidateAcceptsEveryPublishedCapability(t *testing.T) {
+	d := manifest.Doc{
+		Name:         "placeholder-credential-loader",
+		Implements:   connector.ClassCredentialLoader,
+		Kind:         manifest.KindNative,
+		Capabilities: credential.KnownCapabilities(),
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("the published capability vocabulary must validate: %v", err)
+	}
+	if len(d.Capabilities) == 0 {
+		t.Fatalf("KnownCapabilities() is empty; this test would pass for the wrong reason")
+	}
+}
+
+// TestParsedManifestWithABadCapabilityFailsValidate walks the path an actual
+// connector author takes — a connector.yml on disk — rather than a hand-built
+// Doc. Parse is strict about unknown FIELDS and says nothing about unknown
+// VALUES, so the capability list is exactly where a bad string gets in.
+func TestParsedManifestWithABadCapabilityFailsValidate(t *testing.T) {
+	d, err := manifest.Parse([]byte(`
+name: placeholder-credential-loader
+implements: CredentialLoader
+kind: native
+capabilities: [read, batch-resolve]
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := d.Validate(); err == nil {
+		t.Fatalf("a manifest file declaring batch-resolve must fail Validate")
+	}
+}
