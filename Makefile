@@ -25,17 +25,13 @@ fmt:
 
 # go.mod / go.sum must already be tidy: a dependency that nothing imports is
 # removed by the next tidy, which would silently drop it from the module.
+#
+# The check has to mutate the working tree to do its job, so it lives in a
+# script with an EXIT trap rather than in a recipe. A recipe cannot restore what
+# it moved when make aborts the line before the restore, or when the tidy is
+# interrupted — reproduced both ways: a failed tidy and a Ctrl-C each left a
+# modified go.mod plus untracked go.{mod,sum}.tidycheck backups behind.
 tidy-check:
-	@cp go.mod go.mod.tidycheck && cp go.sum go.sum.tidycheck
-	@$(GO) mod tidy
-	@status=0; \
-	if ! diff -q go.mod go.mod.tidycheck >/dev/null || ! diff -q go.sum go.sum.tidycheck >/dev/null; then \
-		echo "go.mod/go.sum are not tidy; run 'go mod tidy' and commit the result"; \
-		diff -u go.mod.tidycheck go.mod || true; \
-		diff -u go.sum.tidycheck go.sum || true; \
-		status=1; \
-	fi; \
-	mv go.mod.tidycheck go.mod; mv go.sum.tidycheck go.sum; \
-	exit $$status
+	@GO=$(GO) bash scripts/tidy-check.sh
 
 ci: build lint tidy-check test
