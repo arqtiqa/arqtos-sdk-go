@@ -33,7 +33,7 @@ import (
 // (rather than duplicated in the test) so the fixture and the served map can
 // never drift apart.
 const (
-	referenceRef         = "op://example-vault/database/password"
+	referenceRef         = "op://<vault>/<item>/<field>"
 	referencePlaceholder = "placeholder-database-password"
 )
 
@@ -97,8 +97,8 @@ var _ credential.CredentialLoader = (*memLoader)(nil)
 func main() {
 	impl := &memLoader{
 		vals: map[string]string{
-			referenceRef:                   referencePlaceholder,
-			"op://example-vault/api/token": "placeholder-api-token",
+			referenceRef:                        referencePlaceholder,
+			"op://<vault>/<other-item>/<field>": "placeholder-api-token",
 		},
 	}
 
