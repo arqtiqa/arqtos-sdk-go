@@ -11,7 +11,24 @@
 # Usage: assert-tests-ran.sh <report.json>
 #   MIN_TESTS          minimum number of passing tests overall (default 60)
 #   REQUIRED_PACKAGES  space-separated package suffixes that must each have
-#                      contributed at least one passing test (default mcpconform)
+#                      contributed at least one passing test
+#
+# The required set is every package carrying a gate the module would otherwise
+# ship unguarded:
+#
+#   mcpconform  the MCP protocol conformance gate
+#   credential  the Resolution / BatchResult / fault types — where "a
+#               credential that did not resolve cannot be read as an empty
+#               one" is actually enforced
+#   credconform the CredentialLoader conformance harness, including the
+#               checks that catch a connector resolving everything to empty
+#   transport   the wire presence rules; the one place a foreign provider's
+#               bytes become a host-side credential
+#
+# These were not required before, and the omission was exactly the failure the
+# script exists to catch: the packages where this module's guarantees live
+# could all have stopped contributing a single passing test with the gate
+# still green.
 #
 # The floor is kept within reach of the real count (72 at the time of writing)
 # rather than far below it. A floor of 40 against 72 tests would let a third of
@@ -29,7 +46,7 @@ if [ -z "$report" ]; then
 fi
 
 min_tests="${MIN_TESTS:-60}"
-required_packages="${REQUIRED_PACKAGES:-mcpconform}"
+required_packages="${REQUIRED_PACKAGES:-mcpconform credential credconform transport}"
 
 if [ ! -s "$report" ]; then
 	echo "assert-tests-ran: '$report' is missing or empty — the test step produced no machine-readable output" >&2
@@ -46,7 +63,7 @@ fi
 for pkg in $required_packages; do
 	if ! grep -q "\"Action\":\"pass\",\"Package\":\"[^\"]*/${pkg}\",\"Test\":\"" "$report"; then
 		echo "assert-tests-ran: no passing test recorded for package .../${pkg}" >&2
-		echo "That package carries the protocol conformance gate; a run without it is not a gate." >&2
+		echo "That package carries a conformance gate; a run without it is not a gate." >&2
 		exit 1
 	fi
 done

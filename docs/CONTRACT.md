@@ -67,6 +67,17 @@ signed-out `op environment read` prints **nothing and exits 0**. Every backend
 has some version of it, and an author who has never met that failure has no
 reason to guard against it.
 
+**The guarantee is a construction-time one.** "Readable implies non-empty"
+holds for a `Resolution` as it is built, not for the rest of its life, and one
+operation breaks it deliberately: `Material.Zero()` wipes the bytes a
+`Resolution` already holds, so a `Resolution` built from a real secret and then
+`Zero()`ed reads back present-and-empty. That is intended — `Zero()` is the
+dies-with-session wipe, and a caller reaching for it is saying "this material
+is finished with". Hold a resolved value for as long as you need it, `Zero()`
+it, and do not read through the same `Resolution` afterwards. What the type
+guarantees is what a **connector** can hand you, not what you can do to it
+later.
+
 **Host side.** `credential.CheckResolution(name, op, res, err)` is the guard a
 host runs on what a connector returned. A violation comes back as a
 `*credential.FaultError` — a named fault (`FaultUnresolved`,
@@ -76,12 +87,33 @@ that would leave the operator looking for the fault in the backend. Callers
 never test a credential for emptiness; they call `Value()` and handle its
 error, which is a question about the connector, not about the secret.
 
-**Over the wire.** The same three states cross a Track-B boundary through
-protobuf **message presence**: no `Material` message means unresolved, a
-present message with no bytes means deliberately empty. The host-side stub
-runs `CheckResolution` on everything a provider sends, so an out-of-process
-provider — someone else's binary, possibly not even Go — cannot hand the host
-an empty credential either.
+**Over the wire.** The same three states cross a Track-B boundary, and
+emptiness is **asserted there too** — message presence alone cannot carry it:
+
+| Wire | Meaning |
+|---|---|
+| no `Material` message | nothing was resolved |
+| `Material` with `value` bytes | a value (the assertion flag is ignored) |
+| `Material`, no bytes, `empty_by_assertion = true` | a deliberately-empty value |
+| `Material`, no bytes, **no** assertion | **nothing was resolved** |
+
+The last row is the load-bearing one. proto3 does not put a zero-length
+`bytes` field on the wire at all, so a conformant `ResolvedEmpty()` and a
+provider that resolved nothing and sent a default-constructed `Material`
+serialize **byte-identically**. Reading "present, no bytes" as
+deliberately-empty therefore hands the host an empty credential for a read
+that produced nothing — the same conflation the contract refuses in-process,
+reopened at the one boundary where the host cannot inspect the sender's code.
+`empty_by_assertion` inverts which encoding is dangerous: what a confused or
+hurried foreign author emits for "I got nothing" now means unresolved, which
+is safe, and the hazardous meaning requires a deliberate opt-in.
+
+The host-side stub runs `CheckResolution` on everything a provider sends, so
+an out-of-process provider — someone else's binary, possibly not even Go —
+cannot hand the host an empty credential: an unasserted empty `Material` comes
+back as a `*credential.FaultError` naming that connector, not as a readable
+`""`. [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto)
+states these rules in the file itself, for authors who will never read the Go.
 
 ### Batch resolution (`CapBatchResolve`)
 
@@ -92,12 +124,26 @@ type BatchResolver interface {
 	ResolveBatch(ctx context.Context, refs []ref.Ref) ([]BatchResult, error)
 }
 
-type BatchResult struct {
-	Ref        ref.Ref
-	Resolution Resolution
-	Err        error
-}
+// One requested reference's outcome. Built only through a constructor, read
+// only through an accessor — so "either a resolution or a failure" is a
+// property of the type rather than a sentence in this document.
+func BatchResolved(r ref.Ref, res Resolution) (BatchResult, error)
+func BatchFailed(r ref.Ref, err error) (BatchResult, error)
+
+func (b BatchResult) Ref() ref.Ref
+func (b BatchResult) Resolution() Resolution
+func (b BatchResult) Err() error
 ```
+
+`BatchResult`'s fields are unexported for the same reason `Resolution`'s are.
+A struct with three exported fields lets a connector fill in a resolution
+**and** an error — two hosts then pick differently — or neither, which hands
+the host a silent blank for a reference it asked about. Each constructor sets
+exactly one outcome; asked for something that is neither (`BatchResolved` with
+an unresolved `Resolution`, `BatchFailed` with a `nil` error) it returns a
+`*FaultError` and a result carrying no outcome, so ignoring the error cannot
+launder a blank into a value. `CheckBatch` catches whatever still gets
+through, including the zero `BatchResult`.
 
 A connector that can resolve many references in ONE backend call implements
 `credential.BatchResolver` **and** declares `batch_resolve` — in its manifest
@@ -118,10 +164,22 @@ spent with the evidence pointing at the wrong component. The host-side
 degradation and reporting are the host's half of this requirement, not the
 connector's.
 
-⚠️ The Track-B gRPC service does **not** yet carry a batch RPC, so a
-`kind: provider` connector cannot declare `batch_resolve` today — conformance
-will fail it, correctly, as declared-but-absent. Adding the RPC is a
-backwards-compatible proto addition and does not need a compat window.
+**Out-of-process providers batch too.** The Track-B service carries a
+`ResolveBatch` RPC, so `batch_resolve` is a capability a `kind: provider`
+connector can genuinely honour, not only a native one. The host-side stub
+implements `credential.BatchResolver` **exactly when** the provider reports
+`batch_resolve` from its `Capabilities` RPC, so a host discovers batch by type
+assertion — identically for a provider and a native connector, with no second
+code path. Per-result material follows the same `Material` presence rules,
+`empty_by_assertion` included; a per-reference failure crosses as a code +
+message that maps back into the same `cerr.Kind` vocabulary. The stub runs
+`CheckBatch` on what comes back, so correspondence and per-result presence are
+verified host-side before a host sees any of it.
+
+A provider that reports `batch_resolve` without implementing
+`credential.BatchResolver` answers `UNIMPLEMENTED` (`cerr.KindUnsupported`)
+rather than fanning out to N single resolves behind the host's back — which is
+how a quota disappears with the evidence pointing at the wrong component.
 
 ### `Material` and `Lease`
 
@@ -235,13 +293,21 @@ if err := rep.Err(); err != nil {
 | `manifest/valid` | the manifest validates, declares this class, and declares only capabilities the class defines |
 | `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
 | `batch/declared-is-implemented` | `batch_resolve` is declared in both places exactly when `credential.BatchResolver` is implemented |
-| `resolve/no-empty-success` | every reference the run declares resolvable comes back carrying a value |
+| `resolve/no-empty-success` | every reference the run declares resolvable comes back carrying **material** — not a success carrying nothing, and not a `ResolvedEmpty()` assertion either |
 | `failure/typed` | the reference the run declares unresolvable fails with a classified `cerr.Kind` |
 | `batch/results-match-request` | batch results correspond one-for-one, in order, with the request — reported only for a connector that implements batch |
 
 Every field of `Options` is required. A fixture that is missing makes `Run`
 return an error rather than skip the check it would have driven: a report that
 is green because nothing looked is worse than no report.
+
+`Resolvable` must point at references that hold **actual bytes**.
+`ResolvedEmpty()` is a legitimate assertion about a secret an operator really
+did store empty; it is not a legitimate answer for a reference you nominated
+as proof that your connector resolves things. A presence-only check let a
+connector answer *every* read that way — the move an author reaches for when
+`Resolved()` refuses their signed-out backend — and score a fully green report
+while serving `""` to every caller.
 
 `Run` returns an `error` only when the run could not be carried out. A
 connector that runs and is non-conformant yields a `nil` error and a `Report`
@@ -273,15 +339,15 @@ management; this module adds only the pieces specific to the
 
 | Layer | Package | What it is |
 |---|---|---|
-| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`). Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
-| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — errors cross the wire as gRPC status, never as strings for the caller to pattern-match. |
+| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
+| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — errors cross the wire as gRPC status, never as strings for the caller to pattern-match. |
 | Transport binding | [`plugin/`](../plugin/plugin.go) | `plugin.Handshake` (the go-plugin magic-cookie handshake both sides must share), `plugin.CredentialLoaderName`, and `plugin.PluginMap(impl)`. A provider passes `plugin.PluginMap(impl)` to `goplugin.ServeConfig.Plugins`; the host's `Dispense(plugin.CredentialLoaderName)` returns a value that itself satisfies `credential.CredentialLoader` — from the host's point of view, calling a Track-B provider looks identical to calling a native connector. |
-| Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), typed `capabilities` (`[]connector.Capability`, checked against the class vocabulary and against the running connector by `credconform`), `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
+| Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), typed `capabilities` (`[]connector.Capability`, checked against the class vocabulary and against the running connector by `credconform`), `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums, closes the `capabilities` vocabulary against the class in `implements` (so a misspelled capability is refused by the host **before** it loads anything, not only by a full `credconform` run against a live connector), and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
 
-**Refs-only over the wire.** The `Resolve`/`Lease` RPCs take a `Ref` and
-return only the `Material` the caller asked for — a provider never returns
-unrequested material, and the wire carries raw bytes with no logging or
-serialization step that could leak them. The host-side `grpcClient` re-wraps
+**Refs-only over the wire.** The `Resolve`/`Lease`/`ResolveBatch` RPCs take
+`Ref`s and return only the `Material` the caller asked for — a provider never
+returns unrequested material, and the wire carries raw bytes with no logging
+or serialization step that could leak them. The host-side `grpcClient` re-wraps
 every returned byte slice with `credential.NewMaterial`, so `String()`
 redaction and `Zero()` wiping hold exactly the same as for a native connector
 — see [`SECURITY.md`](SECURITY.md).
