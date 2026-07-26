@@ -21,7 +21,7 @@ func Parse(s string) (Ref, error) {
 	}
 	parts := strings.Split(strings.TrimPrefix(s, scheme), "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return Ref{}, fmt.Errorf("ref: want op://vault/item/field, got %q", s)
+		return Ref{}, fmt.Errorf("ref: want op://<vault>/<item>/<field>, got %q", s)
 	}
 	return Ref{Vault: parts[0], Item: parts[1], Field: parts[2]}, nil
 }

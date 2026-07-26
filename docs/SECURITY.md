@@ -11,7 +11,7 @@ first-party or third-party.
 
 A `CredentialLoader` method never accepts raw credential material as an
 argument. Every input that identifies "which secret" is a
-[`ref.Ref`](../ref/ref.go) — an `op://vault/item/field` reference — never the
+[`ref.Ref`](../ref/ref.go) — an `op://<vault>/<item>/<field>` reference — never the
 secret value itself. This is enforced structurally: no contract method in this
 SDK takes anything but a `ref.Ref` (or a `Lease`, which is a handle, not
 material) as its "which secret" argument.
@@ -124,7 +124,7 @@ the PERMAFROST audit trail above does for every action). Consequently:
 ## Placeholders in examples and docs
 
 Any example, test fixture, or doc snippet that needs to show a secret
-reference uses an `op://vault/item/field`-shaped placeholder — never a real
+reference uses an `op://<vault>/<item>/<field>`-shaped placeholder — never a real
 vault, item, or field name from a live 1Password/Infisical/Vault instance, and
 never a real secret value. See [`ref.Parse`](../ref/ref.go) for the reference
 shape this SDK expects.
