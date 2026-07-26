@@ -9,7 +9,7 @@
 # always be exercised.
 #
 # Usage: assert-tests-ran.sh <report.json>
-#   MIN_TESTS          minimum number of passing tests overall (default 60)
+#   MIN_TESTS          minimum number of passing tests overall (default 170)
 #   REQUIRED_PACKAGES  space-separated package suffixes that must each have
 #                      contributed at least one passing test
 #
@@ -24,18 +24,31 @@
 #               checks that catch a connector resolving everything to empty
 #   transport   the wire presence rules; the one place a foreign provider's
 #               bytes become a host-side credential
+#   plugin      the out-of-process (Track-B) provider stub — the wire-to-host
+#               boundary these obligations exist for, and where the
+#               empty-vs-unresolved and batch-shape regression tests actually
+#               live. A run that strips this package still resolves and still
+#               batches on the Go-native (Track-A) path, so nothing else in
+#               this list notices it is gone.
 #
 # These were not required before, and the omission was exactly the failure the
 # script exists to catch: the packages where this module's guarantees live
 # could all have stopped contributing a single passing test with the gate
-# still green.
+# still green. plugin in particular was stripped from a prior revision of
+# this script's own required set — 28 passing tests, every one of them
+# proving the Track-B blocker this module exists to close, removed with the
+# gate staying green throughout, because MIN_TESTS never dropped far enough
+# to notice and no required package named it.
 #
-# The floor is kept within reach of the real count (72 at the time of writing)
-# rather than far below it. A floor of 40 against 72 tests would let a third of
-# the suite stop building before this gate noticed — which is the same "green
-# because nothing looked" failure the script exists to prevent. Slack is left
-# for the tests that skip rather than fail on a runner without a usable
-# subprocess (examples/credentialloader-provider).
+# The floor is kept within reach of the real count (183 at the time of
+# writing) rather than far below it. A floor of 60 against 183 tests would let
+# well over half the suite stop building before this gate noticed — which is
+# the same "green because nothing looked" failure the script exists to
+# prevent, and it is exactly how the plugin package was stripped unnoticed
+# (183 - 28 = 155, still comfortably above a floor of 60). At 170, losing the
+# plugin package alone trips MIN_TESTS on its own, before REQUIRED_PACKAGES
+# even names it. Slack is left for the one test that skips rather than fails
+# on a runner without a usable subprocess (examples/credentialloader-provider).
 
 set -euo pipefail
 
@@ -45,8 +58,8 @@ if [ -z "$report" ]; then
 	exit 2
 fi
 
-min_tests="${MIN_TESTS:-60}"
-required_packages="${REQUIRED_PACKAGES:-mcpconform credential credconform transport}"
+min_tests="${MIN_TESTS:-170}"
+required_packages="${REQUIRED_PACKAGES:-mcpconform credential credconform transport plugin}"
 
 if [ ! -s "$report" ]; then
 	echo "assert-tests-ran: '$report' is missing or empty — the test step produced no machine-readable output" >&2

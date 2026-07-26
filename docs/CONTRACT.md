@@ -110,9 +110,13 @@ is safe, and the hazardous meaning requires a deliberate opt-in.
 
 The host-side stub runs `CheckResolution` on everything a provider sends, so
 an out-of-process provider — someone else's binary, possibly not even Go —
-cannot hand the host an empty credential: an unasserted empty `Material` comes
-back as a `*credential.FaultError` naming that connector, not as a readable
-`""`. [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto)
+cannot make a read that resolved nothing look like a successfully-empty
+credential: an unasserted empty `Material` comes back as a
+`*credential.FaultError` naming that connector, not as a readable `""`. A
+provider **can** still hand the host a genuinely empty credential, the same
+way an in-process connector does — by asserting it (`empty_by_assertion =
+true`) — but that assertion is the only path to one; omission is not.
+[`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto)
 states these rules in the file itself, for authors who will never read the Go.
 
 ### Batch resolution (`CapBatchResolve`)

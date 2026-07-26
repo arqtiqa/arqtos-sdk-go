@@ -98,6 +98,15 @@ func (p *CredentialLoaderPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Serv
 // every honest non-batching provider. Never implementing it is the hole this
 // replaces — CapBatchResolve was declarable but structurally unreachable
 // over the wire.
+//
+// This is also why credconform.CheckBatchDeclared cannot, for a provider
+// dispensed by this method, catch a backend that genuinely supports batching
+// while declaring otherwise: this stub's ability to satisfy
+// credential.BatchResolver IS the provider's declaration, read back. There is
+// no independent signal here for that check to compare it against — see
+// credconform.CheckBatchDeclared's doc for the consequence and for which
+// check catches the adjacent Track-B failure (a declaration this stub
+// believed that the provider's own ResolveBatch then refuses).
 func (p *CredentialLoaderPlugin) GRPCClient(ctx context.Context, _ *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
 	c := &grpcClient{client: connectorpb.NewCredentialLoaderClient(conn), name: p.Name}
 	if c.declaresBatch(ctx) {

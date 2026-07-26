@@ -225,6 +225,26 @@ func (l *emptyBatchElementLoader) ResolveBatch(ctx context.Context, refs []ref.R
 	return full, nil
 }
 
+// batchDodgingLoader is dodgingLoader's batch-path sibling. It resolves every
+// reference to real material through Resolve, but answers every one of them
+// with credential.ResolvedEmpty() — present, readable, zero bytes — through
+// ResolveBatch. credential.CheckBatch accepts a deliberately-empty result (it
+// has to: an operator can genuinely store one), so a batch-shape check that
+// asks only "did it fail" cannot see that the two paths disagree about the
+// identical reference. Batch is the path a host with several references
+// actually uses, which is what makes this a harness gap rather than a
+// Track-B one.
+type batchDodgingLoader struct{ batchLoader }
+
+func (l *batchDodgingLoader) ResolveBatch(ctx context.Context, refs []ref.Ref) ([]credential.BatchResult, error) {
+	out := make([]credential.BatchResult, 0, len(refs))
+	for _, r := range refs {
+		resolved, _ := credential.BatchResolved(r, credential.ResolvedEmpty())
+		out = append(out, resolved)
+	}
+	return out, nil
+}
+
 // brokenBackendLoader fails on a reference this run declares resolvable. It
 // is not a contract violation — the failure is typed — but the run cannot
 // conclude anything about no-empty-success from a connector that resolves
@@ -330,6 +350,12 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 		{
 			name:     "a batch element carries neither value nor failure",
 			loader:   &emptyBatchElementLoader{},
+			manifest: batchManifest,
+			wantFail: credconform.CheckBatchShape,
+		},
+		{
+			name:     "batch answers every resolvable reference with ResolvedEmpty",
+			loader:   &batchDodgingLoader{},
 			manifest: batchManifest,
 			wantFail: credconform.CheckBatchShape,
 		},
@@ -583,6 +609,33 @@ func TestAllEmptyConnectorIsNotGreen(t *testing.T) {
 	// The report has to tell the author what to do about it, not just that
 	// something is wrong.
 	detail := detailOf(rep, credconform.CheckResolveNoEmptySuccess)
+	if !strings.Contains(detail, "ResolvedEmpty") {
+		t.Fatalf("the failure must name the construct the author reached for, got: %s", detail)
+	}
+}
+
+// TestAllEmptyBatchConnectorIsNotGreen is TestAllEmptyConnectorIsNotGreen's
+// batch-path sibling. A connector that resolves real material through
+// Resolve, and answers the SAME reference with credential.ResolvedEmpty()
+// through ResolveBatch, used to produce a report where batch/results-match-request
+// was green — checked for "no error" only, that check could not see the two
+// paths disagree about the identical ref. Batch is the path a host with
+// several references actually uses, so a connector this shape scored fully
+// green while serving "" to any caller that resolved more than one reference
+// at a time.
+func TestAllEmptyBatchConnectorIsNotGreen(t *testing.T) {
+	m := manifestFor(credential.CapRead, credential.CapBatchResolve)
+	rep, err := credconform.Run(context.Background(), &batchDodgingLoader{}, opts(t, m))
+	if err != nil {
+		t.Fatalf("the harness could not run: %v", err)
+	}
+	if rep.OK() {
+		t.Fatalf("a batch connector that resolves everything to an empty value scored a green report:\n%s", rep)
+	}
+	if !failed(rep, credconform.CheckBatchShape) {
+		t.Fatalf("%q must be the check that fails:\n%s", credconform.CheckBatchShape, rep)
+	}
+	detail := detailOf(rep, credconform.CheckBatchShape)
 	if !strings.Contains(detail, "ResolvedEmpty") {
 		t.Fatalf("the failure must name the construct the author reached for, got: %s", detail)
 	}

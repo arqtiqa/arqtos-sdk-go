@@ -30,7 +30,8 @@
 //   - [CheckCapabilityHonesty] — what the manifest declares and what the
 //     running connector reports are the same set.
 //   - [CheckBatchDeclared] — batch resolution is declared exactly when it is
-//     implemented.
+//     implemented. Over an out-of-process provider this is a narrower
+//     guarantee than it sounds; see the constant's doc.
 //   - [CheckResolveNoEmptySuccess] — a reference the connector can resolve
 //     comes back carrying material, never as a success carrying nothing and
 //     never as a deliberately-empty assertion.
@@ -81,6 +82,28 @@ const (
 	CheckCapabilityHonesty = "capability/manifest-matches-runtime"
 	// CheckBatchDeclared covers batch resolution being declared exactly when
 	// it is implemented.
+	//
+	// # This guarantee is narrower for an out-of-process (Track-B) provider
+	//
+	// For a native connector "implemented" is a Go interface assertion, made
+	// against the connector's own code — independent of anything it declares.
+	// For a Track-B provider it is not: the host-side stub (see
+	// plugin.CredentialLoaderPlugin.GRPCClient) satisfies
+	// credential.BatchResolver exactly when the provider reports
+	// CapBatchResolve from the same Capabilities RPC this check reads as
+	// "declared". "implemented" and "declared" are therefore two readings of
+	// one signal for a provider, not two independent facts, and this check
+	// cannot catch a provider whose backend genuinely supports batching while
+	// it declares otherwise — the quota-burn case (implemented-but-undeclared)
+	// this check exists for is invisible over the wire in that direction, and
+	// scores fully green.
+	//
+	// The converse false declaration — a provider that reports CapBatchResolve
+	// without its backend actually serving it — this check also cannot
+	// distinguish from the truth, for the same reason: the stub follows the
+	// declaration either way. What catches THAT one is [CheckBatchShape],
+	// which calls ResolveBatch for real and surfaces the provider's own
+	// KindUnsupported when the declaration was false.
 	CheckBatchDeclared = "batch/declared-is-implemented"
 	// CheckResolveNoEmptySuccess covers a resolvable reference coming back
 	// carrying material, rather than as a success carrying nothing.
@@ -288,6 +311,19 @@ func checkCapabilityHonesty(rep *Report, c credential.CredentialLoader, m manife
 // implemented-but-undeclared leaves a host resolving one reference at a time
 // against a connector that could have done it in a single backend call, which
 // is how a quota gets spent.
+//
+// implemented is a Go interface assertion at the CALL SITE, made against
+// whatever value Run received. For a native connector that is the connector's
+// own code, independent of runtime and manifest alike, so this function can
+// genuinely catch either direction of disagreement. For an out-of-process
+// (Track-B) provider it is not: the host-side stub implements
+// credential.BatchResolver exactly when the provider reports CapBatchResolve
+// from the same Capabilities RPC runtime already reflects (see
+// plugin.CredentialLoaderPlugin.GRPCClient) — so implemented and atRuntime
+// are two readings of one signal there, never two independent facts, and the
+// implemented-but-undeclared branch below cannot fire for a provider no
+// matter what its backend actually supports. See [CheckBatchDeclared]'s doc
+// for which check catches the adjacent Track-B failure instead.
 func checkBatchDeclared(rep *Report, m manifest.Doc, runtime connector.Capabilities, implemented bool) {
 	inManifest := m.Declares(credential.CapBatchResolve)
 	atRuntime := runtime.Has(credential.CapBatchResolve)
@@ -408,17 +444,32 @@ func checkBatchShape(ctx context.Context, rep *Report, b credential.BatchResolve
 	// credential.CheckBatch has already proved every element carries either a
 	// value or a failure, and that the elements correspond to the request.
 	// What is left is that a reference this run declares resolvable actually
-	// resolved in the batch: a batch that reports NotFound for a reference
-	// the single Resolve returns is a second code path with a different
-	// answer, and the host would get whichever one it happened to call.
+	// resolved in the batch, TO MATERIAL: a batch that reports NotFound for a
+	// reference the single Resolve returns is a second code path with a
+	// different answer, and so is a batch that answers with
+	// credential.ResolvedEmpty() — present, readable, zero bytes — for a
+	// reference Resolve answers with real bytes. checkResolveNoEmptySuccess
+	// closes this escape hatch on the single-Resolve path; a connector whose
+	// batch path was never asked the same question could reopen it there
+	// while scoring fully green, and batch is the path a host with several
+	// references actually uses.
 	for i, got := range results {
 		if err := got.Err(); err != nil {
 			rep.add(CheckBatchShape, false, fmt.Sprintf(
 				"%s is declared resolvable by this run, and the batch failed on it: %v", opts.Resolvable[i], err))
 			return
 		}
+		mat, valueErr := got.Resolution().Value()
+		if valueErr != nil || len(mat.Reveal()) == 0 {
+			rep.add(CheckBatchShape, false, fmt.Sprintf(
+				"%s is declared resolvable by this run, and the batch resolved it to NO MATERIAL. "+
+					"credential.ResolvedEmpty asserts that a secret is genuinely stored empty; it is not an answer for a "+
+					"reference this run nominates as one the connector must resolve, and a batcher that answers every "+
+					"read that way serves \"\" to every caller while passing a status-only check", opts.Resolvable[i]))
+			return
+		}
 	}
-	rep.add(CheckBatchShape, true, fmt.Sprintf("%d reference(s) in one call", len(results)))
+	rep.add(CheckBatchShape, true, fmt.Sprintf("%d reference(s) in one call, all carrying material", len(results)))
 }
 
 // resolutionReadable reports whether res carries a value.
