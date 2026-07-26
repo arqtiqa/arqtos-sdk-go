@@ -1,9 +1,12 @@
 package mcpconform_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -307,6 +310,70 @@ func TestRun_WhenSecondConnectionFactoryFails_ReturnsHarnessErrorWithPartialRepo
 	for _, r := range rep.Results {
 		if r.Name == mcpconform.CheckStatelessReconnect {
 			t.Errorf("a harness failure must not be recorded as check %q", r.Name)
+		}
+	}
+}
+
+// serveWithFirstToolsListBroken serves a normal stateless MCP endpoint except
+// that the first tools/list it sees fails at the HTTP layer. It models a
+// server that connects and pings fine but could not be asked for its tools —
+// and, because the second attempt succeeds, it isolates the reporting path
+// where a tool set exists on one connection but not the other.
+func serveWithFirstToolsListBroken(t *testing.T, s *mcp.Server) string {
+	t.Helper()
+	inner := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return s },
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+	var lists atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if bytes.Contains(body, []byte(`"tools/list"`)) && lists.Add(1) == 1 {
+			http.Error(w, "tools/list is broken", http.StatusInternalServerError)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	return ts.URL
+}
+
+// When tools/list fails there is no tool set, so the checks that depend on one
+// must say they could not be verified rather than blame the server for tools
+// it was never asked about or for a drift that was never observed.
+func TestRun_WhenListToolsFails_DependentChecksReportNotVerified(t *testing.T) {
+	t.Parallel()
+
+	url := serveWithFirstToolsListBroken(t, newFixtureServer("broken-list-fixture", "list_items"))
+
+	rep, err := mcpconform.Run(t.Context(), mcpconform.StreamableHTTP(url), &mcpconform.Options{
+		RequireTools: []string{"list_items"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !result(t, rep, mcpconform.CheckInitialize).Pass {
+		t.Fatalf("expected initialize to pass; report:\n%s", rep)
+	}
+	if result(t, rep, mcpconform.CheckListTools).Pass {
+		t.Fatalf("expected tools/list to fail; report:\n%s", rep)
+	}
+
+	for _, name := range []string{mcpconform.CheckRequiredTools, mcpconform.CheckStatelessReconnect} {
+		got := result(t, rep, name)
+		if got.Pass {
+			t.Errorf("check %q passed; report:\n%s", name, rep)
+		}
+		if !strings.Contains(got.Detail, "not verified") {
+			t.Errorf("check %q detail = %q, want it to say the check was not verified", name, got.Detail)
+		}
+		if strings.Contains(got.Detail, "missing tool") || strings.Contains(got.Detail, "depends on session state") {
+			t.Errorf("check %q misattributes the tools/list failure: %q", name, got.Detail)
 		}
 	}
 }
