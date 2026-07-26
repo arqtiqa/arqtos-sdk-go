@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build · vet · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: gofmt
+        run: make fmt
+
+      - name: go vet
+        run: make lint
+
+      # A dependency nothing imports is dropped by the next `go mod tidy`.
+      # This keeps the MCP SDK dependency from silently disappearing.
+      - name: go.mod is tidy
+        run: make tidy-check
+
+      # -json is recorded so the next step can prove the run was not vacuous.
+      - name: go test -race
+        run: |
+          set -o pipefail
+          go test -race ./... -count=1 -json | tee test-report.json
+
+      - name: the test gate is not vacuous
+        if: always()
+        run: bash .github/scripts/assert-tests-ran.sh test-report.json
+
+      - name: upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.json
+          if-no-files-found: warn

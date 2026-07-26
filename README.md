@@ -10,9 +10,11 @@ A connector is a small, focused adapter between arqtos and one external system
 connector class, **`CredentialLoader`**, plus the shared building blocks every
 connector class is built from.
 
-This module is dependency-light by design: the contract itself is stdlib-only; the
-`skillspec` package (a schema that rides along in this repo) is the only package
-that pulls in a third-party dependency (`gopkg.in/yaml.v3`).
+This module is dependency-light by design: the semantic contract itself is
+stdlib-only. Third-party dependencies are confined to the packages that need
+them — `gopkg.in/yaml.v3` for the schemas, the gRPC/go-plugin stack for the
+Track-B wire layer, and the official MCP Go SDK for the declarative-connector
+protocol surface.
 
 ## Packages
 
@@ -22,6 +24,7 @@ that pulls in a third-party dependency (`gopkg.in/yaml.v3`).
 | [`cerr`](cerr/) | The connector error taxonomy: `Kind` (NotFound / Unauthorized / Unavailable / Unsupported / Invalid / Timeout / Unknown), `Error`, `New`, `KindOf`, `Retryable`. Callers classify errors by kind, never by string-matching. |
 | [`connector`](connector/) | The base contract every connector implements regardless of class: `Class`, `Capability` / `Capabilities`, `Health` / `HealthStatus`, and the `Connector` interface (`Implements`, `Capabilities`, `Health`, `Close`). |
 | [`credential`](credential/) | The `CredentialLoader` connector class: `Resolve` / `List` / `Lease` / `Renew` / `Revoke`, plus `Material` (redacted, revealable-on-demand, wipeable secret bytes) and `Lease`. |
+| [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks, built on the official MCP Go SDK, that an MCP server can be driven by arqtos — including that it does not depend on a session it will not get. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
 
 See [`docs/CONTRACT.md`](docs/CONTRACT.md) for the full method-by-method semantics
@@ -113,6 +116,41 @@ exercises the `CredentialLoader` semantics described in
 [`docs/CONTRACT.md`](docs/CONTRACT.md) — capability-gated behavior, error-kind
 correctness, lease/renew/revoke lifecycle, and the `Material` redaction/wipe
 invariants — independent of which backing store the connector talks to.
+
+## Declarative connectors and MCP
+
+A **declarative** connector ships no Go code: it points arqtos at an MCP
+server and maps connector operations onto that server's tools. Its contract is
+the MCP protocol, and arqtos tracks that protocol through the **official MCP
+Go SDK** (`github.com/modelcontextprotocol/go-sdk`) — pinned here at the same
+version the host uses. There is deliberately **no arqtos dual-protocol shim**:
+compatibility across protocol revisions comes from the SDK's wrapper.
+
+Two things bind such a connector, both checkable before arqtos ever dials it:
+
+- **Do not depend on a session.** arqtos does not promise a long-lived
+  connection, and the specification is moving to a stateless core.
+- **Statelessness is configured, not inferred.** Serving over streamable HTTP
+  with the Go SDK requires setting `Stateless: true` explicitly; the default
+  handler rejects a client that skipped the handshake.
+
+[`mcpconform`](mcpconform/) turns those into a check you can run in your own
+CI:
+
+```go
+report, err := mcpconform.Run(ctx, mcpconform.StreamableHTTP(endpoint), &mcpconform.Options{
+	RequireTools: []string{"list_items", "create_item"},
+})
+if err != nil {
+	return err // the check could not be run at all
+}
+if err := report.Err(); err != nil {
+	return err // the server answered, and is not conformant
+}
+```
+
+See [`docs/CONTRACT.md`](docs/CONTRACT.md#declarative-connectors-the-mcp-protocol-surface)
+for the full check list and the protocol-version compatibility notes.
 
 ## Versioning and the wire protocol
 

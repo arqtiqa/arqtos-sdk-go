@@ -144,3 +144,96 @@ Out of scope here (a separate, later Story): the host-side registry, the
 go-plugin dial + broker wiring, and a `secrets.Provider` adapter — this
 module ships only the provider-side wire contract and a self-contained
 reference implementation.
+
+## Declarative connectors: the MCP protocol surface
+
+A **declarative** connector ships no Go code. It points arqtos at an MCP
+server and maps connector-class operations onto that server's tools. Its
+contract is therefore the **MCP protocol itself**, not the Go interfaces
+above — and arqtos tracks that protocol through the **official MCP Go SDK**
+(`github.com/modelcontextprotocol/go-sdk`), which this module depends on at
+the same version the host does. arqtos ships **no dual-protocol shim of its
+own**: compatibility across protocol revisions comes from the SDK's
+streamable-HTTP wrapper.
+
+### What arqtos assumes about your MCP server
+
+The MCP specification is moving to a **stateless core** — no server-held
+session, no guaranteed `initialize` handshake between calls, and required
+values carried in HTTP headers rather than recovered by inspecting payloads.
+Two consequences bind a declarative connector:
+
+1. **Do not depend on a session.** arqtos does not promise a long-lived
+   connection. A server whose tool set, auth state, or cursor position is
+   only correct inside the first session is unusable as a backend even if it
+   works interactively.
+2. **Statelessness is configured, not inferred.** If you serve over
+   streamable HTTP with the Go SDK, you must set
+   `mcp.StreamableHTTPOptions{Stateless: true}` explicitly. The default
+   handler mints a session id for a request that arrives without one, and
+   then rejects a client that skipped the handshake with *"method … is
+   invalid during session initialization"*. "We keep no state, so we are
+   stateless" is not enough — the option has to be set.
+
+   A stateless handler also answers the `GET` that would open a standalone
+   SSE stream with `405 Method Not Allowed`. That is correct: arqtos drives
+   connector backends request/response and does not consume server-initiated
+   messages outside a request it made.
+
+### Checking your server: `mcpconform`
+
+[`mcpconform`](../mcpconform/) runs those assumptions as checks, using the
+official SDK as the client, so you can gate your own CI on them before arqtos
+ever dials your endpoint:
+
+```go
+report, err := mcpconform.Run(ctx, mcpconform.StreamableHTTP(endpoint), &mcpconform.Options{
+	RequireTools: []string{"list_items", "create_item"},
+})
+if err != nil {
+	return err // the check could not be run at all
+}
+if err := report.Err(); err != nil {
+	return err // the server answered, and is not conformant
+}
+```
+
+| Check | What it requires |
+|---|---|
+| `initialize` | the server connects and negotiates a protocol version |
+| `ping` | a ping round-trip succeeds |
+| `tools/list` | at least one tool is exposed |
+| `tools/required` | every tool named in `Options.RequireTools` is present (only when set) |
+| `stateless-reconnect` | a **second, independent** connection presents the same tools as the first |
+
+`Run` returns an `error` only when the check could not be carried out (a nil
+or failing transport factory). A server that answers and is non-conformant
+yields a `nil` error and a `Report` whose `Err()` is a `cerr` of kind
+`cerr.KindInvalid` — so gate on `Report.Err()`, not on the returned error
+alone. `Report.String()` renders one line per check for CI logs.
+
+`Run` takes a transport **factory** rather than a single `mcp.Transport`
+because a transport is consumed by a connection, and the whole point of the
+last check is that the second connection stands on its own.
+
+### Protocol-version compatibility
+
+Compatibility is the SDK's job. The tests alongside `mcpconform` pin the
+behaviour at the JSON-RPC level, against one handler instance, so a version
+bump cannot quietly change it:
+
+- a **previous-protocol** client (`2025-03-26`) performs the handshake and is
+  negotiated down to its own version;
+- a **stateless** client sends `tools/list` and `tools/call` with **no
+  `initialize` and no session id** and is served by the same handler;
+- a client that sends no `Mcp-Protocol-Version` header at all is assumed to
+  be `2025-03-26` — the last revision predating the header;
+- an unrecognised version is rejected with `400 Bad Request`.
+
+⚠️ **The stateless-core revision (`2026-06-30`) is not yet negotiable.** The
+pinned SDK implements that revision's standard request headers (`Mcp-Method`
+/ `Mcp-Name`, validated against the body) but does not list `2026-06-30`
+among the versions it accepts, so a client announcing it is refused with
+`400` before those headers are ever checked. A test pins this deliberately:
+when it starts failing, the SDK has begun accepting the revision, and the
+header requirements need re-verifying against arqtos MCP surfaces.
