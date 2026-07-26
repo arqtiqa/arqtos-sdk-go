@@ -28,11 +28,100 @@ Every connector, regardless of class, implements
 
 | Method | Semantics |
 |---|---|
-| `Resolve(ctx, r ref.Ref) (*Material, error)` | Resolves a single `op://<vault>/<item>/<field>` reference to its current secret material. This is the base operation — a `CredentialLoader` MUST support `Resolve` (gated by `CapRead`). Returns `cerr.KindNotFound` if the ref does not exist, `cerr.KindUnauthorized` if the caller lacks access, `cerr.KindInvalid` for a malformed ref, `cerr.KindUnavailable`/`cerr.KindTimeout` for transient backing-store failures. |
+| `Resolve(ctx, r ref.Ref) (Resolution, error)` | Resolves a single `op://<vault>/<item>/<field>` reference to its current secret material, returned as a [`Resolution`](#resolution-an-unresolved-credential-cannot-look-like-an-empty-one). This is the base operation — a `CredentialLoader` MUST support `Resolve` (gated by `CapRead`). Returns `cerr.KindNotFound` if the ref does not exist, `cerr.KindUnauthorized` if the caller lacks access (including a backend session that is not signed in), `cerr.KindInvalid` for a malformed ref, `cerr.KindRateLimited` when the backend refuses load, `cerr.KindUnavailable`/`cerr.KindTimeout` for transient backing-store failures. |
 | `List(ctx, scope string) ([]ref.Ref, error)` | Lists the `ref.Ref`s visible under `scope` (a connector-defined scope string, e.g. a vault name). Returns refs only — never resolves material for the listed entries. A connector that cannot enumerate (e.g. a store with no listing API) returns `cerr.KindUnsupported`. |
-| `Lease(ctx, r ref.Ref) (*Material, Lease, error)` | Like `Resolve`, but for a backing store that issues **dynamic**, time-bounded secrets (e.g. a database credential broker): returns material plus a `Lease` describing its `TTL`/`ExpiresAt`/`Renewable`. Gated by `CapLease`; a connector without dynamic-secret support returns `cerr.KindUnsupported`. |
+| `Lease(ctx, r ref.Ref) (Resolution, Lease, error)` | Like `Resolve`, but for a backing store that issues **dynamic**, time-bounded secrets (e.g. a database credential broker): returns a `Resolution` plus a `Lease` describing its `TTL`/`ExpiresAt`/`Renewable`. Gated by `CapLease`; a connector without dynamic-secret support returns `cerr.KindUnsupported`. |
 | `Renew(ctx, l Lease) (Lease, error)` | Extends a `Lease` obtained from `Lease(...)`, returning the renewed `Lease` (new `ExpiresAt`). Returns `cerr.KindInvalid` for an unknown/expired lease ID, `cerr.KindUnsupported` if `l.Renewable` is false or the connector lacks `CapLease`. |
 | `Revoke(ctx, l Lease) error` | Proactively invalidates a `Lease` before its natural expiry (e.g. on session end — see [`docs/SECURITY.md`](SECURITY.md), "dies-with-session"). Idempotent: revoking an already-revoked or expired lease is not an error. |
+
+### `Resolution`: an unresolved credential cannot look like an empty one
+
+`Resolve` and `Lease` do not return a `*Material`. They return a
+`credential.Resolution`, which has exactly three states and no way to confuse
+the first two:
+
+| State | How it is produced | What `Value()` does |
+|---|---|---|
+| unresolved | the zero `Resolution` — what `return Resolution{}, nil` produces | returns a `*FaultError`, never a value |
+| present, empty | `credential.ResolvedEmpty()` — an explicit assertion | returns present material of length zero |
+| present | `credential.Resolved(m)` with non-empty material | returns the material |
+
+The pair *(empty value, no error)* is therefore **not constructible**:
+
+- `credential.Resolved(m)` returns `(Resolution, error)` and **refuses** `nil`
+  or zero-length material, handing back a `*FaultError` at the point of the
+  mistake. A connector writes `return credential.Resolved(credential.NewMaterial(b))`
+  and gets the guarantee without writing an emptiness check.
+- The zero `Resolution` is unresolved, not empty. `Value()` refuses to read
+  it, so there is no path from "the connector returned nothing" to "the
+  credential is empty" — including for a caller that ignores the error, which
+  then holds a `nil` `*Material` and panics loudly rather than authenticating
+  with `""`.
+- A secret whose value is **genuinely** empty is expressible, but only by
+  saying so: `ResolvedEmpty()`. Call it only where the backend distinguishes a
+  stored-empty value from an unauthenticated or failed read. Emptiness is
+  asserted, never inferred from the bytes.
+
+Why the contract carries this rather than leaving it to connector authors: a
+signed-out `op environment read` prints **nothing and exits 0**. Every backend
+has some version of it, and an author who has never met that failure has no
+reason to guard against it.
+
+**Host side.** `credential.CheckResolution(name, op, res, err)` is the guard a
+host runs on what a connector returned. A violation comes back as a
+`*credential.FaultError` — a named fault (`FaultUnresolved`,
+`FaultBatchMismatch`) attributed to the named connector, of kind
+`cerr.KindContractViolation` — rather than being coerced into a generic error
+that would leave the operator looking for the fault in the backend. Callers
+never test a credential for emptiness; they call `Value()` and handle its
+error, which is a question about the connector, not about the secret.
+
+**Over the wire.** The same three states cross a Track-B boundary through
+protobuf **message presence**: no `Material` message means unresolved, a
+present message with no bytes means deliberately empty. The host-side stub
+runs `CheckResolution` on everything a provider sends, so an out-of-process
+provider — someone else's binary, possibly not even Go — cannot hand the host
+an empty credential either.
+
+### Batch resolution (`CapBatchResolve`)
+
+Batch resolution is an **optional** operation a connector **declares**:
+
+```go
+type BatchResolver interface {
+	ResolveBatch(ctx context.Context, refs []ref.Ref) ([]BatchResult, error)
+}
+
+type BatchResult struct {
+	Ref        ref.Ref
+	Resolution Resolution
+	Err        error
+}
+```
+
+A connector that can resolve many references in ONE backend call implements
+`credential.BatchResolver` **and** declares `batch_resolve` — in its manifest
+and from `Capabilities()`. Both, or conformance fails it: a declared
+capability that is absent is worse than an undeclared one, because the host
+plans one call and finds no operation to make it with.
+
+`ResolveBatch` returns exactly one `BatchResult` per requested reference, **in
+the requested order**, each carrying either a resolution or a typed failure.
+The returned `error` is a failure of the batch call itself; a single missing
+reference belongs in its own result, so it does not discard the other values
+fetched with it. `credential.CheckBatch` is the host-side guard for that
+correspondence.
+
+Where the capability is absent, the host resolves one reference at a time
+**and reports the degradation** — a silent fan-out is how a call quota gets
+spent with the evidence pointing at the wrong component. The host-side
+degradation and reporting are the host's half of this requirement, not the
+connector's.
+
+⚠️ The Track-B gRPC service does **not** yet carry a batch RPC, so a
+`kind: provider` connector cannot declare `batch_resolve` today — conformance
+will fail it, correctly, as declared-but-absent. Adding the RPC is a
+backwards-compatible proto addition and does not need a compat window.
 
 ### `Material` and `Lease`
 
@@ -58,6 +147,7 @@ capability constants declared in the `credential` package:
 | `CapRotate` | Supports triggering rotation of the underlying secret at the backing store (rotation itself is out of scope for this contract version; the capability marks that the connector's backing store can be asked to rotate). |
 | `CapOIDC` | The connector authenticates to its backing store via OIDC federation (no long-lived credential held by the connector itself). |
 | `CapAppRole` | The connector authenticates to its backing store via an AppRole-style (role-id/secret-id) mechanism. |
+| `CapBatchResolve` | Resolves many references in ONE backend call, via `credential.BatchResolver`. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Batch resolution](#batch-resolution-capbatchresolve). |
 
 `CapOIDC` and `CapAppRole` describe how the connector itself authenticates
 outward, not a behavior it exposes inward — hosts use them to reason about the
@@ -71,22 +161,97 @@ does not advertise, rather than silently no-op'ing.
 ## The `cerr.Kind` taxonomy
 
 Every error a contract method returns is a `*cerr.Error{Kind, Op, Err}`.
-Callers classify with `cerr.KindOf(err)` / `cerr.Retryable(err)` — never by
-matching on the error string.
+Callers classify with `cerr.KindOf(err)` / `cerr.Retryable(err)` /
+`cerr.TripsBreaker(err)` — never by matching on the error string.
 
-| `Kind` | Meaning | Retryable |
-|---|---|---|
-| `KindUnknown` | Default/unclassified — e.g. a plain error that never passed through `cerr.New`. | no |
-| `KindNotFound` | The referenced secret, scope, or lease does not exist. | no |
-| `KindUnauthorized` | The caller/connector identity lacks access to the resource. | no |
-| `KindUnavailable` | The backing store is transiently unreachable (network, outage). | yes |
-| `KindUnsupported` | The operation is not implemented by this connector/capability set. | no |
-| `KindInvalid` | The input (a malformed `ref.Ref`, an unknown lease ID, ...) is invalid. | no |
-| `KindTimeout` | The operation did not complete within its deadline. | yes |
+The vocabulary is **closed**: `cerr.Kinds()` is the whole set, `Kind.Valid()`
+rejects anything outside it, and adding one is a deliberate change to a
+published contract rather than a local edit. That closure is the point — a
+backend that rewords an error must not be able to change host behaviour, and
+three backends must not each grow their own string-matching dialect of the
+same classification.
+
+| `Kind` | Meaning | Retryable | Trips breaker |
+|---|---|---|---|
+| `KindUnknown` | The connector could not classify the failure — also what a plain error that never passed through `cerr.New` classifies as. | no | **no** |
+| `KindNotFound` | The referenced secret, scope, or lease does not exist. | no | no |
+| `KindUnauthorized` | The caller/connector identity lacks access — including a backend session that is not signed in. | no | no |
+| `KindUnavailable` | The backing store is transiently unreachable (network, outage). | yes | no |
+| `KindRateLimited` | The backend itself reported a quota or rate limit. | no | **yes** |
+| `KindUnsupported` | The operation is not implemented by this connector/capability set. | no | no |
+| `KindInvalid` | The input (a malformed `ref.Ref`, an unknown lease ID, ...) is invalid. | no | no |
+| `KindTimeout` | The operation did not complete within its deadline. | yes | no |
+| `KindContractViolation` | The connector returned something the contract does not admit. Host-detected — a connector never returns it. | no | no |
 
 `cerr.Retryable(err)` is `true` exactly for `KindUnavailable` and
 `KindTimeout` — the two kinds where retrying the same call, generally after a
-backoff, may succeed without any change in caller behavior.
+backoff, may succeed without any change in caller behavior. `KindRateLimited`
+is deliberately **not** retryable: a rate limit is not waited out by retrying
+into it, it is withheld by the breaker.
+
+### `Unknown` does not trip the breaker
+
+`cerr.TripsBreaker(err)` is `true` for exactly one kind, `KindRateLimited` —
+positive evidence, reported by the backend, that it is refusing load.
+
+An unclassifiable failure is `KindUnknown`, and Unknown does **not** escalate.
+That is the requirement, not an omission: a breaker opened on a guess converts
+one unrecognised error into a total resolution outage for the backend it was
+meant to protect, which is strictly worse than the rate limit it guards
+against.
+
+⚠️ This is the **opposite** default from version negotiation, where a
+connector whose contract version cannot be verified is refused. Both are
+correct — an unverifiable *connector* must not run, while an unclassified
+*transient failure* must not escalate — and unifying them breaks one of them.
+
+`cerr.Classified(err)` separates "the connector said Unknown" from "the
+connector returned a bare error": `KindOf` answers `KindUnknown` for both, and
+only the second is a conformance failure. The breaker treats them the same
+way, which is what makes the safe default safe.
+
+## Checking your connector: `credconform`
+
+[`credconform`](../credconform/) runs the parts of this contract a compiler
+cannot check, so you can gate your own CI on them before arqtos ever loads
+your connector:
+
+```go
+rep, err := credconform.Run(ctx, myLoader, credconform.Options{
+	Manifest:     myManifest,
+	Resolvable:   []ref.Ref{presentRef},
+	Unresolvable: absentRef,
+})
+if err != nil {
+	return err // the check could not be run at all
+}
+if err := rep.Err(); err != nil {
+	return err // the connector ran, and is not conformant
+}
+```
+
+| Check | What it requires |
+|---|---|
+| `manifest/valid` | the manifest validates, declares this class, and declares only capabilities the class defines |
+| `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
+| `batch/declared-is-implemented` | `batch_resolve` is declared in both places exactly when `credential.BatchResolver` is implemented |
+| `resolve/no-empty-success` | every reference the run declares resolvable comes back carrying a value |
+| `failure/typed` | the reference the run declares unresolvable fails with a classified `cerr.Kind` |
+| `batch/results-match-request` | batch results correspond one-for-one, in order, with the request — reported only for a connector that implements batch |
+
+Every field of `Options` is required. A fixture that is missing makes `Run`
+return an error rather than skip the check it would have driven: a report that
+is green because nothing looked is worse than no report.
+
+`Run` returns an `error` only when the run could not be carried out. A
+connector that runs and is non-conformant yields a `nil` error and a `Report`
+whose `Err()` is a `cerr` of kind `cerr.KindInvalid` naming the connector and
+every failed check — so gate on `Report.Err()`, not on the returned error
+alone. `Report.String()` renders one line per check for CI logs.
+
+Each check is tested against a connector built to violate exactly the property
+it checks. A harness only ever run against compliant input proves nothing
+about what it would catch.
 
 ## Versioning
 
@@ -111,7 +276,7 @@ management; this module adds only the pieces specific to the
 | Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`). Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
 | Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — errors cross the wire as gRPC status, never as strings for the caller to pattern-match. |
 | Transport binding | [`plugin/`](../plugin/plugin.go) | `plugin.Handshake` (the go-plugin magic-cookie handshake both sides must share), `plugin.CredentialLoaderName`, and `plugin.PluginMap(impl)`. A provider passes `plugin.PluginMap(impl)` to `goplugin.ServeConfig.Plugins`; the host's `Dispense(plugin.CredentialLoaderName)` returns a value that itself satisfies `credential.CredentialLoader` — from the host's point of view, calling a Track-B provider looks identical to calling a native connector. |
-| Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), `capabilities`, `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
+| Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), typed `capabilities` (`[]connector.Capability`, checked against the class vocabulary and against the running connector by `credconform`), `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
 
 **Refs-only over the wire.** The `Resolve`/`Lease` RPCs take a `Ref` and
 return only the `Material` the caller asked for — a provider never returns

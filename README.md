@@ -27,9 +27,11 @@ never fetches the module — measured, not assumed. The SDK is visible to
 | Package | Purpose |
 |---|---|
 | [`ref`](ref/) | The `op://<vault>/<item>/<field>` secret-reference type (`Ref`, `Parse`). A `Ref` is a *reference* to a secret — connectors never receive raw credential material as input, only refs. |
-| [`cerr`](cerr/) | The connector error taxonomy: `Kind` (NotFound / Unauthorized / Unavailable / Unsupported / Invalid / Timeout / Unknown), `Error`, `New`, `KindOf`, `Retryable`. Callers classify errors by kind, never by string-matching. |
+| [`cerr`](cerr/) | The connector error taxonomy: a **closed** `Kind` vocabulary (NotFound / Unauthorized / Unavailable / RateLimited / Unsupported / Invalid / Timeout / ContractViolation / Unknown), `Error`, `New`, `KindOf`, `Classified`, `Retryable`, `TripsBreaker`. Callers classify errors by kind, never by string-matching — and `Unknown` deliberately does **not** trip a breaker. |
 | [`connector`](connector/) | The base contract every connector implements regardless of class: `Class`, `Capability` / `Capabilities`, `Health` / `HealthStatus`, and the `Connector` interface (`Implements`, `Capabilities`, `Health`, `Close`). |
-| [`credential`](credential/) | The `CredentialLoader` connector class: `Resolve` / `List` / `Lease` / `Renew` / `Revoke`, plus `Material` (redacted, revealable-on-demand, wipeable secret bytes) and `Lease`. |
+| [`credential`](credential/) | The `CredentialLoader` connector class: `Resolve` / `List` / `Lease` / `Renew` / `Revoke`, plus `Resolution` (a resolve result that **cannot** be both empty and successful), `Material` (redacted, revealable-on-demand, wipeable secret bytes), `Lease`, and the optional `BatchResolver` operation behind `CapBatchResolve`. |
+| [`credconform`](credconform/) | The conformance harness for a `CredentialLoader`: run it in your own CI to check the contract properties a compiler cannot — no empty-success, typed failures, and a manifest whose declared capabilities match the running connector. |
+| [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
 
@@ -84,16 +86,22 @@ func (Loader) Health(ctx context.Context) (connector.Health, error) {
 
 func (Loader) Close() error { return nil }
 
-func (Loader) Resolve(ctx context.Context, r ref.Ref) (*credential.Material, error) {
-	return nil, cerr.New(cerr.KindUnsupported, "Resolve", nil)
+// Resolve returns a credential.Resolution, not a *Material. A Resolution
+// cannot be both successful and empty: credential.Resolved refuses material
+// with no bytes, and the zero Resolution is unreadable. A backend that
+// answers a signed-out read with empty output and a success exit code
+// therefore surfaces as a failure, with no emptiness check written here.
+func (Loader) Resolve(ctx context.Context, r ref.Ref) (credential.Resolution, error) {
+	// A real connector: return credential.Resolved(credential.NewMaterial(b))
+	return credential.Resolution{}, cerr.New(cerr.KindUnsupported, "Resolve", nil)
 }
 
 func (Loader) List(ctx context.Context, scope string) ([]ref.Ref, error) {
 	return nil, cerr.New(cerr.KindUnsupported, "List", nil)
 }
 
-func (Loader) Lease(ctx context.Context, r ref.Ref) (*credential.Material, credential.Lease, error) {
-	return nil, credential.Lease{}, cerr.New(cerr.KindUnsupported, "Lease", nil)
+func (Loader) Lease(ctx context.Context, r ref.Ref) (credential.Resolution, credential.Lease, error) {
+	return credential.Resolution{}, credential.Lease{}, cerr.New(cerr.KindUnsupported, "Lease", nil)
 }
 
 func (Loader) Renew(ctx context.Context, l credential.Lease) (credential.Lease, error) {
@@ -117,11 +125,41 @@ project with the compile-time contract check already wired in.
 
 ## Verifying a connector against the contract
 
-A connector implementation should be run against the conformance harness, which
-exercises the `CredentialLoader` semantics described in
-[`docs/CONTRACT.md`](docs/CONTRACT.md) — capability-gated behavior, error-kind
-correctness, lease/renew/revoke lifecycle, and the `Material` redaction/wipe
-invariants — independent of which backing store the connector talks to.
+Run [`credconform`](credconform/) against your own connector, in your own CI,
+before arqtos ever loads it:
+
+```go
+rep, err := credconform.Run(ctx, myLoader, credconform.Options{
+	Manifest:     myManifest,                    // what you publish
+	Resolvable:   []ref.Ref{presentRef},         // must resolve
+	Unresolvable: absentRef,                     // must fail, and typed
+})
+if err != nil {
+	return err // the check could not be run at all
+}
+if err := rep.Err(); err != nil {
+	return err // the connector ran, and is not conformant
+}
+```
+
+| Check | What it requires |
+|---|---|
+| `manifest/valid` | the manifest validates and declares only capabilities this class defines |
+| `capability/manifest-matches-runtime` | the manifest and `Capabilities()` declare the same set |
+| `batch/declared-is-implemented` | `batch_resolve` is declared exactly when `credential.BatchResolver` is implemented |
+| `resolve/no-empty-success` | a resolvable reference comes back with a value, never as a success carrying nothing |
+| `failure/typed` | an unresolvable reference fails with a classified `cerr.Kind`, not vendor prose |
+| `batch/results-match-request` | batch results correspond one-for-one, in order, with the references requested |
+
+Every one of those checks has a test that drives it with a connector built to
+violate exactly the property it checks — a resolve that returns empty with no
+error, a failure carrying only the backend's own wording, a manifest declaring
+a batch operation that is not there. A harness only ever run against compliant
+input proves nothing about what it would catch.
+
+The remaining conformance surface — full contract shape, secret-handling (no
+material to logs, disk or wire; dies-with-session), and protocol-version
+negotiation — lands alongside these checks.
 
 ## Declarative connectors and MCP
 

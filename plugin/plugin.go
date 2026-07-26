@@ -3,9 +3,15 @@
 // goplugin.Serve using PluginMap(impl); the host dials it and Dispense()s a
 // value that itself satisfies credential.CredentialLoader (grpcClient). Only
 // the material the host requested ever crosses the wire (SECURITY.md
-// invariant); the client re-wraps returned bytes via credential.NewMaterial
+// invariant); the client re-wraps returned bytes into a credential.Resolution
 // so redaction/Zero() hold host-side; errors cross as gRPC status via the
 // transport package, never as strings.
+//
+// The dispensed client is also the boundary where a provider's returns are
+// checked: a provider is someone else's binary, so what it sends passes
+// through credential.CheckResolution before a host ever sees it. A provider
+// that reports success while resolving nothing yields a named contract fault,
+// not an empty credential.
 package plugin
 
 import (
@@ -49,6 +55,11 @@ func PluginMap(impl credential.CredentialLoader) map[string]goplugin.Plugin {
 type CredentialLoaderPlugin struct {
 	goplugin.NetRPCUnsupportedPlugin
 	Impl credential.CredentialLoader
+	// Name is the host's name for the provider being dialled. It is optional
+	// and host-side only: it names the connector in a contract fault raised
+	// by the dispensed client, so a broken provider is attributable without
+	// the host having to re-wrap every call.
+	Name string
 }
 
 var _ goplugin.GRPCPlugin = (*CredentialLoaderPlugin)(nil)
@@ -63,7 +74,7 @@ func (p *CredentialLoaderPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Serv
 // GRPCClient returns a credential.CredentialLoader host-stub backed by conn.
 // Called on the host (client) side.
 func (p *CredentialLoaderPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
-	return &grpcClient{client: connectorpb.NewCredentialLoaderClient(conn)}, nil
+	return &grpcClient{client: connectorpb.NewCredentialLoaderClient(conn), name: p.Name}, nil
 }
 
 // grpcServer adapts a credential.CredentialLoader implementation to the
@@ -77,11 +88,15 @@ type grpcServer struct {
 }
 
 func (s *grpcServer) Resolve(ctx context.Context, req *connectorpb.ResolveRequest) (*connectorpb.ResolveResponse, error) {
-	mat, err := s.impl.Resolve(ctx, transport.RefFromPB(req.GetRef()))
+	res, err := s.impl.Resolve(ctx, transport.RefFromPB(req.GetRef()))
 	if err != nil {
 		return nil, transport.ErrToStatus(err)
 	}
-	return &connectorpb.ResolveResponse{Material: &connectorpb.Material{Value: mat.Reveal()}}, nil
+	// transport.ResolutionToPB sends NO material message for a resolution
+	// that carries no value, rather than an empty one. The distinction is the
+	// host's to act on, and grpcClient below is where it is enforced — the
+	// server does not get to decide that its own provider is conformant.
+	return &connectorpb.ResolveResponse{Material: transport.ResolutionToPB(res)}, nil
 }
 
 func (s *grpcServer) List(ctx context.Context, req *connectorpb.ListRequest) (*connectorpb.ListResponse, error) {
@@ -97,12 +112,12 @@ func (s *grpcServer) List(ctx context.Context, req *connectorpb.ListRequest) (*c
 }
 
 func (s *grpcServer) Lease(ctx context.Context, req *connectorpb.LeaseRequest) (*connectorpb.LeaseResponse, error) {
-	mat, lease, err := s.impl.Lease(ctx, transport.RefFromPB(req.GetRef()))
+	res, lease, err := s.impl.Lease(ctx, transport.RefFromPB(req.GetRef()))
 	if err != nil {
 		return nil, transport.ErrToStatus(err)
 	}
 	return &connectorpb.LeaseResponse{
-		Material: &connectorpb.Material{Value: mat.Reveal()},
+		Material: transport.ResolutionToPB(res),
 		Lease:    transport.LeaseToPB(lease),
 	}, nil
 }
@@ -141,21 +156,33 @@ func (s *grpcServer) Capabilities(_ context.Context, _ *connectorpb.Capabilities
 
 // grpcClient is the host-side stub dispensed by CredentialLoaderPlugin's
 // GRPCClient: it satisfies credential.CredentialLoader by calling the
-// provider over gRPC, wrapping returned bytes in credential.NewMaterial
-// (so redaction/Zero() hold host-side) and reconstructing errors via
+// provider over gRPC, re-wrapping returned bytes through the credential
+// package (so redaction/Zero() hold host-side) and reconstructing errors via
 // transport.ErrFromStatus.
+//
+// It is also where an out-of-process provider's returns are GUARDED. A
+// provider is someone else's binary: the host cannot rely on it having been
+// built against a conformant SDK, or on it being written in Go at all. Every
+// resolution it sends therefore passes through credential.CheckResolution
+// here, so a provider that reports success while resolving nothing produces a
+// named contract fault on the host side rather than an empty credential.
 type grpcClient struct {
 	client connectorpb.CredentialLoaderClient
+	// name is the host's name for this connector, used to attribute a
+	// contract fault. It is empty unless the host set it on
+	// CredentialLoaderPlugin; a fault then carries no name until the host
+	// adds one via credential.CheckResolution.
+	name string
 }
 
 var _ credential.CredentialLoader = (*grpcClient)(nil)
 
-func (c *grpcClient) Resolve(ctx context.Context, r ref.Ref) (*credential.Material, error) {
+func (c *grpcClient) Resolve(ctx context.Context, r ref.Ref) (credential.Resolution, error) {
 	resp, err := c.client.Resolve(ctx, &connectorpb.ResolveRequest{Ref: transport.RefToPB(r)})
 	if err != nil {
-		return nil, transport.ErrFromStatus(err)
+		return credential.Resolution{}, transport.ErrFromStatus(err)
 	}
-	return credential.NewMaterial(resp.GetMaterial().GetValue()), nil
+	return credential.CheckResolution(c.name, "Resolve", transport.ResolutionFromPB(resp.GetMaterial()), nil)
 }
 
 func (c *grpcClient) List(ctx context.Context, scope string) ([]ref.Ref, error) {
@@ -170,12 +197,16 @@ func (c *grpcClient) List(ctx context.Context, scope string) ([]ref.Ref, error) 
 	return refs, nil
 }
 
-func (c *grpcClient) Lease(ctx context.Context, r ref.Ref) (*credential.Material, credential.Lease, error) {
+func (c *grpcClient) Lease(ctx context.Context, r ref.Ref) (credential.Resolution, credential.Lease, error) {
 	resp, err := c.client.Lease(ctx, &connectorpb.LeaseRequest{Ref: transport.RefToPB(r)})
 	if err != nil {
-		return nil, credential.Lease{}, transport.ErrFromStatus(err)
+		return credential.Resolution{}, credential.Lease{}, transport.ErrFromStatus(err)
 	}
-	return credential.NewMaterial(resp.GetMaterial().GetValue()), transport.LeaseFromPB(resp.GetLease()), nil
+	res, err := credential.CheckResolution(c.name, "Lease", transport.ResolutionFromPB(resp.GetMaterial()), nil)
+	if err != nil {
+		return credential.Resolution{}, credential.Lease{}, err
+	}
+	return res, transport.LeaseFromPB(resp.GetLease()), nil
 }
 
 func (c *grpcClient) Renew(ctx context.Context, l credential.Lease) (credential.Lease, error) {

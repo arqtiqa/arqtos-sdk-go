@@ -2,6 +2,7 @@ package transport_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -78,6 +79,20 @@ func TestKindCodeMappingDistinct(t *testing.T) {
 		cerr.KindUnsupported,
 		cerr.KindInvalid,
 		cerr.KindTimeout,
+		cerr.KindRateLimited,
+		cerr.KindContractViolation,
+	}
+
+	// Every Kind in the closed vocabulary except Unknown must have a distinct
+	// code: a Kind that quietly falls through to codes.Unknown loses its
+	// classification the moment it crosses a process boundary.
+	for _, k := range cerr.Kinds() {
+		if k == cerr.KindUnknown {
+			continue
+		}
+		if !slices.Contains(kinds, k) {
+			t.Fatalf("Kind %v is in the vocabulary but not in this mapping test", k)
+		}
 	}
 
 	seenCodes := make(map[codes.Code]cerr.Kind, len(kinds))
@@ -140,4 +155,58 @@ func TestErrFromStatusFromNil(t *testing.T) {
 	if got := transport.ErrFromStatus(nil); got != nil {
 		t.Fatalf("ErrFromStatus(nil) = %v, want nil", got)
 	}
+}
+
+// TestResolutionPresenceCrossesTheWire is REQ-ARQ-P-17 at the process
+// boundary. The wire distinguishes the three states through MESSAGE PRESENCE,
+// not through the length of a byte field:
+//
+//	no Material message      -> nothing was resolved
+//	Material with no bytes   -> a deliberately-empty value
+//	Material with bytes      -> a value
+//
+// Without that distinction a provider that resolved nothing would be
+// indistinguishable on the wire from one holding an empty secret, and the
+// host would have no way to tell them apart — which is exactly the conflation
+// the contract refuses in-process.
+func TestResolutionPresenceCrossesTheWire(t *testing.T) {
+	t.Run("unresolved sends no material message", func(t *testing.T) {
+		if pb := transport.ResolutionToPB(credential.Resolution{}); pb != nil {
+			t.Fatalf("an unresolved Resolution must not be sent as material, got %v", pb)
+		}
+		if _, err := transport.ResolutionFromPB(nil).Value(); err == nil {
+			t.Fatalf("an absent material message must not read as an empty credential")
+		}
+	})
+
+	t.Run("deliberately empty sends an empty material message", func(t *testing.T) {
+		pb := transport.ResolutionToPB(credential.ResolvedEmpty())
+		if pb == nil {
+			t.Fatalf("a deliberately-empty value must cross as a present, empty material message")
+		}
+		if len(pb.GetValue()) != 0 {
+			t.Fatalf("value = %q, want empty", pb.GetValue())
+		}
+		mat, err := transport.ResolutionFromPB(pb).Value()
+		if err != nil {
+			t.Fatalf("round-trip of a deliberately-empty value: %v", err)
+		}
+		if len(mat.Reveal()) != 0 {
+			t.Fatalf("round-tripped material = %q, want empty", mat.Reveal())
+		}
+	})
+
+	t.Run("a value round-trips", func(t *testing.T) {
+		in, err := credential.Resolved(credential.NewMaterial([]byte("placeholder-value")))
+		if err != nil {
+			t.Fatalf("Resolved: %v", err)
+		}
+		mat, err := transport.ResolutionFromPB(transport.ResolutionToPB(in)).Value()
+		if err != nil {
+			t.Fatalf("round-trip: %v", err)
+		}
+		if string(mat.Reveal()) != "placeholder-value" {
+			t.Fatalf("Reveal = %q", mat.Reveal())
+		}
+	})
 }

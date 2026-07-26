@@ -64,14 +64,18 @@ func TestRoundTripRealSubprocess(t *testing.T) {
 		t.Fatalf("ref.Parse(%q): %v", referenceRef, err)
 	}
 
-	mat, err := loader.Resolve(context.Background(), r)
+	res, err := loader.Resolve(context.Background(), r)
 	if err != nil {
 		t.Fatalf("Resolve over the real subprocess: %v", err)
+	}
+	mat, err := res.Value()
+	if err != nil {
+		t.Fatalf("reading the resolved value: %v", err)
 	}
 	if got := string(mat.Reveal()); got != referencePlaceholder {
 		t.Fatalf("Reveal() = %q, want %q", got, referencePlaceholder)
 	}
-	if formatted := fmt.Sprintf("%v", mat); strings.Contains(formatted, referencePlaceholder) {
+	if formatted := fmt.Sprintf("%v %v", res, mat); strings.Contains(formatted, referencePlaceholder) {
 		t.Fatalf("formatted material leaked the placeholder value: %q", formatted)
 	}
 

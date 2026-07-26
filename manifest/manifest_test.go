@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
+	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/manifest"
 )
 
 const validProviderManifest = `
-name: infisical-credential-loader
+name: placeholder-credential-loader
 implements: CredentialLoader
 kind: provider
 schema_version: "1"
@@ -18,8 +19,8 @@ min_host_version: "0.4.0"
 supports:
   rotate: "false"
 auth:
-  api_token: INFISICAL_TOKEN
-  service_ref: op://infra/infisical/token
+  api_token: PLACEHOLDER_TOKEN
+  service_ref: op://<vault>/<item>/<field>
 `
 
 func TestParseValidProviderManifest(t *testing.T) {
@@ -27,7 +28,7 @@ func TestParseValidProviderManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
-	if d.Name != "infisical-credential-loader" {
+	if d.Name != "placeholder-credential-loader" {
 		t.Fatalf("Name = %q", d.Name)
 	}
 	if d.Implements != connector.ClassCredentialLoader {
@@ -104,8 +105,8 @@ func TestValidateAcceptsRefAndEnvNameAuth(t *testing.T) {
 		Implements: connector.ClassCredentialLoader,
 		Kind:       manifest.KindDeclarative,
 		Auth: map[string]string{
-			"env_style": "INFISICAL_TOKEN",
-			"ref_style": "op://infra/infisical/token",
+			"env_style": "PLACEHOLDER_TOKEN",
+			"ref_style": "op://<vault>/<item>/<field>",
 		},
 	}
 	if err := d.Validate(); err != nil {
@@ -160,5 +161,45 @@ func TestValidateRequiresName(t *testing.T) {
 	}
 	if err := d.Validate(); err == nil {
 		t.Fatalf("empty name must fail Validate")
+	}
+}
+
+// TestCapabilitiesAreDeclaredInTheManifest covers the declaration half of
+// REQ-ARQ-P-20: batch resolution is something a connector author WRITES DOWN,
+// because the manifest is what an external author encodes and what a host
+// reads before it plans a call pattern.
+func TestCapabilitiesAreDeclaredInTheManifest(t *testing.T) {
+	d, err := manifest.Parse([]byte(`
+name: placeholder-credential-loader
+implements: CredentialLoader
+kind: native
+capabilities: [read, batch_resolve]
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if !d.Declares(credential.CapBatchResolve) {
+		t.Fatalf("manifest declaring batch_resolve must report Declares(CapBatchResolve)")
+	}
+	if !d.Declares(credential.CapRead) {
+		t.Fatalf("manifest declaring read must report Declares(CapRead)")
+	}
+	if d.Declares(credential.CapLease) {
+		t.Fatalf("Declares must be false for a capability the manifest does not list")
+	}
+	// Typed, not stringly: the declaration is comparable to the capability
+	// constants the contract publishes, with no conversion at the call site.
+	if len(d.Capabilities) != 2 || d.Capabilities[0] != credential.CapRead {
+		t.Fatalf("Capabilities = %v, want typed connector.Capability values", d.Capabilities)
+	}
+}
+
+func TestDeclaresOnAManifestWithNoCapabilities(t *testing.T) {
+	var d manifest.Doc
+	if d.Declares(credential.CapBatchResolve) {
+		t.Fatalf("an empty manifest declares nothing")
 	}
 }

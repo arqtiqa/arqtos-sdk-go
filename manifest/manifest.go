@@ -46,14 +46,32 @@ var envNameRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // Doc is a connector manifest.
 type Doc struct {
-	Name           string            `yaml:"name"`
-	Implements     connector.Class   `yaml:"implements"`
-	Kind           Kind              `yaml:"kind"`
-	SchemaVersion  string            `yaml:"schema_version,omitempty"`
-	Capabilities   []string          `yaml:"capabilities,omitempty"`
-	Supports       map[string]string `yaml:"supports,omitempty"`
-	Auth           map[string]string `yaml:"auth,omitempty"`
-	MinHostVersion string            `yaml:"min_host_version,omitempty"`
+	Name          string          `yaml:"name"`
+	Implements    connector.Class `yaml:"implements"`
+	Kind          Kind            `yaml:"kind"`
+	SchemaVersion string          `yaml:"schema_version,omitempty"`
+	// Capabilities is what this connector DECLARES it can do, drawn from the
+	// capability vocabulary of the class it implements (for
+	// CredentialLoader, credential.KnownCapabilities()). It is typed rather
+	// than free-form strings because a host plans its call pattern from this
+	// list: batch resolution, for one, is used only where it is declared.
+	//
+	// The declaration is a promise the conformance harness checks against the
+	// running connector. Declaring a capability that is not implemented fails
+	// conformance — it is worse than declaring nothing, because the host
+	// plans for a capability that is not there.
+	Capabilities   []connector.Capability `yaml:"capabilities,omitempty"`
+	Supports       map[string]string      `yaml:"supports,omitempty"`
+	Auth           map[string]string      `yaml:"auth,omitempty"`
+	MinHostVersion string                 `yaml:"min_host_version,omitempty"`
+}
+
+// Declares reports whether the manifest declares capability c.
+//
+// It answers only what the manifest SAYS. Whether the connector actually
+// implements it is a separate question, and the one conformance asks.
+func (d Doc) Declares(c connector.Capability) bool {
+	return connector.Capabilities(d.Capabilities).Has(c)
 }
 
 // Parse strictly decodes a connector manifest, rejecting unknown fields.

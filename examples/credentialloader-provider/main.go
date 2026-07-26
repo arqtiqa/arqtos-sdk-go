@@ -46,12 +46,21 @@ type memLoader struct {
 	vals map[string]string // ref.String() -> placeholder value
 }
 
-func (m *memLoader) Resolve(_ context.Context, r ref.Ref) (*credential.Material, error) {
+// Resolve is the shape a real provider copies. Two things are load-bearing:
+//
+//   - a failure is TYPED — a cerr.Kind from the closed vocabulary, so the host
+//     acts on the classification and never on the message text;
+//   - the value goes back through credential.Resolved, which refuses to
+//     report a success carrying nothing. A backend that returns empty output
+//     with a success exit code (the classic signed-out read) therefore
+//     surfaces as a fault instead of as an empty credential, without this
+//     function containing a single emptiness check.
+func (m *memLoader) Resolve(_ context.Context, r ref.Ref) (credential.Resolution, error) {
 	v, ok := m.vals[r.String()]
 	if !ok {
-		return nil, cerr.New(cerr.KindNotFound, "Resolve", nil)
+		return credential.Resolution{}, cerr.New(cerr.KindNotFound, "Resolve", nil)
 	}
-	return credential.NewMaterial([]byte(v)), nil
+	return credential.Resolved(credential.NewMaterial([]byte(v)))
 }
 
 func (m *memLoader) List(_ context.Context, _ string) ([]ref.Ref, error) {
@@ -68,8 +77,8 @@ func (m *memLoader) List(_ context.Context, _ string) ([]ref.Ref, error) {
 
 // Lease is unsupported by this reference provider: it only models a static
 // secret store, not one that issues dynamic, time-bounded credentials.
-func (m *memLoader) Lease(_ context.Context, _ ref.Ref) (*credential.Material, credential.Lease, error) {
-	return nil, credential.Lease{}, cerr.New(cerr.KindUnsupported, "Lease", nil)
+func (m *memLoader) Lease(_ context.Context, _ ref.Ref) (credential.Resolution, credential.Lease, error) {
+	return credential.Resolution{}, credential.Lease{}, cerr.New(cerr.KindUnsupported, "Lease", nil)
 }
 
 func (m *memLoader) Renew(_ context.Context, _ credential.Lease) (credential.Lease, error) {

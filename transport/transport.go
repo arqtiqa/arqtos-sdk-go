@@ -1,9 +1,12 @@
 // Package transport marshals the SDK's semantic contract types (ref.Ref,
-// credential.Lease, cerr.Error) to and from the generated connectorpb wire
-// types and gRPC status, so a Track-B provider and host can exchange them
-// over the CredentialLoader gRPC service. Material deliberately has no
-// ToPB helper here: it crosses the wire as raw bytes and the client wraps
-// them via credential.NewMaterial so redaction/Zero() hold host-side.
+// credential.Resolution, credential.Lease, cerr.Error) to and from the
+// generated connectorpb wire types and gRPC status, so a Track-B provider and
+// host can exchange them over the CredentialLoader gRPC service.
+//
+// Material has no ToPB helper of its own: material crosses the wire only
+// inside a Resolution, whose presence rules the wire has to preserve
+// ([ResolutionToPB]), and the receiving side re-wraps the bytes through
+// credential.NewMaterial so redaction and Zero() hold host-side.
 package transport
 
 import (
@@ -57,6 +60,43 @@ func LeaseFromPB(pb *connectorpb.Lease) credential.Lease {
 	}
 }
 
+// ResolutionToPB converts a credential.Resolution to the wire Material.
+//
+// Presence carries the distinction the contract makes in-process: a
+// resolution that carries no value becomes a NIL message — no Material at all
+// — while a deliberately-empty value becomes a present message with no bytes.
+// A receiver therefore cannot mistake one for the other, and cannot read
+// "nothing was resolved" as an empty credential.
+func ResolutionToPB(r credential.Resolution) *connectorpb.Material {
+	mat, err := r.Value()
+	if err != nil {
+		// Nothing was resolved. Sending an empty Material here is exactly the
+		// conflation REQ-ARQ-P-17 forbids, so nothing is sent.
+		return nil
+	}
+	return &connectorpb.Material{Value: mat.Reveal()}
+}
+
+// ResolutionFromPB converts a wire Material back to a credential.Resolution,
+// reading presence the same way ResolutionToPB writes it: a nil message is
+// unresolved (and stays unreadable), a present message with no bytes is a
+// deliberately-empty value.
+func ResolutionFromPB(pb *connectorpb.Material) credential.Resolution {
+	if pb == nil {
+		return credential.Resolution{}
+	}
+	if len(pb.GetValue()) == 0 {
+		return credential.ResolvedEmpty()
+	}
+	res, err := credential.Resolved(credential.NewMaterial(pb.GetValue()))
+	if err != nil {
+		// Unreachable: the value is non-empty. Returning the zero Resolution
+		// keeps the failure unreadable rather than inventing a value.
+		return credential.Resolution{}
+	}
+	return res
+}
+
 // kindToCode is the cerr.Kind -> gRPC codes.Code table. Every known Kind
 // maps to its own distinct code; a Kind with no entry (including
 // cerr.KindUnknown) falls back to codes.Unknown in ErrToStatus.
@@ -67,6 +107,14 @@ var kindToCode = map[cerr.Kind]codes.Code{
 	cerr.KindUnsupported:  codes.Unimplemented,
 	cerr.KindInvalid:      codes.InvalidArgument,
 	cerr.KindTimeout:      codes.DeadlineExceeded,
+	// A quota refusal is the one failure a host's breaker acts on, so it
+	// needs its own code: collapsed into Unknown it would cross the wire as
+	// something the breaker ignores.
+	cerr.KindRateLimited: codes.ResourceExhausted,
+	// The connector is broken, not the backend — Internal rather than a
+	// caller-facing code, and distinct so a host can tell a faulty connector
+	// from a failed call after the error has crossed a process boundary.
+	cerr.KindContractViolation: codes.Internal,
 }
 
 // codeToKind is the reverse of kindToCode, built once at init from the same

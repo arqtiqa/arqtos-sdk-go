@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -28,12 +29,18 @@ type memLoader struct {
 	vals map[string]string // ref.String() -> value
 }
 
-func (m *memLoader) Resolve(_ context.Context, r ref.Ref) (*credential.Material, error) {
+func (m *memLoader) Resolve(_ context.Context, r ref.Ref) (credential.Resolution, error) {
 	v, ok := m.vals[r.String()]
 	if !ok {
-		return nil, cerr.New(cerr.KindNotFound, "Resolve", nil)
+		return credential.Resolution{}, cerr.New(cerr.KindNotFound, "Resolve", nil)
 	}
-	return credential.NewMaterial([]byte(v)), nil
+	if v == "" {
+		// This store distinguishes a stored-empty value from a failed read,
+		// so it may say so. A store that cannot make that distinction must
+		// not call ResolvedEmpty.
+		return credential.ResolvedEmpty(), nil
+	}
+	return credential.Resolved(credential.NewMaterial([]byte(v)))
 }
 
 func (m *memLoader) List(_ context.Context, _ string) ([]ref.Ref, error) {
@@ -48,12 +55,12 @@ func (m *memLoader) List(_ context.Context, _ string) ([]ref.Ref, error) {
 	return refs, nil
 }
 
-func (m *memLoader) Lease(ctx context.Context, r ref.Ref) (*credential.Material, credential.Lease, error) {
-	mat, err := m.Resolve(ctx, r)
+func (m *memLoader) Lease(ctx context.Context, r ref.Ref) (credential.Resolution, credential.Lease, error) {
+	res, err := m.Resolve(ctx, r)
 	if err != nil {
-		return nil, credential.Lease{}, err
+		return credential.Resolution{}, credential.Lease{}, err
 	}
-	return mat, credential.Lease{ID: "lease-1", Renewable: true}, nil
+	return res, credential.Lease{ID: "lease-1", Renewable: true}, nil
 }
 
 func (m *memLoader) Renew(_ context.Context, l credential.Lease) (credential.Lease, error) {
@@ -115,9 +122,13 @@ func TestResolveRoundTrip(t *testing.T) {
 		t.Fatalf("ref.Parse: %v", err)
 	}
 
-	mat, err := c.Resolve(context.Background(), r)
+	res, err := c.Resolve(context.Background(), r)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
+	}
+	mat, err := res.Value()
+	if err != nil {
+		t.Fatalf("Value: %v", err)
 	}
 	if got := string(mat.Reveal()); got != knownSecret {
 		t.Fatalf("Reveal() = %q, want %q", got, knownSecret)
@@ -133,12 +144,16 @@ func TestResolveMaterialRedactedOnFormat(t *testing.T) {
 		t.Fatalf("ref.Parse: %v", err)
 	}
 
-	mat, err := c.Resolve(context.Background(), r)
+	res, err := c.Resolve(context.Background(), r)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
+	mat, err := res.Value()
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
 
-	formatted := fmt.Sprintf("%v", mat)
+	formatted := fmt.Sprintf("%v %v", res, mat)
 	if strings.Contains(formatted, knownSecret) {
 		t.Fatalf("formatted material leaked secret: %q", formatted)
 	}
@@ -203,9 +218,13 @@ func TestLeaseRenewRevokeRoundTrip(t *testing.T) {
 		t.Fatalf("ref.Parse: %v", err)
 	}
 
-	mat, lease, err := c.Lease(context.Background(), r)
+	res, lease, err := c.Lease(context.Background(), r)
 	if err != nil {
 		t.Fatalf("Lease: %v", err)
+	}
+	mat, err := res.Value()
+	if err != nil {
+		t.Fatalf("Lease Value: %v", err)
 	}
 	if got := string(mat.Reveal()); got != knownSecret {
 		t.Fatalf("Lease material = %q, want %q", got, knownSecret)
@@ -224,5 +243,74 @@ func TestLeaseRenewRevokeRoundTrip(t *testing.T) {
 
 	if err := c.Revoke(context.Background(), renewed); err != nil {
 		t.Fatalf("Revoke: %v", err)
+	}
+}
+
+// brokenLoader is a deliberately NON-COMPLIANT provider: it reports success
+// while resolving nothing — the shape a signed-out backend produces when it
+// prints no output and exits 0. It exists to prove the wire binding does not
+// launder that into an empty credential on the host side.
+type brokenLoader struct{ memLoader }
+
+func (b *brokenLoader) Resolve(context.Context, ref.Ref) (credential.Resolution, error) {
+	return credential.Resolution{}, nil
+}
+
+// TestUnresolvedFromAProviderReachesTheHostAsAFault: the provider is
+// out-of-process, so the host cannot inspect its code — the guarantee has to
+// survive serialization. It does, because presence is carried by the message
+// and the host-side stub checks it.
+func TestUnresolvedFromAProviderReachesTheHostAsAFault(t *testing.T) {
+	c := newTestClient(t, &brokenLoader{memLoader{vals: map[string]string{knownRef: knownSecret}}})
+
+	r, err := ref.Parse(knownRef)
+	if err != nil {
+		t.Fatalf("ref.Parse: %v", err)
+	}
+
+	res, err := c.Resolve(context.Background(), r)
+	if err == nil {
+		t.Fatalf("a provider that resolved nothing must not look successful across the wire")
+	}
+	var fe *credential.FaultError
+	if !errors.As(err, &fe) {
+		t.Fatalf("error is %T (%v), want *credential.FaultError", err, err)
+	}
+	if fe.Fault != credential.FaultUnresolved {
+		t.Fatalf("Fault = %q, want %q", fe.Fault, credential.FaultUnresolved)
+	}
+	if _, err := res.Value(); err == nil {
+		t.Fatalf("the returned Resolution must not be readable")
+	}
+}
+
+// emptySecretLoader holds a secret whose value really is empty, and says so.
+type emptySecretLoader struct{ memLoader }
+
+func (e *emptySecretLoader) Resolve(context.Context, ref.Ref) (credential.Resolution, error) {
+	return credential.ResolvedEmpty(), nil
+}
+
+// TestDeliberatelyEmptySurvivesTheWire is the other half: an intentionally
+// empty value must NOT be flattened into "unresolved" by the wire, or the
+// contract's distinction would exist only in-process.
+func TestDeliberatelyEmptySurvivesTheWire(t *testing.T) {
+	c := newTestClient(t, &emptySecretLoader{memLoader{vals: map[string]string{knownRef: ""}}})
+
+	r, err := ref.Parse(knownRef)
+	if err != nil {
+		t.Fatalf("ref.Parse: %v", err)
+	}
+
+	res, err := c.Resolve(context.Background(), r)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	mat, err := res.Value()
+	if err != nil {
+		t.Fatalf("a deliberately-empty value must stay readable across the wire: %v", err)
+	}
+	if len(mat.Reveal()) != 0 {
+		t.Fatalf("material = %q, want empty", mat.Reveal())
 	}
 }

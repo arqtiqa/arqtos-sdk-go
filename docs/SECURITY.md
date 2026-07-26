@@ -23,8 +23,10 @@ the connector resolve it.
 ## `Material` redacted + wiped
 
 Resolved secret material is always wrapped in
-[`credential.Material`](../credential/credential.go), never passed around as a
-bare `[]byte` or `string`:
+[`credential.Material`](../credential/credential.go) — and returned from
+`Resolve`/`Lease` inside a
+[`credential.Resolution`](CONTRACT.md#resolution-an-unresolved-credential-cannot-look-like-an-empty-one)
+— never passed around as a bare `[]byte` or `string`:
 
 - `Material.String()` / `Material.GoString()` are defined on the **value**
   receiver, so both a `Material` value and a `*Material` pointer — including a
@@ -38,6 +40,10 @@ bare `[]byte` or `string`:
 - The raw bytes are reachable only through the explicit `Reveal()` call. Any
   code path that needs the actual secret value must call `Reveal()`
   deliberately and hold the result for the shortest possible scope.
+- `Resolution.String()` / `GoString()` redact the same way, on the value
+  receiver, so a `Resolution` is as safe to log as the `Material` it carries.
+  They do distinguish an unresolved resolution from a resolved one, which is
+  diagnosis rather than material.
 - `Material.Zero()` wipes the backing bytes in place. Callers MUST call
   `Zero()` on every `*Material` once it is no longer needed — this is the
   dies-with-session guarantee: material does not outlive the operation (or
