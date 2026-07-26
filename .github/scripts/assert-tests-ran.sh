@@ -9,9 +9,16 @@
 # always be exercised.
 #
 # Usage: assert-tests-ran.sh <report.json>
-#   MIN_TESTS          minimum number of passing tests overall (default 40)
+#   MIN_TESTS          minimum number of passing tests overall (default 60)
 #   REQUIRED_PACKAGES  space-separated package suffixes that must each have
 #                      contributed at least one passing test (default mcpconform)
+#
+# The floor is kept within reach of the real count (72 at the time of writing)
+# rather than far below it. A floor of 40 against 72 tests would let a third of
+# the suite stop building before this gate noticed — which is the same "green
+# because nothing looked" failure the script exists to prevent. Slack is left
+# for the tests that skip rather than fail on a runner without a usable
+# subprocess (examples/credentialloader-provider).
 
 set -euo pipefail
 
@@ -21,7 +28,7 @@ if [ -z "$report" ]; then
 	exit 2
 fi
 
-min_tests="${MIN_TESTS:-40}"
+min_tests="${MIN_TESTS:-60}"
 required_packages="${REQUIRED_PACKAGES:-mcpconform}"
 
 if [ ! -s "$report" ]; then
