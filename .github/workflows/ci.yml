@@ -1,0 +1,95 @@
+name: ci
+
+# This is the first CI this module has had, so it also sets the bar for the
+# contract external developers compile against. It is aligned with the arqtos
+# house standard (arqtos-cli/.github/workflows/ci.yml): OS matrix, module
+# verification, vet + staticcheck, race + coverage with a floor. Where this
+# workflow departs from it, the reason is stated at the step.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build · lint · test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Checksum-verifies every module in the graph against go.sum before any
+      # of it is compiled.
+      - name: go mod verify
+        run: go mod download && go mod verify
+
+      - name: go build
+        run: go build ./...
+
+      - name: gofmt
+        run: make fmt
+
+      - name: go vet
+        run: make lint
+
+      - name: install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      # Catches what vet does not. `go vet` alone was this workflow's whole
+      # lint bar on first submission; that was below the house standard.
+      - name: staticcheck
+        run: staticcheck ./...
+
+      # A dependency nothing imports is dropped by the next `go mod tidy`, so
+      # this is what proves the MCP SDK dependency is genuinely used rather
+      # than a require line awaiting deletion. Repo-invariant, not
+      # OS-dependent, so it runs once rather than per matrix leg — and it is
+      # the only step that reaches the module proxy a second time.
+      - name: go.mod is tidy
+        if: matrix.os == 'ubuntu-latest'
+        run: make tidy-check
+
+      # -json is recorded so the next step can prove the run was not vacuous.
+      - name: go test -race + coverage
+        run: |
+          set -o pipefail
+          go test -race ./... -count=1 -json \
+            -coverprofile=coverage.txt -covermode=atomic | tee test-report.json
+
+      - name: the test gate is not vacuous
+        if: always()
+        run: bash .github/scripts/assert-tests-ran.sh test-report.json
+
+      # Same 75% floor as arqtos-cli. See the script for the two package trees
+      # excluded from the denominator and why each is a measurement correction.
+      - name: coverage gate (>= 75%)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash .github/scripts/coverage-gate.sh coverage.txt
+
+      - name: upload test report and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.os }}
+          path: |
+            test-report.json
+            coverage.txt
+          if-no-files-found: warn
+          retention-days: 7

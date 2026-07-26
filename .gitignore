@@ -1,0 +1,21 @@
+# Build and test output. None of this belongs in a contract module's history —
+# and `git add -A` will happily commit whatever a half-finished CI step leaves
+# behind if nothing here says otherwise.
+/coverage.txt
+/coverage.out
+/coverage-gate.txt
+/test-report.json
+*.test
+*.out
+*.prof
+
+# Backups a module-hygiene check might leave if its restore is interrupted.
+# scripts/tidy-check.sh keeps them outside the repository so this is a second
+# line of defence, not the only one.
+go.mod.tidycheck
+go.sum.tidycheck
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
