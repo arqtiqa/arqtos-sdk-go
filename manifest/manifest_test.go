@@ -7,6 +7,7 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/manifest"
+	"github.com/arqtiqa/arqtos-sdk-go/roster"
 )
 
 const validProviderManifest = `
@@ -282,5 +283,124 @@ capabilities: [read, batch-resolve]
 	}
 	if err := d.Validate(); err == nil {
 		t.Fatalf("a manifest file declaring batch-resolve must fail Validate")
+	}
+}
+
+// TestEveryKnownClassIsDeclarableWithoutAManifestEdit is the composition
+// requirement, asserted rather than commented.
+//
+// knownImplements used to be a hand-written map beside connector's own class
+// constants, and the comment above it already claimed a class added there would
+// show up without an edit — which was not true of a second list. The symptom
+// of the drift is a valid connector refused by the host with "unknown
+// implements", an error pointing at the connector's manifest, which is correct.
+//
+// This test iterates connector.Classes() rather than naming the classes, so it
+// fails the moment a class exists in the SDK and is not declarable in a
+// manifest. Restating the enum in manifest turns it red.
+func TestEveryKnownClassIsDeclarableWithoutAManifestEdit(t *testing.T) {
+	classes := connector.Classes()
+	if len(classes) < 2 {
+		t.Fatalf("connector.Classes() = %v; with fewer than two classes this test cannot detect drift", classes)
+	}
+	for _, c := range classes {
+		d := manifest.Doc{Name: "placeholder-connector", Implements: c, Kind: manifest.KindNative}
+		if err := d.Validate(); err != nil {
+			t.Fatalf("class %q is known to the SDK but not declarable in a manifest: %v", c, err)
+		}
+	}
+}
+
+// TestEveryKnownClassHasARegisteredCapabilityVocabulary: a class whose
+// vocabulary is not registered has its capabilities accepted UNCHECKED, which
+// is a deliberate forward-compatibility allowance in classCapabilities — the
+// manifest schema must not be what blocks a new class from shipping. It is only
+// safe while it stays empty, so this pins that every class the SDK actually
+// ships today closes its vocabulary.
+func TestEveryKnownClassHasARegisteredCapabilityVocabulary(t *testing.T) {
+	for _, c := range connector.Classes() {
+		d := manifest.Doc{
+			Name:         "placeholder-connector",
+			Implements:   c,
+			Kind:         manifest.KindNative,
+			Capabilities: []connector.Capability{"definitely-not-a-capability"},
+		}
+		if err := d.Validate(); err == nil {
+			t.Fatalf("class %q accepts an arbitrary capability: its vocabulary is not registered in classCapabilities, "+
+				"so a misspelling in a connector.yml reaches the host as an undeclared capability", c)
+		}
+	}
+}
+
+// TestRosterManifestValidatesItsOwnVocabularyAndRefusesAnotherClasses is the
+// class-scoped half of the closure: the vocabulary a manifest is checked
+// against is the vocabulary of the class it implements, not the union of every
+// class's. A roster declaring a credential capability is a connector whose
+// author has confused two contracts, and a host that accepted it would plan a
+// call pattern that cannot exist.
+func TestRosterManifestValidatesItsOwnVocabularyAndRefusesAnotherClasses(t *testing.T) {
+	ok := manifest.Doc{
+		Name:         "placeholder-roster",
+		Implements:   connector.ClassRoster,
+		Kind:         manifest.KindNative,
+		Capabilities: roster.KnownCapabilities(),
+	}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("the published Roster vocabulary must validate: %v", err)
+	}
+	if len(ok.Capabilities) == 0 {
+		t.Fatalf("roster.KnownCapabilities() is empty; this test would pass for the wrong reason")
+	}
+
+	for _, bad := range []connector.Capability{
+		credential.CapBatchResolve, // another class's capability
+		credential.CapRead,
+		"wach",                  // a plausible misspelling
+		"transitive-membership", // hyphen where the vocabulary has an underscore
+	} {
+		crossed := manifest.Doc{
+			Name:         "placeholder-roster",
+			Implements:   connector.ClassRoster,
+			Kind:         manifest.KindNative,
+			Capabilities: []connector.Capability{bad},
+		}
+		err := crossed.Validate()
+		if err == nil {
+			t.Fatalf("a Roster manifest declaring %q must fail Validate", bad)
+		}
+		if !strings.Contains(err.Error(), string(connector.ClassRoster)) {
+			t.Fatalf("the error must name the class whose vocabulary was closed against: %v", err)
+		}
+	}
+}
+
+// TestRosterManifestFromAFile walks the path an external connector author
+// actually takes: a connector.yml on disk, parsed strictly, then validated.
+func TestRosterManifestFromAFile(t *testing.T) {
+	d, err := manifest.Parse([]byte(`
+name: placeholder-roster
+implements: Roster
+kind: native
+capabilities: [watch, transitive_membership, machine_principals]
+auth:
+  api_token: PLACEHOLDER_TOKEN
+  service_ref: op://<vault>/<item>/<field>
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if d.Implements != connector.ClassRoster {
+		t.Fatalf("Implements = %q", d.Implements)
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	for _, c := range roster.KnownCapabilities() {
+		if !d.Declares(c) {
+			t.Fatalf("manifest must report Declares(%q)", c)
+		}
+	}
+	if d.Declares(credential.CapRead) {
+		t.Fatalf("Declares must be false for a capability the manifest does not list")
 	}
 }

@@ -7,10 +7,14 @@
 // This file is the template a connector author copies to start a real
 // provider (Infisical, Vault, ...): swap memLoader's field and method bodies
 // for calls to the actual backing store; the plugin.Handshake +
-// plugin.PluginMap(...) + goplugin.Serve wiring in main() does not change.
-// See docs/CONTRACT.md ("Track-B: the out-of-process wire contract") for the
-// full picture and roundtrip_test.go in this directory for a real-subprocess
-// round-trip driving this exact binary the way a host would.
+// plugin.PluginMap(...) + goplugin.Serve wiring in main() does not change. It
+// also declares and implements a second capability, CapBatchResolve, so a
+// copier sees a capability wired correctly end to end rather than only the
+// baseline CapRead — see conform_test.go in this directory, which runs
+// credconform against memLoader in-process to verify it. See docs/CONTRACT.md
+// ("Track-B: the out-of-process wire contract") for the full picture and
+// roundtrip_test.go in this directory for a real-subprocess round-trip
+// driving this exact binary the way a host would.
 //
 // No real secrets: every value below is a placeholder string, never live
 // credential material.
@@ -63,6 +67,37 @@ func (m *memLoader) Resolve(_ context.Context, r ref.Ref) (credential.Resolution
 	return credential.Resolved(credential.NewMaterial([]byte(v)))
 }
 
+// ResolveBatch is the second thing this template copies: a capability
+// declared, implemented, and verified — not just CapRead. This reference
+// provider has no backend that genuinely answers many refs in one call, so it
+// loops; a real batching backend replaces the loop with its own bulk-fetch
+// call. What must not change is the RESULT SHAPE: exactly one BatchResult per
+// requested ref, in request order, each built through BatchResolved or
+// BatchFailed so "resolved and failed" and "neither" stay unconstructible
+// here too.
+func (m *memLoader) ResolveBatch(ctx context.Context, refs []ref.Ref) ([]credential.BatchResult, error) {
+	out := make([]credential.BatchResult, 0, len(refs))
+	for _, r := range refs {
+		res, err := m.Resolve(ctx, r)
+		if err != nil {
+			br, berr := credential.BatchFailed(r, err)
+			if berr != nil {
+				return nil, berr
+			}
+			out = append(out, br)
+			continue
+		}
+		br, berr := credential.BatchResolved(r, res)
+		if berr != nil {
+			return nil, berr
+		}
+		out = append(out, br)
+	}
+	return out, nil
+}
+
+var _ credential.BatchResolver = (*memLoader)(nil)
+
 func (m *memLoader) List(_ context.Context, _ string) ([]ref.Ref, error) {
 	refs := make([]ref.Ref, 0, len(m.vals))
 	for k := range m.vals {
@@ -91,8 +126,12 @@ func (m *memLoader) Revoke(_ context.Context, _ credential.Lease) error {
 
 func (m *memLoader) Implements() connector.Class { return connector.ClassCredentialLoader }
 
+// Capabilities declares CapBatchResolve alongside CapRead, matching
+// ResolveBatch above: a capability that is declared but not implemented, or
+// implemented but not declared, fails credconform in either direction — see
+// conform_test.go in this directory for the harness that checks it.
 func (m *memLoader) Capabilities() connector.Capabilities {
-	return connector.Capabilities{credential.CapRead}
+	return connector.Capabilities{credential.CapRead, credential.CapBatchResolve}
 }
 
 func (m *memLoader) Health(_ context.Context) (connector.Health, error) {

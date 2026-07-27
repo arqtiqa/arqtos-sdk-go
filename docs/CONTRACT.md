@@ -1,14 +1,26 @@
-# The `CredentialLoader` contract
+# The arqtos connector contracts
 
-This document describes the method-by-method semantics of the
-[`credential.CredentialLoader`](../credential/credential.go) connector class, the
-capability set it is gated by, and the [`cerr`](../cerr/cerr.go) error taxonomy
-every contract method returns errors in.
+This document describes the method-by-method semantics of each **connector
+class** the SDK publishes, the capability set each is gated by, and the
+[`cerr`](../cerr/cerr.go) error taxonomy — shared by every class — that every
+contract method returns errors in.
 
-`CredentialLoader` is implemented by both **native** (in-process, compiled into
-the host) and **out-of-process** connectors. Nothing in this document is
-specific to either runtime shape — see [Versioning](#versioning) for where the
-out-of-process wire protocol is defined.
+| Class | What it adapts | Contract | Conformance harness |
+|---|---|---|---|
+| [`CredentialLoader`](#credentialloader-methods) | a secret store | [`credential`](../credential/credential.go) | [`credconform`](../credconform/) |
+| [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
+
+Both classes are implemented by **native** (in-process, compiled into the host)
+connectors. `CredentialLoader` is additionally implemented by
+**out-of-process** connectors; nothing in its section is specific to either
+runtime shape — see [Versioning and the wire protocol](../README.md#versioning-and-the-wire-protocol) for where the out-of-process wire
+protocol is defined.
+
+The set of classes is **closed**: `connector.Classes()` is the whole list,
+`Class.Valid()` rejects anything outside it, and the `connector.yml`
+`implements` enum is *derived* from that same list rather than restating it — so
+a class the SDK knows is always declarable in a manifest, and a class it does
+not know is refused before a host loads anything.
 
 ## The base contract
 
@@ -17,8 +29,8 @@ Every connector, regardless of class, implements
 
 | Method | Semantics |
 |---|---|
-| `Implements() Class` | Returns the connector class this instance implements — `connector.ClassCredentialLoader` for a `CredentialLoader`. Used by the host to route by class without a type assertion. |
-| `Capabilities() Capabilities` | Returns the set of optional behaviors this instance supports (see [Capabilities](#capabilities) below). The host MUST check `Capabilities().Has(...)` before calling an optional method, and a connector MUST return `cerr.KindUnsupported` from any method it advertises as unsupported. |
+| `Implements() Class` | Returns the connector class this instance implements — `connector.ClassCredentialLoader` for a `CredentialLoader`, `connector.ClassRoster` for a `Roster`. Used by the host to route by class without a type assertion. |
+| `Capabilities() Capabilities` | Returns the set of optional behaviors this instance supports (see each class's capability vocabulary: [`CredentialLoader`](#credentialloader-capabilities), [`Roster`](#the-roster-capability-vocabulary)). The host MUST check `Capabilities().Has(...)` before calling an optional method, and a connector MUST return `cerr.KindUnsupported` from any method it advertises as unsupported. |
 | `Health(ctx) (Health, error)` | Reports current reachability of the backing store: `Healthy`, `Degraded`, or `Unavailable`, with a free-text `Detail`. Must respect `ctx` cancellation/deadline. Used for host-side circuit-breaking and status surfaces — it is not itself an auth check. |
 | `Close() error` | Releases any held resources (connections, background goroutines, cached material). Must be safe to call once at end of connector lifetime; a `CredentialLoader` MUST NOT retain resolved `Material` past `Close()` — see [`docs/SECURITY.md`](SECURITY.md). |
 
@@ -197,7 +209,7 @@ how a quota disappears with the evidence pointing at the wrong component.
   injected `now`, so lease-expiry logic is deterministically testable without
   wall-clock sleeps.
 
-## Capabilities
+## `CredentialLoader` capabilities
 
 A `CredentialLoader`'s `Capabilities()` return value is drawn from the
 capability constants declared in the `credential` package:
@@ -323,6 +335,421 @@ Each check is tested against a connector built to violate exactly the property
 it checks. A harness only ever run against compliant input proves nothing
 about what it would catch.
 
+## The `Roster` contract
+
+A **roster connector** adapts one directory — an identity provider, a workspace
+directory, a code host's teams, a flat file checked into a repo — and reports
+what that directory says about **principals**, **groups**, and the
+**memberships** between them.
+
+It is **read-only**. There is no create, no update, no delete, and none is
+coming. arqtos provisions arqtos-side artifacts; it does not create people in
+somebody else's directory, and a class that could write to one would make every
+reconcile bug a destructive one.
+
+### It reports directory facts, never arqtos concepts
+
+A roster connector holds **no arqtos policy**. There is no org in these types,
+no team, no role and no entitlement — mapping directory facts onto arqtos's own
+organisational model is the **host's** job, on the host's side of this
+boundary.
+
+That is not tidiness. A connector that answered *"this person belongs to venture
+X with role Y"* would have encoded the host's organisational model inside a
+vendor adapter, and the host would then have as many organisational models as it
+has directories, each drifting independently, each only correctable by whoever
+maintains that adapter.
+
+| Type | Fields | Notes |
+|---|---|---|
+| `Principal` | `ID`, `Handle`, `Email`, `DisplayName`, `Active`, `Kind` | `ID` is the directory's **stable** identifier — **not** the email. `Email` MAY be empty. `Active` is reported for **every** principal (see below). |
+| `Group` | `ID`, `Handle`, `DisplayName`, `ParentIDs` | `ParentIDs` carries nesting where the directory supports it, and is empty for a flat directory. |
+| `Membership` | `PrincipalID`, `GroupID`, `Direct` | `Direct: false` means inherited through group nesting. |
+
+**`Principal.ID` is not the email.** Email changes, and a host that keyed on it
+treats a renamed person as a departed person plus a new hire — the first half of
+which is a full deprovision. Where a directory offers a numeric or opaque id
+alongside a login, the id is what belongs in `ID`.
+
+**`Principal.Kind`** is `human`, `machine`, or `unknown`, and its **zero value
+is `unknown`**. A connector that forgets to set it reports "unclassified" rather
+than accidentally reporting "human", so a host that treats service identities
+differently knows it may apply neither rule.
+
+**`Membership.PrincipalID` need not name a principal from `ListPrincipals`.**
+Some directories admit groups as members of groups, and external or guest
+identities a directory read does not enumerate. A host resolves what it
+recognises and reports what it does not; it must **not** treat an unrecognised
+member as an absent one.
+
+### `Roster` methods
+
+`Roster` embeds `connector.Connector` and adds three read operations:
+
+| Method | Semantics |
+|---|---|
+| `ListPrincipals(ctx) (Resolution[Principal], error)` | Every identity in the directory this connector serves, **including deactivated ones**. |
+| `ListGroups(ctx) (Resolution[Group], error)` | Every group in the directory this connector serves. |
+| `ListMemberships(ctx, groupID) (Resolution[Membership], error)` | The memberships of the single group named by `groupID`. Every returned `Membership.GroupID` MUST equal `groupID`. A group that does not exist is `cerr.KindNotFound` — **not** an empty roster. |
+
+`ListMemberships` is **per-group** because that is the shape every directory
+actually offers: each backend this class was measured against exposes
+members-of-a-group, and none exposes a whole-directory membership dump. A host
+that wants the estate iterates `ListGroups` and calls `ListMemberships` for
+each.
+
+A result for a group other than the one asked about cannot be attributed by the
+host, and guessing the correspondence is how the wrong people end up in the
+wrong group. `roster.CheckMemberships` is the host-side guard that proves it —
+the membership analogue of `credential.CheckBatch`.
+
+### ⚠️ Suspended is **not** absent
+
+A deactivated directory user is **still in the directory**. Report them, with
+`Active: false`.
+
+Omitting them tells the host they left the organisation, and the host revokes
+everything — for somebody who is on parental leave. **Omission from
+`ListPrincipals` means "not in the directory at all", and nothing else.**
+
+The mirror-image error comes from the same missing field: a connector that
+reports a deactivated identity as `Active: true` leaves a suspended account
+holding everything it had. `rosterconform` checks both directions against a
+principal you nominate as deactivated.
+
+### `Resolution`: an unresolved roster cannot look like a roster of nobody
+
+The three list operations do **not** return a slice. They return a
+`roster.Resolution[T]`, which has exactly three states and no way to confuse the
+first two:
+
+| State | How it is produced | What `Items()` does |
+|---|---|---|
+| unresolved | the zero `Resolution` — what `return Resolution[Principal]{}, nil` produces | returns a `*FaultError`, never a list |
+| present, empty | `roster.EmptyRoster[Principal]()` — an explicit assertion | returns a present list of length zero |
+| present | `roster.Resolved(items, roster.Complete)` with a non-empty list | returns the list |
+
+**Why the contract carries this.** A `[]Principal` of length zero is
+*ambiguous*: it means either *"this directory genuinely has nobody"* or *"the
+read failed and I am returning a zero value"*. The second reading is the
+dangerous one because of what the host does next — an offboarding sweep computes
+"in arqtos but no longer in the directory" and revokes it. Fed an empty list
+that meant *the read failed*, that sweep **deprovisions the entire estate**,
+correctly according to everything it was told.
+
+This is deliberately the **same shape** as `credential.Resolution` rather than a
+second invention; the blast radius is what differs. A credential that resolves
+to `""` fails one authentication. A roster that reads as nobody removes
+everyone's access at once.
+
+So the pair *(empty list, no error)* is **not constructible**:
+
+- `roster.Resolved(items, completeness)` returns `(Resolution[T], error)` and
+  **refuses** a nil or empty list, handing back a `*FaultError` at the point of
+  the mistake. The `Resolution` returned alongside the error is unreadable, so a
+  connector that ignores the error still cannot launder an unread directory into
+  an empty one.
+- The zero `Resolution` is unresolved, not empty. `Items()` refuses to read it,
+  so there is no path from "the connector returned nothing" to "the directory is
+  empty".
+- A directory that genuinely holds nothing of the requested kind is expressible,
+  but only by saying so: `EmptyRoster[T]()`. Call it only where the backend
+  distinguishes an empty result from an unauthenticated, throttled, misdirected
+  or failed read. It is a **real state** — a newly created group has no members,
+  and a host must be able to see that and remove the access that came with it —
+  but it is not somewhere to put an error.
+
+**There is no `Len()` and no `IsEmpty()`.** One accessor, on purpose: a `Len()`
+that answered `0` for an unresolved `Resolution` would put the ambiguity
+straight back, and every caller that branched on it before reading would again
+be guessing which of the two things a zero meant. Ask `Items()`, handle its
+error, take `len()` of what it gives you.
+
+**The list is copied in both directions.** `Resolved` copies what it is given,
+so a connector that reuses or truncates its own slice afterwards cannot
+retroactively change what the host was handed; `Items()` returns a copy, so a
+host that sorts or annotates in place cannot change what the next reader sees.
+`Group.ParentIDs` — the only slice-valued field across the three Roster types —
+is copied too, on both sides: a plain top-level copy of a `[]Group` copies each
+`Group` by value, which copies the `ParentIDs` slice *header* without copying
+the backing array it points at, so without the extra copy a host sorting
+`ParentIDs` in place would still reach back into the connector's own slice.
+
+**`String()` reports the state and the count, never the records.** A resolved
+`Resolution` holds personal data about identifiable people, and it travels
+through host code that logs. How many were read is diagnosis; who they are is
+not — reaching the records requires the explicit `Items()` call.
+
+### A truncated read cannot look like a complete one either
+
+`roster.Resolved` takes a second argument, `roster.Completeness`, on **every**
+call — `roster.Complete` or `roster.Partial` — with no default:
+
+```go
+func Resolved[T any](items []T, c Completeness) (Resolution[T], error)
+```
+
+**Why.** `ListPrincipals` is documented to paginate internally for a directory
+of any real size, and a real pagination loop fails partway at least once in
+production — a 429 on page 7 of 250, a timeout on page 40 of 40. Before this
+existed, the line an author naturally wrote at that point was
+`return Resolved(itemsReadSoFar)`: readable, non-empty, and indistinguishable
+from a complete read to everything downstream. The blast radius is the **same
+one** that justifies `Resolution` itself — an offboarding sweep run against a
+principal list truncated after a failed page revokes everyone past the failure
+point — and it is **more likely to occur** than a wholesale empty read, because
+pagination fails in the middle far more often than a read fails to start at
+all.
+
+So a truncated read gets the same treatment an empty one already does:
+
+- `roster.Complete` is the ordinary case — an atomic read, or pagination that
+  ran to its own natural end — and behaves exactly as `Resolved` always did.
+- `roster.Partial` asserts the list is only what was read before the operation
+  stopped. `Resolved` **refuses to build a readable `Resolution` for one**, the
+  same way it refuses an empty list: a host's reconcile loop cannot safely
+  revoke access for a principal it never got to examine, so a read that stopped
+  early must surface as a typed failure (`cerr.KindUnavailable`,
+  `cerr.KindTimeout`, ...), never as a smaller success.
+
+A partial read is therefore **not merely discouraged — it is impossible to
+express as a success at all.** What this cannot catch, and does not claim to:
+a connector that asserts `roster.Complete` on a list it knows to be truncated.
+That is a conscious misclassification at the call site, not a shape any check
+can tell apart from the truth from the outside; the fix narrows the mistake
+from "the natural, careless thing to write" to "a lie", it does not claim to
+catch the lie.
+
+**Host side.** `roster.CheckResolution(name, op, res, err)` is the guard a host
+runs on what a connector returned; `roster.CheckPrincipals` and
+`roster.CheckMemberships` add the capability-aware checks below. A violation
+comes back as a `*roster.FaultError` — a named fault attributed to the named
+connector, of kind `cerr.KindContractViolation` — rather than being coerced into
+a generic error that would leave the operator looking for the fault in the
+directory.
+
+| `Fault` | Meaning |
+|---|---|
+| `FaultUnresolved` | success carrying no list |
+| `FaultPartial` | success asserting `roster.Partial` — a truncated read reported instead of a typed failure |
+| `FaultMembershipMismatch` | a membership for a group other than the one requested |
+| `FaultUndeclaredMachinePrincipal` | a machine principal from a connector that did not declare it can see them |
+| `FaultUndeclaredInheritedMembership` | an inherited membership from a connector that did not declare nesting |
+
+### The `Roster` capability vocabulary
+
+Every entry is a **measured difference between real directories**, not a
+speculative feature flag. Each is declared — in the connector's manifest **and**
+by `Capabilities()` — and checked against the running connector by
+`rosterconform`.
+
+| Capability | Wire name | Why it exists |
+|---|---|---|
+| `CapWatch` | `watch` | One major directory lets an application subscribe to membership change; another's change-notification surface covers users only and explicitly excludes groups and their members. Optional operation: `roster.Watcher`. |
+| `CapTransitiveMembership` | `transitive_membership` | One directory returns derived members in the same call as direct ones; another's provisioning path cannot represent group nesting at all. A host that assumed transitivity would under-read the second and conclude that people had left groups they are still in. |
+| `CapMachinePrincipals` | `machine_principals` | One vendor's service applications are directory objects a read returns; another vendor's service accounts live in a separate cloud-IAM system and do **not** appear in the directory at all. A connector for the second genuinely cannot report machine principals, and must say so. |
+
+Two of these are enforced **against the data**, in both directions:
+
+- A connector **without** `machine_principals` MUST report no principal with
+  `Kind: machine`; one **with** it must be able to show one.
+- A connector **without** `transitive_membership` MUST report only direct
+  memberships; one **with** it must be able to show an inherited one.
+
+The "must not report it undeclared" half is what makes the *absence* readable. A
+host reads "no machine principals" as a fact about the **directory** only when
+the connector has said it can see them; without the declaration the host cannot
+tell that from "this connector cannot see them", so an undeclared one makes both
+readings wrong at once.
+
+**`CapWatch` is an optimisation, not a correctness mechanism.** Correctness comes
+from the host's reconcile loop, which re-reads the three lists on a schedule
+whether or not any event arrived. A connector without `watch` is not a degraded
+connector; it is one the host polls. Accordingly a `roster.Change` carries **no
+before/after state** — only what to go and re-read. Carrying the change itself
+would make the event stream a second source of truth, and a host applying deltas
+is one dropped, reordered or duplicated event away from a roster that disagrees
+with the directory, with no way to notice.
+
+```go
+type Watcher interface {
+	Watch(ctx context.Context) (<-chan Change, error)
+}
+```
+
+The returned `error` is a failure to *establish* the watch. Once established the
+channel closes when `ctx` is done or when the connector can no longer sustain
+the subscription — and a closed channel is not an emergency, which is why there
+is no error channel: a host that loses its watch falls back to the poll it was
+always doing.
+
+### Checking your connector: `rosterconform`
+
+[`rosterconform`](../rosterconform/) runs the parts of this contract a compiler
+cannot check, so you can gate your own CI on them before arqtos ever loads your
+connector:
+
+```go
+rep, err := rosterconform.Run(ctx, myRoster, rosterconform.Options{
+	Manifest:           myManifest,
+	Group:              populatedGroupID,
+	AbsentGroup:        noSuchGroupID,
+	SuspendedPrincipal: deactivatedPrincipalID,
+})
+if err != nil {
+	return err // the check could not be run at all
+}
+if err := rep.Err(); err != nil {
+	return err // the connector ran, and is not conformant
+}
+```
+
+| Check | What it requires |
+|---|---|
+| `manifest/valid` | the manifest validates, declares this class, and declares only capabilities the class defines |
+| `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
+| `watch/declared-is-implemented` | `watch` is declared in both places exactly when `roster.Watcher` is implemented, **and** — when it is — that calling `Watch` actually establishes one: a non-nil channel with no error, observed **open before** its context is cancelled, that then closes within a bounded time of cancellation |
+| `machine-principals/declared-is-reported` | a principal with `Kind: machine` appears exactly when `machine_principals` is declared |
+| `transitive-membership/declared-is-reported` | an inherited membership appears exactly when `transitive_membership` is declared |
+| `lists/resolve-not-empty` | all three lists come back **readable** — never a success carrying nothing, and never one asserting `roster.Partial` — and the principal list **and** the group list carry **actual entries**, not an `EmptyRoster()` assertion |
+| `principals/suspended-is-present-not-absent` | the principal you nominate as deactivated is reported, with `Active: false` |
+| `memberships/match-requested-group` | every membership is for the group that was requested, and there is at least one |
+| `failure/typed` | the group you nominate as absent fails with a classified `cerr.Kind` |
+
+Every check runs on **every** run. None is skipped for a connector that lacks a
+capability, because a skipped check and a passing check look identical in a
+report.
+
+Every field of `Options` is required. A fixture that is missing makes `Run`
+return an error rather than skip the check it would have driven — a report that
+is green because nothing looked is worse than no report. In particular:
+
+- **`Group` must be populated.** An empty group is a real state and a conformant
+  connector reports one, but a membership list with nothing in it proves nothing
+  about whether what came back corresponds to what was asked. Where you declare
+  `transitive_membership`, nominate a group that also has an **inherited**
+  member.
+- **`AbsentGroup` must not exist** — not merely be empty. *"This group has no
+  members"* and *"there is no such group"* lead a reconcile loop to opposite
+  conclusions, and the first one removes the access the group carried.
+- **`SuspendedPrincipal` must be genuinely deactivated.** A run without one
+  cannot see whether suspended people survive the read, and that is the most
+  destructive failure this contract admits.
+
+#### Presence is not substance
+
+`lists/resolve-not-empty` demands that the principal list hold principals AND
+that the group list hold groups, not merely that the read succeeded. A
+connector can answer every list with `EmptyRoster()` — present, readable,
+nothing in it — and that is exactly the move an author reaches for when
+`Resolved()` refuses their failing backend: it makes the error go away without
+making the directory readable. Checked for presence only, such a connector
+scores a **fully green report** while telling the host that the entire
+organisation has left **and** that nothing is grouped.
+
+Requiring groups specifically cannot register a false positive against a
+directory that genuinely has none — but not because `Run` verifies
+`Options.Group` names a real or populated group. It does not, and cannot, from
+a string alone: `Run` refuses only an **empty** one. What actually rules it out
+is what a connector fed a nonexistent `Options.Group` hits first: `ListMemberships`
+for a group that does not exist must fail typed (`cerr.KindNotFound`, never an
+empty roster), which fails `lists/resolve-not-empty` at the `ListMemberships`
+stage — before the group-count requirement above is ever reached — and fails
+`memberships/match-requested-group` the same way. A connector that instead
+answers the nonexistent group with a readable-but-empty membership list is
+still caught, by that same check's separate requirement that the nominated
+group have at least one member.
+
+`memberships/match-requested-group` also **correlates** `Options.Group` against
+the groups `ListGroups` itself reported, so a connector that fabricates
+correctly-shaped, correctly-attributed members for a group id its own
+`ListGroups` never claims exists is refused **by name**, not by the coincidence
+of the two failure paths above lining up. That correlation is what makes the
+no-false-positive property hold **by construction**; the two paths above only
+made it hold incidentally, and held before this fix too.
+
+Note also what does *not* save a connector that drops suspended people: its list
+is non-empty, every entry is well-formed, and the resolve check is green.
+Substance in aggregate says nothing about whether the one entry that matters
+survived, which is why the suspended principal is nominated by name.
+
+The same "presence is not substance" gap existed for `watch/declared-is-implemented`
+before it called `Watch`: a Go type assertion proves the method exists, and
+nothing about what calling it does. A connector whose `Watch` always answers
+`(nil, cerr.KindUnsupported)` — the stub an author reaches for while a real
+subscription is still unimplemented — or `(nil channel, nil error)` passed a
+type-assertion-only check. The first tells a host expecting push notification
+nothing at all while it waits forever believing an event will arrive; the
+second is worse — a host that ranges over a nil channel blocks forever and
+never reconciles again. The check now calls `Watch` with a cancellable
+context and requires a non-nil channel with no error, then cancels and
+requires the channel to close.
+
+Cancelling **first** and checking for closure only afterward cannot, by itself,
+tell that apart from a channel that was already closed the moment `Watch`
+returned: `ch := make(chan Change); close(ch); return ch, nil` — the most
+idiomatic-**looking** of the three stubs above — passes a cancel-then-wait
+check while establishing no subscription at all. So the check also takes a
+**non-blocking receive before cancelling**: a receive on a closed channel is
+always immediately ready, so this catches the already-closed stub without ever
+blocking on a healthy one.
+
+#### The declaration checks are not tautological
+
+A declared-is-implemented check is worthless if "implemented" is computed from
+the same signal as "declared" — the check then agrees with itself whatever the
+connector does, and reports PASS on both of the two failures it exists to catch.
+That is not hypothetical: it happened in this SDK's `credconform` over an
+out-of-process provider, where the host-side stub's shape was derived from the
+very capability declaration the check was verifying.
+
+It cannot happen here, and both reasons are load-bearing:
+
+- This class is **in-process only**. "Implements `roster.Watcher`" is a Go type
+  assertion against the connector's own type, which no declaration can
+  influence.
+- The two behavioural capabilities are judged from **the data the connector
+  returned** — a `Kind` of machine, a `Direct` of false — and data is not derived
+  from a manifest either.
+
+The tests drive each of these checks through all four combinations of *(declared,
+actually the case)* and pin the verdict of each. A check reading one signal twice
+can only produce two distinct verdicts across those four inputs, so the truth
+table is the proof; the comment is not. **If a Track-B transport is added for
+this class, its host-side stub must not derive its `Watcher`-ness from a
+capability RPC**, or that proof silently stops meaning anything.
+
+Each check also has a test driving it with a connector built to violate exactly
+the property it checks — one reporting an unresolved list as a success, one
+asserting `roster.Partial` on a truncated read, one reporting no groups at all
+while principals and memberships are real, one whose `Watch` declares and
+implements the method but never actually establishes a subscription, one
+dropping suspended people, one whose manifest declares a watch it does not
+implement, one returning memberships for the wrong group. A harness only ever run
+against compliant input proves nothing about what it would catch.
+
+#### A truncated read needs no separate check
+
+`roster.Resolved` refusing to build a readable `Resolution` when asserted
+`roster.Partial` (see [above](#a-truncated-read-cannot-look-like-a-complete-one-either))
+means a connector reporting one this way returns a `*roster.FaultError`, which
+`lists/resolve-not-empty` and `memberships/match-requested-group` already treat
+exactly as they treat any other resolution failure. This package adds no
+separate check for it: the type-level fix is what closes the hole, not
+something a check could only describe after the fact. What no check anywhere
+can catch is a connector that asserts `roster.Complete` on a list it knows to
+be truncated — that is a deliberate misclassification at the call site, not a
+shape a harness can distinguish from the truth from the outside.
+
+### What a `Roster` connector does not do
+
+- **No writing to a directory.** Read-only, permanently.
+- **No reconcile loop.** That is the host's. This contract is only what the loop
+  consumes.
+- **No out-of-process transport yet.** In-process first; the wire contract for
+  this class lands with its own design, and until then a roster connector is
+  `kind: native`.
+
 ## Versioning
 
 This module defines the **Go semantic contract** above: interfaces, value
@@ -370,10 +797,14 @@ fixed map of placeholder `op://` refs, served via `goplugin.Serve`. Copy
 `main.go` as the starting point for a real provider (Infisical, Vault, ...) —
 swap `memLoader`'s method bodies for calls to the actual backing store; the
 `plugin.Handshake` + `plugin.PluginMap(...)` + `goplugin.Serve` wiring does
-not change. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
+not change. It also declares and implements a second capability,
+`CapBatchResolve`, alongside the baseline `CapRead` — a copier sees a
+capability wired correctly end to end, not only the baseline. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
 in the same directory builds that binary and drives it as a real subprocess
 the way a host would — dial, `Dispense`, `Resolve`, `Kill` — confirming the
-process actually exits (dies-with-session).
+process actually exits (dies-with-session); [`conform_test.go`](../examples/credentialloader-provider/conform_test.go)
+runs `credconform` against `memLoader` in-process and requires both
+capabilities to be conformant — the pattern to copy for verifying your own.
 
 Out of scope here (a separate, later Story): the host-side registry, the
 go-plugin dial + broker wiring, and a `secrets.Provider` adapter — this
