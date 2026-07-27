@@ -6,9 +6,9 @@ that a host uses to talk to a connector — without either side depending on the
 internals.
 
 A connector is a small, focused adapter between arqtos and one external system
-(a secret store, a record store, a tracker, ...). This module defines the first
-connector class, **`CredentialLoader`**, plus the shared building blocks every
-connector class is built from.
+(a secret store, a directory, a tracker, ...). This module defines the connector
+classes — **`CredentialLoader`** and **`Roster`** — plus the shared building
+blocks every connector class is built from.
 
 This module is dependency-light by design: the semantic contract itself is
 stdlib-only. Third-party dependencies are confined to the packages that need
@@ -28,9 +28,11 @@ never fetches the module — measured, not assumed. The SDK is visible to
 |---|---|
 | [`ref`](ref/) | The `op://<vault>/<item>/<field>` secret-reference type (`Ref`, `Parse`). A `Ref` is a *reference* to a secret — connectors never receive raw credential material as input, only refs. |
 | [`cerr`](cerr/) | The connector error taxonomy: a **closed** `Kind` vocabulary (NotFound / Unauthorized / Unavailable / RateLimited / Unsupported / Invalid / Timeout / ContractViolation / Unknown), `Error`, `New`, `KindOf`, `Classified`, `Retryable`, `TripsBreaker`. Callers classify errors by kind, never by string-matching — and `Unknown` deliberately does **not** trip a breaker. |
-| [`connector`](connector/) | The base contract every connector implements regardless of class: `Class`, `Capability` / `Capabilities`, `Health` / `HealthStatus`, and the `Connector` interface (`Implements`, `Capabilities`, `Health`, `Close`). |
+| [`connector`](connector/) | The base contract every connector implements regardless of class: `Class` (with `Classes()` / `Class.Valid()`, the **closed** class set the manifest's `implements` enum is derived from), `Capability` / `Capabilities`, `Health` / `HealthStatus`, and the `Connector` interface (`Implements`, `Capabilities`, `Health`, `Close`). |
 | [`credential`](credential/) | The `CredentialLoader` connector class: `Resolve` / `List` / `Lease` / `Renew` / `Revoke`, plus `Resolution` (a resolve result in which a credential that **did not resolve cannot be read as an empty one** — an empty value is expressible, but only by asserting it with `ResolvedEmpty()`), `Material` (redacted, revealable-on-demand, wipeable secret bytes), `Lease`, and the optional `BatchResolver` operation behind `CapBatchResolve`. |
 | [`credconform`](credconform/) | The conformance harness for a `CredentialLoader`: run it in your own CI to check the contract properties a compiler cannot — no empty-success, typed failures, and a manifest whose declared capabilities match the running connector. |
+| [`roster`](roster/) | The `Roster` connector class: a **read-only** view of a directory's `Principal`s, `Group`s and `Membership`s, reported as vendor-neutral facts with no arqtos org model in them. Carries `Resolution[T]` (a list result in which a directory that **was not read cannot be read as a directory of nobody** — genuine emptiness is expressible, but only by asserting it with `EmptyRoster()`), the host-side guards `CheckResolution` / `CheckPrincipals` / `CheckMemberships`, and the optional `Watcher` operation behind `CapWatch`. |
+| [`rosterconform`](rosterconform/) | The conformance harness for a `Roster`: no unresolved-as-empty, a deactivated principal reported rather than dropped, memberships that match the group requested, typed failures, and declared capabilities that match both the running connector and the data it returns. |
 | [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
@@ -117,6 +119,102 @@ func (Loader) Revoke(ctx context.Context, l credential.Lease) error {
 // Compile-time proof Loader satisfies the contract.
 var _ credential.CredentialLoader = Loader{}
 ```
+
+## Writing a `Roster` connector
+
+A `Roster` is a **read-only** adapter over one directory — an identity provider,
+a workspace directory, a code host's teams, a flat file. It reports what the
+directory says about principals, groups and memberships, and nothing about
+arqtos: no org, no igloo, no team, no role. Mapping directory facts onto
+arqtos's own model is the host's job, on the host's side of the boundary.
+
+Two properties do most of the work, and both exist because of what the host does
+with the answer:
+
+- **An unresolved roster is unreadable, not empty.** The list operations return
+  `roster.Resolution[T]`, not a slice. `roster.Resolved` refuses an empty list
+  and the zero `Resolution` cannot be read, so a directory read that came back
+  with nothing — unauthenticated, throttled, misdirected — surfaces as a failure.
+  It has to: an offboarding sweep over "the read failed and I returned a zero
+  value" deprovisions the whole estate. A directory that genuinely holds nobody
+  is still expressible, by asserting it with `roster.EmptyRoster[T]()`.
+- **Suspended is not absent.** Report a deactivated identity, with
+  `Active: false`. Omitting it tells the host the person left the organisation,
+  and the host revokes everything belonging to somebody on parental leave.
+
+```go
+package mydirectory
+
+import (
+	"context"
+
+	"github.com/arqtiqa/arqtos-sdk-go/cerr"
+	"github.com/arqtiqa/arqtos-sdk-go/connector"
+	"github.com/arqtiqa/arqtos-sdk-go/roster"
+)
+
+// Directory is a minimal Roster skeleton. Swap the bodies for calls into your
+// backing directory.
+type Directory struct{}
+
+func (Directory) Implements() connector.Class { return connector.ClassRoster }
+
+// Declare only what this directory can actually do. Each capability is a
+// measured vendor difference, and rosterconform checks every declaration
+// against the running connector AND against the data it returns.
+func (Directory) Capabilities() connector.Capabilities {
+	return nil
+}
+
+func (Directory) Health(ctx context.Context) (connector.Health, error) {
+	return connector.Health{Status: connector.Healthy}, nil
+}
+
+func (Directory) Close() error { return nil }
+
+// ListPrincipals reports EVERY identity in the directory, including
+// deactivated ones (Active: false). Omission means "not in the directory".
+func (Directory) ListPrincipals(ctx context.Context) (roster.Resolution[roster.Principal], error) {
+	// A real connector: return roster.Resolved(principals)
+	return roster.Resolution[roster.Principal]{}, cerr.New(cerr.KindUnsupported, "ListPrincipals", nil)
+}
+
+func (Directory) ListGroups(ctx context.Context) (roster.Resolution[roster.Group], error) {
+	return roster.Resolution[roster.Group]{}, cerr.New(cerr.KindUnsupported, "ListGroups", nil)
+}
+
+// ListMemberships answers for ONE group. Every returned Membership.GroupID
+// must equal groupID, and a group that does not exist is KindNotFound — never
+// an empty roster, which a reconcile loop reads as "this group lost everyone".
+func (Directory) ListMemberships(ctx context.Context, groupID string) (roster.Resolution[roster.Membership], error) {
+	return roster.Resolution[roster.Membership]{}, cerr.New(cerr.KindUnsupported, "ListMemberships", nil)
+}
+
+// Compile-time proof Directory satisfies the contract.
+var _ roster.Roster = Directory{}
+```
+
+Then gate your own CI on [`rosterconform`](rosterconform/):
+
+```go
+rep, err := rosterconform.Run(ctx, myRoster, rosterconform.Options{
+	Manifest:           myManifest,
+	Group:              populatedGroupID,        // must HAVE members
+	AbsentGroup:        noSuchGroupID,           // must NOT exist
+	SuspendedPrincipal: deactivatedPrincipalID,  // must be deactivated
+})
+if err != nil {
+	return err // the check could not be run at all
+}
+if err := rep.Err(); err != nil {
+	return err // the connector ran, and is not conformant
+}
+```
+
+Every `Options` field is required, and each fixture has to be the real thing: a
+run given an empty group, a group that merely has no members, or no deactivated
+principal cannot exercise the check it was meant to drive, and a report that is
+green because nothing looked is worse than no report.
 
 ## Scaffolding a new connector
 

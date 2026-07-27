@@ -22,6 +22,7 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/ref"
+	"github.com/arqtiqa/arqtos-sdk-go/roster"
 )
 
 // Kind is a connector's runtime shape.
@@ -34,11 +35,23 @@ const (
 )
 
 // knownImplements is the closed set of connector classes a manifest may
-// declare in Implements. It composes connector.Class's own constants so the
-// manifest enum can never drift out of sync with the SDK's known classes.
-var knownImplements = map[connector.Class]bool{
-	connector.ClassCredentialLoader: true,
-}
+// declare in Implements. It is DERIVED from connector.Classes(), not a second
+// list beside it, so the manifest enum cannot drift out of sync with the SDK's
+// known classes.
+//
+// The distinction is not cosmetic. When this was a hand-written map, adding a
+// class to the connector package left it undeclarable in a manifest, and the
+// symptom was a valid connector rejected by the host with "unknown implements"
+// — pointing at the manifest, which was correct. Deriving it means a class
+// added to connector.classes shows up here with no edit at all.
+var knownImplements = func() map[connector.Class]bool {
+	all := connector.Classes()
+	m := make(map[connector.Class]bool, len(all))
+	for _, c := range all {
+		m[c] = true
+	}
+	return m
+}()
 
 // classCapabilities maps a connector class to the CLOSED capability
 // vocabulary of that class, so [Doc.Validate] can reject a capability no host
@@ -75,6 +88,7 @@ var knownImplements = map[connector.Class]bool{
 // registered, so this is a forward-compatibility allowance, not a live hole.
 var classCapabilities = map[connector.Class]connector.Capabilities{
 	connector.ClassCredentialLoader: credential.KnownCapabilities(),
+	connector.ClassRoster:           roster.KnownCapabilities(),
 }
 
 // envNameRE matches a bare environment-variable NAME (e.g. INFISICAL_TOKEN):
