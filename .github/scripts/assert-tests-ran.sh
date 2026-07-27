@@ -30,6 +30,13 @@
 #               live. A run that strips this package still resolves and still
 #               batches on the Go-native (Track-A) path, so nothing else in
 #               this list notices it is gone.
+#   roster      the Resolution[T] / fault types — where "an unresolved roster
+#               is not a roster of nobody" is actually enforced, and the one
+#               whose failure mode revokes an entire estate's access at once
+#   rosterconform the Roster conformance harness, including the four-case
+#               truth tables that prove its declared-is-implemented checks are
+#               not reading one signal twice, and the check that refuses a
+#               connector answering every list with EmptyRoster
 #
 # These were not required before, and the omission was exactly the failure the
 # script exists to catch: the packages where this module's guarantees live
@@ -40,15 +47,20 @@
 # gate staying green throughout, because MIN_TESTS never dropped far enough
 # to notice and no required package named it.
 #
-# The floor is kept within reach of the real count (183 at the time of
-# writing) rather than far below it. A floor of 60 against 183 tests would let
-# well over half the suite stop building before this gate noticed — which is
-# the same "green because nothing looked" failure the script exists to
-# prevent, and it is exactly how the plugin package was stripped unnoticed
-# (183 - 28 = 155, still comfortably above a floor of 60). At 170, losing the
-# plugin package alone trips MIN_TESTS on its own, before REQUIRED_PACKAGES
-# even names it. Slack is left for the one test that skips rather than fails
-# on a runner without a usable subprocess (examples/credentialloader-provider).
+# The floor is kept within reach of the real count (280 at the time of
+# writing) rather than far below it. A floor of 60 against 280 tests would let
+# most of the suite stop building before this gate noticed — which is the same
+# "green because nothing looked" failure the script exists to prevent, and it
+# is exactly how the plugin package was stripped unnoticed under an earlier
+# floor. At 265, losing any single guard-bearing package trips MIN_TESTS on its
+# own, before REQUIRED_PACKAGES even names it: roster (31) and rosterconform
+# (59) each do, as plugin (28) already did. Slack is left for the one test that
+# skips rather than fails on a runner without a usable subprocess
+# (examples/credentialloader-provider).
+#
+# Raising this floor is part of adding a connector class, not an afterthought:
+# a floor left at the previous class's real count is a floor the new class's
+# entire test suite can vanish beneath.
 
 set -euo pipefail
 
@@ -58,8 +70,8 @@ if [ -z "$report" ]; then
 	exit 2
 fi
 
-min_tests="${MIN_TESTS:-170}"
-required_packages="${REQUIRED_PACKAGES:-mcpconform credential credconform transport plugin}"
+min_tests="${MIN_TESTS:-265}"
+required_packages="${REQUIRED_PACKAGES:-mcpconform credential credconform transport plugin roster rosterconform}"
 
 if [ ! -s "$report" ]; then
 	echo "assert-tests-ran: '$report' is missing or empty — the test step produced no machine-readable output" >&2
