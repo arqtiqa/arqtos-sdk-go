@@ -30,14 +30,19 @@
 //   - [CheckCapabilityHonesty] — what the manifest declares and what the
 //     running connector reports are the same set.
 //   - [CheckWatchDeclared] — the watch capability is declared exactly when
-//     roster.Watcher is implemented, in both directions.
+//     roster.Watcher is implemented, in both directions, AND — for a
+//     connector that declares and implements it — that calling Watch actually
+//     establishes one: a non-nil channel with no error, closing when its
+//     context is cancelled. A Go type assertion proves the method exists; it
+//     proves nothing about what calling it does.
 //   - [CheckMachinePrincipalsDeclared] — machine principals are reported
 //     exactly when the capability for them is declared, in both directions.
 //   - [CheckTransitiveDeclared] — inherited memberships are reported exactly
 //     when the capability for them is declared, in both directions.
-//   - [CheckListsResolve] — every list operation comes back carrying a list,
-//     never as a success carrying nothing, and the principal list carries
-//     ACTUAL PRINCIPALS rather than an assertion that the directory is empty.
+//   - [CheckListsResolve] — every list operation comes back carrying a list —
+//     never as a success carrying nothing, and never as a success asserted
+//     [roster.Partial] — and the principal list AND the group list carry
+//     ACTUAL ENTRIES rather than an assertion that the directory is empty.
 //   - [CheckSuspendedIsPresent] — a deactivated principal is reported, with
 //     Active false, rather than omitted.
 //   - [CheckMembershipShape] — every membership is for the group that was
@@ -48,14 +53,49 @@
 //
 // # Presence is not substance
 //
-// Two checks here deliberately demand more than "it did not error", because
-// the weaker form is what a broken connector passes. [CheckListsResolve]
-// requires the principal list to hold principals: a connector that answers
-// every read with roster.EmptyRoster() is present, readable and completely
-// empty, and under a presence-only check it scores fully green while telling
-// the host that nobody works here. [CheckSuspendedIsPresent] requires a named
-// deactivated principal to actually be in the list, because "the list has
-// entries" says nothing about whether suspended people survived the read.
+// Three obligations here deliberately demand more than "it did not error",
+// because the weaker form is what a broken connector passes.
+//
+// [CheckListsResolve] requires the principal list to hold principals AND the
+// group list to hold groups: a connector that answers every read with
+// roster.EmptyRoster() is present, readable and completely empty, and under a
+// presence-only check it scores fully green while telling the host that
+// nobody works here and nothing is grouped. Requiring groups specifically does
+// not create a false positive for a directory that genuinely has none: [Run]
+// already refuses to proceed without Options.Group naming a real, populated
+// group (see [Options.Group]), so a connector that reaches this check has
+// already been handed a fixture asserting at least one group exists. There is
+// no fixture combination in which this requirement fires against a
+// legitimately groupless directory — Run cannot be driven at all without one.
+//
+// [CheckSuspendedIsPresent] requires a named deactivated principal to
+// actually be in the list, because "the list has entries" says nothing about
+// whether suspended people survived the read.
+//
+// [CheckWatchDeclared] requires Watch to actually establish a subscription
+// when the capability is declared and the method exists. A connector whose
+// Watch always answers (nil, cerr.KindUnsupported) — the stub an author
+// reaches for while a real subscription is still unimplemented — or (nil
+// channel, nil error) satisfies a bare type assertion and would otherwise
+// score green: the first tells a host expecting push notification nothing at
+// all while it waits forever believing an event will arrive, and the second
+// is worse — a host that ranges over a nil channel blocks forever and never
+// reconciles again.
+//
+// # A truncated read cannot become a success
+//
+// roster.Resolved requires a roster.Completeness on every call, and refuses
+// to build a readable Resolution when it is asserted roster.Partial (see
+// [roster.Completeness]) — the same way it refuses an empty list. A
+// connector that reports a truncated read that way returns a *roster.FaultError,
+// which [CheckListsResolve] and [CheckMembershipShape] treat exactly as they
+// already treat any other resolution failure: not readable, not green. This
+// package adds no separate check for it, because none is needed — the
+// type-level fix is what closes the hole a check could only have described
+// after the fact. What no check anywhere can catch is a connector that
+// asserts roster.Complete on a list it knows to be truncated; that is a
+// deliberate misclassification at the call site, not a shape a harness can
+// distinguish from the truth from the outside.
 //
 // # The declaration checks are not tautological, and the tests prove it
 //
@@ -99,12 +139,20 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 	"github.com/arqtiqa/arqtos-sdk-go/manifest"
 	"github.com/arqtiqa/arqtos-sdk-go/roster"
 )
+
+// watchCloseWait bounds how long checkWatchDeclared waits for a Watch
+// channel to close after its context is cancelled. It exists to keep a
+// misbehaving connector from hanging the harness forever, not to assert
+// anything about how FAST a well-behaved one closes its channel — a
+// generous upper bound, not a tight one.
+const watchCloseWait = 2 * time.Second
 
 // Check names reported by [Run]. They are stable identifiers: a caller may
 // switch on them, and a CI job may allowlist a known failure by name.
@@ -307,8 +355,8 @@ func Run(ctx context.Context, c roster.Roster, opts Options) (Report, error) {
 	checkManifest(&rep, opts.Manifest)
 	checkCapabilityHonesty(&rep, runtime, opts.Manifest)
 
-	_, isWatcher := c.(roster.Watcher)
-	checkWatchDeclared(&rep, opts.Manifest, runtime, isWatcher)
+	watcher, isWatcher := c.(roster.Watcher)
+	checkWatchDeclared(ctx, &rep, opts.Manifest, runtime, watcher, isWatcher)
 
 	// The lists are read ONCE and every remaining check reads that one
 	// snapshot. Re-reading per check would let a connector answer differently
@@ -336,7 +384,9 @@ func Run(ctx context.Context, c roster.Roster, opts Options) (Report, error) {
 // check named for another. An author reading a report has to be able to go
 // straight to the thing that is wrong.
 type reads struct {
-	// groupsErr is the resolution failure on ListGroups, if any.
+	// groups is what ListGroups resolved to, and groupsErr is its resolution
+	// failure. Exactly one of the two is meaningful.
+	groups    []roster.Group
 	groupsErr error
 	// principals is what ListPrincipals resolved to, and principalsErr is its
 	// resolution failure. Exactly one of the two is meaningful.
@@ -360,7 +410,11 @@ func readAll(ctx context.Context, c roster.Roster, opts Options, runtime connect
 	var r reads
 
 	groupRes, groupErr := c.ListGroups(ctx)
-	_, r.groupsErr = roster.CheckResolution(name, "ListGroups", groupRes, groupErr)
+	if checked, err := roster.CheckResolution(name, "ListGroups", groupRes, groupErr); err != nil {
+		r.groupsErr = err
+	} else {
+		r.groups, r.groupsErr = checked.Items()
+	}
 
 	principalRes, principalErr := c.ListPrincipals(ctx)
 	if checked, err := roster.CheckResolution(name, "ListPrincipals", principalRes, principalErr); err != nil {
@@ -381,8 +435,11 @@ func readAll(ctx context.Context, c roster.Roster, opts Options, runtime connect
 	return r
 }
 
-// checkListsResolve requires all three list operations to come back READABLE,
-// and the principal list to carry actual principals.
+// checkListsResolve requires all three list operations to come back READABLE
+// — never a success carrying nothing, and never a success asserted
+// [roster.Partial] rather than [roster.Complete] (both surface as the same
+// *roster.FaultError, via [roster.CheckResolution]) — and requires the
+// principal list AND the group list to carry actual entries.
 //
 // Substance rather than presence, and the gap is not theoretical. A connector
 // can answer every read with roster.EmptyRoster() — present, readable, nothing
@@ -390,7 +447,13 @@ func readAll(ctx context.Context, c roster.Roster, opts Options, runtime connect
 // roster.Resolved refuses their failing backend: it makes the error go away
 // without making the directory readable. Checked for presence only, such a
 // connector scores a fully green report while telling the host that everybody
-// left.
+// left and nothing is grouped.
+//
+// Requiring groups specifically cannot register a false positive for a
+// directory that genuinely has none: [Run] already refuses to proceed unless
+// Options.Group names a real, populated group, so a connector that reaches
+// this check has already been handed a fixture asserting at least one group
+// exists.
 func checkListsResolve(rep *Report, r reads) {
 	for _, stage := range []struct {
 		op  string
@@ -413,7 +476,15 @@ func checkListsResolve(rep *Report, r reads) {
 				"while passing a presence-only check. Point the run at a populated directory, or fix the read")
 		return
 	}
-	rep.add(CheckListsResolve, true, fmt.Sprintf("%d principal(s) read; groups and memberships resolved", len(r.principals)))
+	if len(r.groups) == 0 {
+		rep.add(CheckListsResolve, false,
+			"ListGroups resolved to NO GROUPS. roster.EmptyRoster asserts that a directory genuinely has no groups at "+
+				"all; it is not an answer for a run whose Options.Group fixture names a group this connector must be "+
+				"able to list — a run that requires a populated group already presupposes at least one exists. Point "+
+				"ListGroups at a directory that includes it, or fix the read")
+		return
+	}
+	rep.add(CheckListsResolve, true, fmt.Sprintf("%d principal(s), %d group(s); memberships resolved", len(r.principals), len(r.groups)))
 }
 
 // checkMembershipShape requires every returned membership to be for the group
@@ -496,23 +567,36 @@ func checkCapabilityHonesty(rep *Report, runtime connector.Capabilities, m manif
 	}
 }
 
-// checkWatchDeclared fails in BOTH directions, because both are a manifest
-// that does not describe the connector.
+// checkWatchDeclared fails in BOTH structural directions, because both are a
+// manifest that does not describe the connector — and, for a connector that
+// passes both, ALSO requires that calling Watch actually establishes a
+// subscription.
 //
-// Declared-but-absent is the dangerous one: a host that believes it will be
-// pushed membership change lengthens its own reconcile interval, and then is
-// never told. Implemented-but-undeclared is the wasteful one: the host polls a
-// directory that would have told it, on every interval, forever.
+// Declared-but-absent is the dangerous structural failure: a host that
+// believes it will be pushed membership change lengthens its own reconcile
+// interval, and then is never told. Implemented-but-undeclared is the
+// wasteful one: the host polls a directory that would have told it, on every
+// interval, forever.
 //
 // implemented is a Go interface assertion at the CALL SITE, made against
 // whatever value Run received — the connector's own type, independent of its
 // manifest and of its Capabilities() alike. That independence is what makes
-// this check mean anything, and it is why this class stays in-process for now:
-// a host-side stub that synthesised its Watcher-ness from a capability RPC
-// would collapse "implemented" and "declared" into one signal, and this
-// function would then agree with itself no matter what the connector's backend
-// could actually do.
-func checkWatchDeclared(rep *Report, m manifest.Doc, runtime connector.Capabilities, implemented bool) {
+// the structural half of this check mean anything, and it is why this class
+// stays in-process for now: a host-side stub that synthesised its
+// Watcher-ness from a capability RPC would collapse "implemented" and
+// "declared" into one signal, and this function would then agree with itself
+// no matter what the connector's backend could actually do.
+//
+// But a type assertion is presence, not substance: it proves the method
+// exists, and nothing about what calling it does. A connector whose Watch
+// always answers (nil, cerr.KindUnsupported) — the stub an author reaches for
+// while a real subscription is still unimplemented — or (nil channel, nil
+// error) passes that assertion and would otherwise score green here. So a
+// connector that is declared and implemented is also required to actually
+// establish a watch: [establishesWatch] calls Watch with a cancellable
+// context and requires a non-nil channel with no error, then cancels and
+// requires the channel to close.
+func checkWatchDeclared(ctx context.Context, rep *Report, m manifest.Doc, runtime connector.Capabilities, w roster.Watcher, implemented bool) {
 	inManifest := m.Declares(roster.CapWatch)
 	atRuntime := runtime.Has(roster.CapWatch)
 
@@ -530,9 +614,57 @@ func checkWatchDeclared(rep *Report, m manifest.Doc, runtime connector.Capabilit
 				"is never subscribed to and every reconcile is a full poll",
 			roster.CapWatch, declaredIn(inManifest, atRuntime)))
 	case implemented:
-		rep.add(CheckWatchDeclared, true, "declared in the manifest and by Capabilities(), and implemented")
+		if detail, ok := establishesWatch(ctx, w); !ok {
+			rep.add(CheckWatchDeclared, false, detail)
+			return
+		}
+		rep.add(CheckWatchDeclared, true,
+			"declared in the manifest and by Capabilities(), implemented, and Watch establishes a channel that closes on context cancellation")
 	default:
 		rep.add(CheckWatchDeclared, true, "not declared, not implemented")
+	}
+}
+
+// establishesWatch calls w.Watch, rather than merely trusting that the method
+// exists: a Go type assertion says nothing about whether the call succeeds,
+// returns a usable channel, or honours ctx.
+//
+// It requires, in order: no error establishing the watch; a non-nil channel
+// (a host that ranges over a nil channel blocks forever); and — after the
+// context is cancelled — that the channel closes within [watchCloseWait]. The
+// wait is a generous upper bound guarding the harness against a connector
+// that never closes its channel, not an assertion that a well-behaved one
+// closes quickly; it never fires for the reference behaviour this contract
+// documents, which closes promptly on cancellation.
+func establishesWatch(ctx context.Context, w roster.Watcher) (detail string, ok bool) {
+	wctx, cancel := context.WithCancel(ctx)
+	ch, err := w.Watch(wctx)
+	if err != nil {
+		cancel()
+		return fmt.Sprintf(
+			"Watch(ctx) returned an error establishing the watch: %v. A connector that declares %s must be able to "+
+				"establish one; if it cannot, it must not declare the capability", err, roster.CapWatch), false
+	}
+	if ch == nil {
+		cancel()
+		return "Watch(ctx) returned a nil channel and a nil error. A host that ranges over a nil channel blocks " +
+			"forever and never reconciles again", false
+	}
+	cancel() // ctx is done; the contract requires the channel to close.
+	deadline := time.NewTimer(watchCloseWait)
+	defer deadline.Stop()
+	for {
+		select {
+		case _, open := <-ch:
+			if !open {
+				return "", true
+			}
+			// A hint delivered as we cancel is fine; keep draining for close.
+		case <-deadline.C:
+			return "the channel Watch(ctx) returned did not close within a reasonable time of ctx being cancelled. A " +
+				"host that never sees this channel close cannot tell a lost watch from one still live, and never " +
+				"falls back to its poll", false
+		}
 	}
 }
 

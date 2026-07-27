@@ -44,21 +44,57 @@ func person(id string) roster.Principal {
 // launder an unread directory into an empty one.
 func TestResolvedRefusesAnEmptyList(t *testing.T) {
 	t.Run("nil slice", func(t *testing.T) {
-		res, err := roster.Resolved[roster.Principal](nil)
+		res, err := roster.Resolved[roster.Principal](nil, roster.Complete)
 		assertUnresolvedFault(t, res, err)
 	})
 	t.Run("zero-length slice", func(t *testing.T) {
-		res, err := roster.Resolved([]roster.Principal{})
+		res, err := roster.Resolved([]roster.Principal{}, roster.Complete)
 		assertUnresolvedFault(t, res, err)
 	})
 	t.Run("zero-length group slice", func(t *testing.T) {
-		res, err := roster.Resolved([]roster.Group{})
+		res, err := roster.Resolved([]roster.Group{}, roster.Complete)
 		assertUnresolvedFault(t, res, err)
 	})
 	t.Run("zero-length membership slice", func(t *testing.T) {
-		res, err := roster.Resolved([]roster.Membership{})
+		res, err := roster.Resolved([]roster.Membership{}, roster.Complete)
 		assertUnresolvedFault(t, res, err)
 	})
+	// An empty list asserted Partial is unreadable for the SAME reason an
+	// empty list asserted Complete is: there is nothing to report as a
+	// success either way, and FaultUnresolved -- not FaultPartial -- is the
+	// more specific diagnosis when the list is also empty.
+	t.Run("zero-length slice asserted Partial", func(t *testing.T) {
+		res, err := roster.Resolved([]roster.Principal{}, roster.Partial)
+		assertUnresolvedFault(t, res, err)
+	})
+}
+
+// TestResolvedRefusesAPartialAssertion is Finding 1's fix at the point of the
+// mistake: roster.Resolved(itemsSoFar) used to be exactly what an author
+// facing a mid-pagination failure would reach for, and nothing distinguished
+// the result from a complete read. A truncated but non-empty list must not be
+// constructible as a readable success at all.
+func TestResolvedRefusesAPartialAssertion(t *testing.T) {
+	res, err := roster.Resolved([]roster.Principal{person(idPersonA)}, roster.Partial)
+	if err == nil {
+		t.Fatalf("Resolved(items, roster.Partial) returned no error: a truncated read must not be readable as a success")
+	}
+	var fe *roster.FaultError
+	if !errors.As(err, &fe) {
+		t.Fatalf("error is %T, want *roster.FaultError", err)
+	}
+	if fe.Fault != roster.FaultPartial {
+		t.Fatalf("Fault = %q, want %q", fe.Fault, roster.FaultPartial)
+	}
+	if cerr.KindOf(err) != cerr.KindContractViolation {
+		t.Fatalf("KindOf = %v, want KindContractViolation", cerr.KindOf(err))
+	}
+	if !strings.Contains(fe.Detail, "typed failure") {
+		t.Fatalf("the fault must tell the author to return a typed failure instead, got: %s", fe.Detail)
+	}
+	if _, ierr := res.Items(); ierr == nil {
+		t.Fatalf("the Resolution returned alongside a Partial fault must not be readable")
+	}
 }
 
 func assertUnresolvedFault[T any](t *testing.T, res roster.Resolution[T], err error) {
@@ -137,7 +173,7 @@ func TestEmptyRosterIsPresentAndDistinctFromUnresolved(t *testing.T) {
 // that formats a struct containing a Resolution must not thereby write the
 // directory into its logs.
 func TestResolutionStringReportsStateAndCountButNeverTheRecords(t *testing.T) {
-	res, err := roster.Resolved([]roster.Principal{person(idPersonA), person(idPersonB)})
+	res, err := roster.Resolved([]roster.Principal{person(idPersonA), person(idPersonB)}, roster.Complete)
 	if err != nil {
 		t.Fatalf("Resolved: %v", err)
 	}
@@ -167,7 +203,7 @@ func TestResolutionStringReportsStateAndCountButNeverTheRecords(t *testing.T) {
 	// One entry is rendered in the singular. A count that reads "1 entries" is
 	// cosmetic, but the reason it is pinned is not: the plural branch is where
 	// an off-by-one in the renderer would hide.
-	one, err := roster.Resolved([]roster.Principal{person(idPersonA)})
+	one, err := roster.Resolved([]roster.Principal{person(idPersonA)}, roster.Complete)
 	if err != nil {
 		t.Fatalf("Resolved: %v", err)
 	}
@@ -187,7 +223,7 @@ func TestResolutionStringReportsStateAndCountButNeverTheRecords(t *testing.T) {
 // failure arriving by a different route.
 func TestResolutionIsIsolatedFromTheConnectorsSlice(t *testing.T) {
 	src := []roster.Principal{person(idPersonA), person(idPersonB)}
-	res, err := roster.Resolved(src)
+	res, err := roster.Resolved(src, roster.Complete)
 	if err != nil {
 		t.Fatalf("Resolved: %v", err)
 	}
@@ -209,7 +245,7 @@ func TestResolutionIsIsolatedFromTheConnectorsSlice(t *testing.T) {
 // hosts sharing one Resolution and disagreeing about its contents is the sort
 // of bug that is diagnosed as a directory problem.
 func TestItemsHandsOutACopy(t *testing.T) {
-	res, err := roster.Resolved([]roster.Principal{person(idPersonA), person(idPersonB)})
+	res, err := roster.Resolved([]roster.Principal{person(idPersonA), person(idPersonB)}, roster.Complete)
 	if err != nil {
 		t.Fatalf("Resolved: %v", err)
 	}
@@ -227,6 +263,53 @@ func TestItemsHandsOutACopy(t *testing.T) {
 	if !second[0].Active || second[1].ID != idPersonB {
 		t.Fatalf("a caller mutated the Resolution through Items(): %+v", second)
 	}
+}
+
+// TestGroupParentIDsAreDeepCopied is Finding 4's fix: Group.ParentIDs is the
+// only slice-valued field across the three Roster types, and a plain
+// slices.Clone of []Group only copies each Group by value — the ParentIDs
+// slice HEADER, not the backing array it points at. Before the fix, mutating
+// ParentIDs through one Items() call was visible to the next Items() call on
+// the SAME Resolution, and reached all the way back into the connector's own
+// source slice: exactly the aliasing [Resolution.Items]' doc promises does
+// not happen.
+func TestGroupParentIDsAreDeepCopied(t *testing.T) {
+	t.Run("Items is isolated from its own previous read", func(t *testing.T) {
+		res, err := roster.Resolved([]roster.Group{{ID: idGroup, ParentIDs: []string{idNestedIn}}}, roster.Complete)
+		if err != nil {
+			t.Fatalf("Resolved: %v", err)
+		}
+		first, err := res.Items()
+		if err != nil {
+			t.Fatalf("Items: %v", err)
+		}
+		first[0].ParentIDs[0] = "placeholder-host-mutated"
+
+		second, err := res.Items()
+		if err != nil {
+			t.Fatalf("Items: %v", err)
+		}
+		if second[0].ParentIDs[0] != idNestedIn {
+			t.Fatalf("mutating ParentIDs from one Items() call changed what the next call sees: %+v", second)
+		}
+	})
+
+	t.Run("Resolved is isolated from the connector's own slice", func(t *testing.T) {
+		src := []roster.Group{{ID: idGroup, ParentIDs: []string{idNestedIn}}}
+		res, err := roster.Resolved(src, roster.Complete)
+		if err != nil {
+			t.Fatalf("Resolved: %v", err)
+		}
+		src[0].ParentIDs[0] = "placeholder-connector-mutated"
+
+		items, err := res.Items()
+		if err != nil {
+			t.Fatalf("Items: %v", err)
+		}
+		if items[0].ParentIDs[0] != idNestedIn {
+			t.Fatalf("the Resolution followed the connector's mutation of its own ParentIDs slice: %+v", items)
+		}
+	})
 }
 
 // TestResolutionHasNoLengthAccessor is the design decision pinned as a test,

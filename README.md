@@ -140,8 +140,8 @@ directory says about principals, groups and memberships, and nothing about
 arqtos: no org, no igloo, no team, no role. Mapping directory facts onto
 arqtos's own model is the host's job, on the host's side of the boundary.
 
-Two properties do most of the work, and both exist because of what the host does
-with the answer:
+Three properties do most of the work, and all three exist because of what the
+host does with the answer:
 
 - **An unresolved roster is unreadable, not empty.** The list operations return
   `roster.Resolution[T]`, not a slice. `roster.Resolved` refuses an empty list
@@ -150,6 +150,17 @@ with the answer:
   It has to: an offboarding sweep over "the read failed and I returned a zero
   value" deprovisions the whole estate. A directory that genuinely holds nobody
   is still expressible, by asserting it with `roster.EmptyRoster[T]()`.
+- **A truncated read is unreadable too, unless you say it isn't.**
+  `roster.Resolved(items, completeness)` takes a `roster.Completeness` on
+  *every* call — `roster.Complete` or `roster.Partial` — with no default. A
+  real directory of any size means `ListPrincipals` paginates internally, and a
+  real pagination loop fails partway at least once in production: a 429 on page
+  7 of 250. `roster.Resolved(itemsSoFar, roster.Partial)` is what you reach for
+  there, and it is **just as unreadable as an empty list** — a page fetched
+  before the failure is not a smaller success, so your loop must turn that
+  failure into a typed `cerr` error, the same way a wholesale read failure
+  already must. `roster.Complete` is the ordinary case: an atomic read, or
+  pagination that ran to its own natural end.
 - **Suspended is not absent.** Report a deactivated identity, with
   `Active: false`. Omitting it tells the host the person left the organisation,
   and the host revokes everything belonging to somebody on parental leave.
@@ -186,8 +197,17 @@ func (Directory) Close() error { return nil }
 
 // ListPrincipals reports EVERY identity in the directory, including
 // deactivated ones (Active: false). Omission means "not in the directory".
+//
+// If your read paginates internally and a page fails partway through, do NOT
+// return roster.Resolved(principalsReadSoFar, roster.Complete) — that is a
+// truncated page reported as a whole directory, and an offboarding sweep run
+// against it revokes everyone past the failure point. Return a typed cerr
+// error instead (cerr.KindUnavailable, cerr.KindTimeout, ...), the same way
+// you would for a read that never got a first page.
 func (Directory) ListPrincipals(ctx context.Context) (roster.Resolution[roster.Principal], error) {
-	// A real connector: return roster.Resolved(principals)
+	// A real connector that read the WHOLE directory: return
+	// roster.Resolved(principals, roster.Complete) — never roster.Partial;
+	// see the comment above.
 	return roster.Resolution[roster.Principal]{}, cerr.New(cerr.KindUnsupported, "ListPrincipals", nil)
 }
 

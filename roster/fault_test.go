@@ -18,7 +18,7 @@ func member(principalID string, direct bool) roster.Membership {
 
 func mustResolve[T any](t *testing.T, items []T) roster.Resolution[T] {
 	t.Helper()
-	res, err := roster.Resolved(items)
+	res, err := roster.Resolved(items, roster.Complete)
 	if err != nil {
 		t.Fatalf("Resolved: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestCheckResolutionPassesAConnectorsOwnTypedFailureThrough(t *testing.T) {
 // connector does not know what it was registered as. The guard fills it in
 // without mutating the caller's error.
 func TestCheckResolutionNamesAnUnnamedFaultRaisedInsideTheConnector(t *testing.T) {
-	_, inner := roster.Resolved[roster.Principal](nil)
+	_, inner := roster.Resolved[roster.Principal](nil, roster.Complete)
 	var innerFault *roster.FaultError
 	if !errors.As(inner, &innerFault) {
 		t.Fatalf("Resolved must raise a FaultError")
@@ -274,6 +274,7 @@ func TestFaultErrorMessageIsReadableWithoutAName(t *testing.T) {
 func TestFaultsAreNeitherRetryableNorBreakerTripping(t *testing.T) {
 	for _, f := range []roster.Fault{
 		roster.FaultUnresolved,
+		roster.FaultPartial,
 		roster.FaultMembershipMismatch,
 		roster.FaultUndeclaredMachinePrincipal,
 		roster.FaultUndeclaredInheritedMembership,

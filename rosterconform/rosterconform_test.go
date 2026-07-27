@@ -103,20 +103,20 @@ func (r *baseRoster) groupMembers() []roster.Membership {
 }
 
 func (r *baseRoster) ListPrincipals(context.Context) (roster.Resolution[roster.Principal], error) {
-	return roster.Resolved(r.directory())
+	return roster.Resolved(r.directory(), roster.Complete)
 }
 
 func (r *baseRoster) ListGroups(context.Context) (roster.Resolution[roster.Group], error) {
 	return roster.Resolved([]roster.Group{
 		{ID: idGroup, Handle: idGroup, DisplayName: "Placeholder Group", ParentIDs: []string{idParent}},
 		{ID: idParent, Handle: idParent, DisplayName: "Placeholder Parent Group"},
-	})
+	}, roster.Complete)
 }
 
 func (r *baseRoster) ListMemberships(_ context.Context, groupID string) (roster.Resolution[roster.Membership], error) {
 	switch groupID {
 	case idGroup:
-		return roster.Resolved(r.groupMembers())
+		return roster.Resolved(r.groupMembers(), roster.Complete)
 	case idParent:
 		return roster.EmptyRoster[roster.Membership](), nil
 	default:
@@ -217,6 +217,83 @@ func (r *unreadMembershipsRoster) ListMemberships(context.Context, string) (rost
 	return roster.Resolution[roster.Membership]{}, nil
 }
 
+// emptyGroupsRoster is Finding 2: principals and memberships are REAL, and
+// ListGroups reports the directory as having no groups at all — readably.
+// A host reconciling group-derived access reads "this directory has no
+// groups" and revokes what every group carried.
+type emptyGroupsRoster struct{ baseRoster }
+
+func (r *emptyGroupsRoster) ListGroups(context.Context) (roster.Resolution[roster.Group], error) {
+	return roster.EmptyRoster[roster.Group](), nil
+}
+
+// truncatedNotTouchingTheFixtureRoster is Finding 1's precise shape: a THIRD
+// principal beyond the two baseRoster fixtures exists in the full directory,
+// the connector's pagination stopped before reaching it, and the connector
+// reports what it has — PersonA and the suspended fixture both intact —
+// asserted Complete, as though the read had finished. Nothing already checked
+// (readability, substance, the suspended check) can tell this from a genuine
+// complete read, because the ONE principal it drops is not one any fixture
+// nominates. roster.Resolved(items, roster.Complete) cannot be told apart
+// from the truth from the OUTSIDE; the type-level fix narrows the mistake to
+// a conscious misclassification at the call site rather than an accidental
+// one. See truncatedAssertedPartialRoster for the case the fix DOES catch.
+type truncatedNotTouchingTheFixtureRoster struct{ baseRoster }
+
+func (r *truncatedNotTouchingTheFixtureRoster) ListPrincipals(context.Context) (roster.Resolution[roster.Principal], error) {
+	full := r.directory()
+	full = append(full, roster.Principal{
+		ID: "placeholder-principal-c", Handle: "placeholder-principal-c", Active: true, Kind: roster.PrincipalHuman,
+	})
+	return roster.Resolved(full[:2], roster.Complete) // the third principal is silently lost
+}
+
+// truncatedAssertedPartialRoster is the same truncation as
+// truncatedNotTouchingTheFixtureRoster, but the connector's pagination loop
+// notices it stopped early and says so, the way an author following the doc
+// is expected to. Saying so is what the fix requires: roster.Resolved
+// refuses to build a readable Resolution for a Partial assertion at all, and
+// that refusal surfaces through the same conformance checks that already
+// treat any other resolution failure as non-green.
+type truncatedAssertedPartialRoster struct{ baseRoster }
+
+func (r *truncatedAssertedPartialRoster) ListPrincipals(context.Context) (roster.Resolution[roster.Principal], error) {
+	full := r.directory()
+	full = append(full, roster.Principal{
+		ID: "placeholder-principal-c", Handle: "placeholder-principal-c", Active: true, Kind: roster.PrincipalHuman,
+	})
+	return roster.Resolved(full[:2], roster.Partial)
+}
+
+// stubWatchRoster declares and implements roster.Watcher, but Watch never
+// actually establishes anything — the shape an author reaches for as a
+// placeholder while a real subscription is still unimplemented. A bare type
+// assertion cannot tell this from a working watch.
+type stubWatchRoster struct{ baseRoster }
+
+func (r *stubWatchRoster) Watch(context.Context) (<-chan roster.Change, error) {
+	return nil, cerr.New(cerr.KindUnsupported, "Watch", nil)
+}
+
+// nilChannelWatchRoster is worse: Watch reports success with a nil channel. A
+// host that ranges over it blocks forever and never reconciles again.
+type nilChannelWatchRoster struct{ baseRoster }
+
+func (r *nilChannelWatchRoster) Watch(context.Context) (<-chan roster.Change, error) {
+	return nil, nil
+}
+
+// neverClosingWatchRoster establishes a genuine, non-nil channel but never
+// closes it, even once its context is cancelled — the contract's documented
+// lifecycle broken at the one point a bare type assertion cannot see either.
+// A host that never sees this channel close cannot tell a lost watch from
+// one still live, and never falls back to its poll.
+type neverClosingWatchRoster struct{ baseRoster }
+
+func (r *neverClosingWatchRoster) Watch(context.Context) (<-chan roster.Change, error) {
+	return make(chan roster.Change), nil // deliberately never closed
+}
+
 // droppingSuspendedRoster is the trap most likely to cause real harm. The
 // deactivated identity is still in the directory; this connector omits it, the
 // host reads "left the organisation", and everything belonging to somebody on
@@ -230,7 +307,7 @@ func (r *droppingSuspendedRoster) ListPrincipals(context.Context) (roster.Resolu
 			kept = append(kept, p)
 		}
 	}
-	return roster.Resolved(kept)
+	return roster.Resolved(kept, roster.Complete)
 }
 
 // deactivationBlindRoster is the opposite error from the same missing field: it
@@ -243,7 +320,7 @@ func (r *deactivationBlindRoster) ListPrincipals(context.Context) (roster.Resolu
 	for i := range all {
 		all[i].Active = true
 	}
-	return roster.Resolved(all)
+	return roster.Resolved(all, roster.Complete)
 }
 
 // wrongGroupRoster returns a membership for a group nobody asked about. A host
@@ -257,7 +334,7 @@ func (r *wrongGroupRoster) ListMemberships(_ context.Context, groupID string) (r
 	}
 	out := r.groupMembers()
 	out[0].GroupID = idParent
-	return roster.Resolved(out)
+	return roster.Resolved(out, roster.Complete)
 }
 
 // emptyNominatedGroupRoster reports the nominated group as having no members.
@@ -290,7 +367,7 @@ func (r *vendorTextRoster) ListMemberships(ctx context.Context, groupID string) 
 type answersForEveryGroupRoster struct{ baseRoster }
 
 func (r *answersForEveryGroupRoster) ListMemberships(context.Context, string) (roster.Resolution[roster.Membership], error) {
-	return roster.Resolved(r.groupMembers())
+	return roster.Resolved(r.groupMembers(), roster.Complete)
 }
 
 // emptyForAbsentGroupRoster answers a nonexistent group with an ASSERTED empty
@@ -363,6 +440,18 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 			wantFail: rosterconform.CheckListsResolve,
 		},
 		{
+			name:     "ListGroups returns a readable EMPTY set while groups are nominated (Finding 2)",
+			conn:     &emptyGroupsRoster{},
+			manifest: manifestFor(),
+			wantFail: rosterconform.CheckListsResolve,
+		},
+		{
+			name:     "ListPrincipals asserts Partial on a truncated read (Finding 1)",
+			conn:     &truncatedAssertedPartialRoster{},
+			manifest: manifestFor(),
+			wantFail: rosterconform.CheckListsResolve,
+		},
+		{
 			name:     "omits the suspended principal",
 			conn:     &droppingSuspendedRoster{},
 			manifest: manifestFor(),
@@ -426,6 +515,18 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 			name:     "implements roster.Watcher and declares it nowhere",
 			conn:     &watchingRoster{},
 			manifest: manifestFor(),
+			wantFail: rosterconform.CheckWatchDeclared,
+		},
+		{
+			name:     "declares and implements watch, but Watch never establishes one (Finding 3)",
+			conn:     &stubWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}},
+			manifest: manifestFor(roster.CapWatch),
+			wantFail: rosterconform.CheckWatchDeclared,
+		},
+		{
+			name:     "declares and implements watch, but Watch returns a nil channel (Finding 3)",
+			conn:     &nilChannelWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}},
+			manifest: manifestFor(roster.CapWatch),
 			wantFail: rosterconform.CheckWatchDeclared,
 		},
 		{
@@ -791,6 +892,100 @@ func TestSuspendedPrincipalMustBeReportedNotDropped(t *testing.T) {
 	detail := detailOf(rep, rosterconform.CheckSuspendedIsPresent)
 	if !strings.Contains(detail, "ABSENT") {
 		t.Fatalf("the failure must say the principal was absent, got: %s", detail)
+	}
+}
+
+// TestReadableEmptyGroupListIsNotGreen is Finding 2, stated on its own.
+// Principals and memberships are real; ListGroups reports the directory as
+// having no groups at all, readably. A host reconciling group-derived access
+// reads "this directory has no groups" and revokes what every group carried.
+func TestReadableEmptyGroupListIsNotGreen(t *testing.T) {
+	rep, err := rosterconform.Run(context.Background(), &emptyGroupsRoster{}, opts(manifestFor()))
+	if err != nil {
+		t.Fatalf("the harness could not run: %v", err)
+	}
+	if rep.OK() {
+		t.Fatalf("a connector reporting no groups at all, while principals and memberships are real, scored a green report:\n%s", rep)
+	}
+	if !failed(rep, rosterconform.CheckListsResolve) {
+		t.Fatalf("%q must be the check that fails:\n%s", rosterconform.CheckListsResolve, rep)
+	}
+	detail := detailOf(rep, rosterconform.CheckListsResolve)
+	if !strings.Contains(detail, "NO GROUPS") {
+		t.Fatalf("the failure must say what was missing, got: %s", detail)
+	}
+	// This must not be a false positive against a directory that genuinely
+	// has no groups: Run already refuses to proceed without a populated
+	// Options.Group, so nothing reaching this check can legitimately be
+	// groupless.
+	if _, err := rosterconform.Run(context.Background(), &baseRoster{}, rosterconform.Options{
+		Manifest: manifestFor(), AbsentGroup: idNoGroup, SuspendedPrincipal: idSuspended, Group: "",
+	}); err == nil {
+		t.Fatalf("Run must refuse rather than let a groupless run reach the check at all")
+	}
+}
+
+// TestTruncatedPrincipalReadCannotBeExpressedAsASuccess is Finding 1, stated
+// on its own: a connector whose own pagination stops before the whole
+// directory is covered can no longer report what it has as a success at all
+// once it says so honestly.
+func TestTruncatedPrincipalReadCannotBeExpressedAsASuccess(t *testing.T) {
+	rep, err := rosterconform.Run(context.Background(), &truncatedAssertedPartialRoster{}, opts(manifestFor()))
+	if err != nil {
+		t.Fatalf("the harness could not run: %v", err)
+	}
+	if rep.OK() {
+		t.Fatalf("a connector asserting roster.Partial on a truncated read scored a green report:\n%s", rep)
+	}
+	if !failed(rep, rosterconform.CheckListsResolve) {
+		t.Fatalf("%q must be the check that fails:\n%s", rosterconform.CheckListsResolve, rep)
+	}
+}
+
+// TestTruncatedReadNotAssertingPartialIsTheKnownResidualLimitation documents,
+// rather than hides, the boundary of Finding 1's fix. A connector whose
+// pagination truncates a read and then asserts roster.Complete anyway — a
+// conscious misclassification, not the accidental one the fix targets — is
+// not distinguishable from a genuine complete read by anything outside the
+// connector. This is expected to keep passing; the fix narrows the mistake
+// from "the natural, careless thing to write" to "a lie at the call site",
+// it does not claim to catch the lie.
+func TestTruncatedReadNotAssertingPartialIsTheKnownResidualLimitation(t *testing.T) {
+	rep, err := rosterconform.Run(context.Background(), &truncatedNotTouchingTheFixtureRoster{}, opts(manifestFor()))
+	if err != nil {
+		t.Fatalf("the harness could not run: %v", err)
+	}
+	if !rep.OK() {
+		t.Fatalf("this fixture asserts roster.Complete honestly-shaped data (from the harness's point of view); "+
+			"if this now fails, some check started reading ground truth this fixture does not provide — "+
+			"re-diagnose before treating this as a fix:\n%s", rep)
+	}
+}
+
+// TestWatchThatNeverEstablishesIsNotGreen is Finding 3, stated on its own. A
+// Go type assertion proves roster.Watcher's method exists; it proves nothing
+// about what calling it does.
+func TestWatchThatNeverEstablishesIsNotGreen(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		conn roster.Roster
+	}{
+		{"Watch always fails to establish", &stubWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}}},
+		{"Watch returns a nil channel", &nilChannelWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}}},
+		{"Watch never closes its channel", &neverClosingWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rep, err := rosterconform.Run(context.Background(), tc.conn, opts(manifestFor(roster.CapWatch)))
+			if err != nil {
+				t.Fatalf("the harness could not run: %v", err)
+			}
+			if rep.OK() {
+				t.Fatalf("a connector declaring watch whose Watch does not actually establish one scored a green report:\n%s", rep)
+			}
+			if !failed(rep, rosterconform.CheckWatchDeclared) {
+				t.Fatalf("%q must be the check that fails:\n%s", rosterconform.CheckWatchDeclared, rep)
+			}
+		})
 	}
 }
 

@@ -26,18 +26,18 @@ func (stubRoster) Health(context.Context) (connector.Health, error) {
 func (stubRoster) Close() error { return nil }
 
 func (stubRoster) ListPrincipals(context.Context) (roster.Resolution[roster.Principal], error) {
-	return roster.Resolved([]roster.Principal{person(idPersonA)})
+	return roster.Resolved([]roster.Principal{person(idPersonA)}, roster.Complete)
 }
 
 func (stubRoster) ListGroups(context.Context) (roster.Resolution[roster.Group], error) {
-	return roster.Resolved([]roster.Group{{ID: idGroup, Handle: idGroup}})
+	return roster.Resolved([]roster.Group{{ID: idGroup, Handle: idGroup}}, roster.Complete)
 }
 
 func (stubRoster) ListMemberships(_ context.Context, groupID string) (roster.Resolution[roster.Membership], error) {
 	if groupID != idGroup {
 		return roster.Resolution[roster.Membership]{}, cerr.New(cerr.KindNotFound, "ListMemberships", nil)
 	}
-	return roster.Resolved([]roster.Membership{member(idPersonA, true)})
+	return roster.Resolved([]roster.Membership{member(idPersonA, true)}, roster.Complete)
 }
 
 var _ roster.Roster = stubRoster{}

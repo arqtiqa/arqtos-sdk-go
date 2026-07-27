@@ -1,6 +1,7 @@
 package roster
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 )
@@ -42,6 +43,32 @@ import (
 // [Resolution.Items] and handle its error — which is a different question,
 // asked of the connector rather than of the directory.
 //
+// # A non-empty list is not necessarily a COMPLETE one
+//
+// [Resolved] does one more thing beyond refusing an empty list: it requires a
+// [Completeness] on every call. The gap it closes is a second conflation, the
+// same shape as the first but for a subtler reason. ListPrincipals is
+// documented to paginate internally for a real directory of any size, and a
+// real pagination loop fails somewhere in the middle at least once in
+// production — a 429 on page 7 of 250, a timeout on page 40 of 40. Before
+// Completeness existed, the natural line for an author to write at that point
+// was `return Resolved(whatIHaveSoFar)`: readable, non-empty, and — to every
+// check in this package and to rosterconform — indistinguishable from a
+// complete read. The blast radius is the SAME one that justifies this whole
+// type: an offboarding sweep run against a principal list truncated after a
+// failed page revokes everyone past the failure point, and is MORE likely to
+// occur than a wholesale empty read, because pagination fails in the middle
+// far more often than a read fails to start at all.
+//
+// So [Resolved] takes a [Completeness] explicitly, with no default, at every
+// construction site: [Complete] for the ordinary case, and [Partial] for a
+// read that stopped early. There is deliberately no way to read a Partial
+// resolution — see [Completeness] — so the fix is the stronger of the two
+// the type could have taken: a partial read is not merely discouraged, it is
+// impossible to express as a success at all. A connector whose internal
+// pagination breaks partway must return a typed failure (a cerr.Kind, see the
+// cerr package), the same way a wholesale read failure already must.
+//
 // # There is no Len, and no IsEmpty
 //
 // One accessor, on purpose. A Len() that answered 0 for an unresolved
@@ -71,13 +98,46 @@ type Resolution[T any] struct {
 	resolved bool
 }
 
-// Resolved wraps a list a connector actually read.
+// A Completeness is the connector's assertion about whether the list handed
+// to [Resolved] is everything the operation is meant to report — every
+// principal, every group, or every member of the group that was asked about
+// — or only as much of it as a read managed to examine before it stopped.
+//
+// There is no default. [Resolved] takes one on every call, so there is no
+// path from "my internal pagination broke off on page 7 of 250" to a
+// readable success without SAYING SO. See [Complete] and [Partial].
+type Completeness int
+
+const (
+	// Complete asserts items is everything the operation is meant to
+	// report. This is the ordinary case: a connector whose read is atomic,
+	// or whose pagination ran to its own natural end, asserts Complete.
+	Complete Completeness = iota + 1
+	// Partial asserts items is only what a read managed to cover before it
+	// stopped — not everyone. [Resolved] refuses to build a readable
+	// Resolution from one, the same way it refuses an empty list: a host's
+	// reconcile loop cannot safely revoke access for a principal it never
+	// got to examine, so a read that stopped early must surface as a typed
+	// failure (cerr.KindUnavailable, cerr.KindTimeout, ...), never as a
+	// smaller success. There is no reading of a Partial resolution —
+	// reaching for this constant gets back a *FaultError naming exactly
+	// that, in place of whatever typed failure your own pagination loop
+	// should return instead.
+	Partial
+)
+
+// Resolved wraps a list a connector actually read, asserting its
+// [Completeness].
 //
 // It returns a [FaultError] when items is nil or empty: at that point the
 // connector has nothing to report as a success, so it must report either a
-// failure or a deliberate [EmptyRoster]. The Resolution returned alongside the
-// error is unreadable, so a connector that ignores the error still cannot pass
-// an unread directory off as an empty one.
+// failure or a deliberate [EmptyRoster]. It also returns a [FaultError] when c
+// is [Partial]: a read that stopped before covering everything it is meant to
+// is not a smaller success, and asserting Partial gets back the failure that
+// belongs there instead of a readable Resolution. The Resolution returned
+// alongside either error is unreadable, so a connector that ignores the error
+// still cannot pass an unread — or partially read — directory off as a
+// complete one.
 //
 // A connector whose directory legitimately holds no principals, no groups or
 // no members calls [EmptyRoster] instead — deliberately, and in the knowledge
@@ -86,7 +146,7 @@ type Resolution[T any] struct {
 //
 // The list is copied, so a connector that reuses or truncates its own slice
 // afterwards cannot retroactively change what the host was handed.
-func Resolved[T any](items []T) (Resolution[T], error) {
+func Resolved[T any](items []T, c Completeness) (Resolution[T], error) {
 	if len(items) == 0 {
 		return Resolution[T]{}, &FaultError{
 			Op:    "List",
@@ -96,7 +156,19 @@ func Resolved[T any](items []T) (Resolution[T], error) {
 				"that genuinely found nobody must say so with EmptyRoster",
 		}
 	}
-	return Resolution[T]{items: slices.Clone(items), resolved: true}, nil
+	if c != Complete {
+		return Resolution[T]{}, &FaultError{
+			Op:    "List",
+			Fault: FaultPartial,
+			Detail: fmt.Sprintf(
+				"the connector reported a PARTIAL read of %d entr%s as a success (Resolved(items, roster.Partial)); a "+
+					"read that stopped before covering everything it is meant to must be reported as a typed failure "+
+					"(see the cerr package), not as a smaller success — a host cannot safely revoke access for someone "+
+					"it never got to examine",
+				len(items), plural(len(items))),
+		}
+	}
+	return Resolution[T]{items: cloneEntries(items), resolved: true}, nil
 }
 
 // EmptyRoster reports a directory that genuinely, verifiably holds nothing of
@@ -122,9 +194,10 @@ func EmptyRoster[T any]() Resolution[T] {
 // whole point of the type: reading requires passing the check, so there is no
 // path from "the connector returned nothing" to "the directory is empty".
 //
-// The returned list is empty, but present, for an [EmptyRoster]. It is a copy:
-// a host that sorts, filters or annotates it in place cannot change what the
-// next reader of the same Resolution sees.
+// The returned list is empty, but present, for an [EmptyRoster]. It is a copy
+// — including [Group.ParentIDs], the only slice-valued field across the three
+// Roster types — so a host that sorts, filters or annotates it in place
+// cannot change what the next reader of the same Resolution sees.
 func (r Resolution[T]) Items() ([]T, error) {
 	if !r.resolved {
 		return nil, &FaultError{
@@ -134,7 +207,7 @@ func (r Resolution[T]) Items() ([]T, error) {
 				"and treating it as one deprovisions everyone",
 		}
 	}
-	return slices.Clone(r.items), nil
+	return cloneEntries(r.items), nil
 }
 
 // present reports whether the resolution carries a list at all. It is
@@ -173,4 +246,31 @@ func plural(n int) string {
 		return "y"
 	}
 	return "ies"
+}
+
+// cloneEntries copies items the way [Resolved] and [Resolution.Items] both
+// need: a top-level copy so the caller's slice and the Resolution's no longer
+// share a backing array, and — for [Group], whose ParentIDs is the only
+// slice-valued field across the three Roster types — a copy of THAT nested
+// slice too.
+//
+// slices.Clone alone stops at the top level: it copies each element by value,
+// and copying a Group by value copies the ParentIDs slice HEADER (pointer,
+// length, capacity) without copying what it points at. A Resolution built
+// that way still shares its ParentIDs backing array with whatever slice the
+// caller passed in, so a host that sorts ParentIDs in place through one
+// Items() call changes what the next Items() call sees — and, via the same
+// aliasing, reaches back into the connector's own slice. any(&out[i]) is how
+// this reaches into the one field that needs it despite T being unconstrained:
+// the assertion to *Group succeeds only for the instantiation where T is
+// actually Group, so every other Resolution[T] pays nothing beyond the
+// top-level copy it always needed.
+func cloneEntries[T any](items []T) []T {
+	out := slices.Clone(items)
+	for i := range out {
+		if g, ok := any(&out[i]).(*Group); ok {
+			g.ParentIDs = slices.Clone(g.ParentIDs)
+		}
+	}
+	return out
 }

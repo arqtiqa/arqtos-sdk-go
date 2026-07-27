@@ -22,6 +22,16 @@ const (
 	// list — the (empty list, no error) shape this contract exists to
 	// eliminate.
 	FaultUnresolved Fault = "unresolved-without-error"
+	// FaultPartial is a connector asserting [Partial] on a call to
+	// [Resolved] — a read that stopped before covering everything it is
+	// meant to, reported as a success rather than as the typed failure the
+	// contract requires for one. The blast radius is the one that
+	// justifies [Resolution] in the first place: a principal list
+	// truncated after a failed page is readable, non-empty, and
+	// indistinguishable from a complete one to anything downstream, so an
+	// offboarding sweep run against it revokes everyone past the failure
+	// point.
+	FaultPartial Fault = "partial-read-reported-as-success"
 	// FaultMembershipMismatch is a membership list containing an entry for a
 	// group other than the one that was asked about. A host cannot attribute
 	// such an entry, and attributing it to the group it asked about is how
