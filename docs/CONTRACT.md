@@ -13,7 +13,7 @@ contract method returns errors in.
 Both classes are implemented by **native** (in-process, compiled into the host)
 connectors. `CredentialLoader` is additionally implemented by
 **out-of-process** connectors; nothing in its section is specific to either
-runtime shape — see [Versioning](#versioning) for where the out-of-process wire
+runtime shape — see [Versioning and the wire protocol](../README.md#versioning-and-the-wire-protocol) for where the out-of-process wire
 protocol is defined.
 
 The set of classes is **closed**: `connector.Classes()` is the whole list,

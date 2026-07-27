@@ -22,6 +22,18 @@ pruning, a consumer that imports only `ref` + `cerr` + `credential` compiles
 never fetches the module — measured, not assumed. The SDK is visible to
 `go list -m all` as a graph node and nothing more.
 
+## Release versions — what to pin
+
+**The semver tag is the release.** `v0.1.0`, `v0.2.0` — that is what a consumer pins, what the release
+notes describe, and the only version this module claims. Pre-1.0, so a minor bump may break.
+
+⚠️ GitHub **milestones on this repo carry `arqtos-cli` train names** (`0.3.48`, `0.3.49`, …). Those are
+**planning labels** recording which cli train a piece of SDK work moves alongside — they are **not SDK
+versions**, and no consumer should ever pin or cite one. If you read `0.3.48` on an issue here, the
+shipped artefact for that work is still whichever `vX.Y.Z` tag it landed in.
+
+Ratified 2026-07-27, after both schemes were found live in one repo.
+
 ## Packages
 
 | Package | Purpose |
