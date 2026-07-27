@@ -60,13 +60,28 @@
 // group list to hold groups: a connector that answers every read with
 // roster.EmptyRoster() is present, readable and completely empty, and under a
 // presence-only check it scores fully green while telling the host that
-// nobody works here and nothing is grouped. Requiring groups specifically does
-// not create a false positive for a directory that genuinely has none: [Run]
-// already refuses to proceed without Options.Group naming a real, populated
-// group (see [Options.Group]), so a connector that reaches this check has
-// already been handed a fixture asserting at least one group exists. There is
-// no fixture combination in which this requirement fires against a
-// legitimately groupless directory — Run cannot be driven at all without one.
+// nobody works here and nothing is grouped.
+//
+// Requiring groups specifically does not create a false positive for a
+// directory that genuinely has none — but not because [Run] verifies
+// Options.Group names a real or populated group. It does not, and cannot,
+// from a string alone: [Run] refuses only an EMPTY one (see [Options.Group]).
+// What actually rules it out is what a connector fed a nonexistent
+// Options.Group hits first: ListMemberships for a group that does not exist
+// must fail typed (cerr.KindNotFound, never an empty roster — see
+// [roster.Roster.ListMemberships]), which fails THIS check at the
+// ListMemberships stage, above, before the group-substance requirement below
+// is ever reached, and fails [CheckMembershipShape] the same way. A connector
+// that instead answers the nonexistent group with a readable-but-empty
+// membership list is still caught, by [CheckMembershipShape]'s separate
+// requirement that the nominated group have at least one member. Both of
+// those held before [CheckMembershipShape] was given one more job: it also
+// correlates Options.Group against the groups [roster.Roster.ListGroups]
+// itself reported, so a connector that fabricates correctly-shaped members
+// for a group id its own ListGroups never claims exists is refused BY NAME
+// rather than by the coincidence of the first two mechanisms lining up. That
+// correlation is what makes the no-false-positive property hold BY
+// CONSTRUCTION; the two failure paths above only made it hold incidentally.
 //
 // [CheckSuspendedIsPresent] requires a named deactivated principal to
 // actually be in the list, because "the list has entries" says nothing about
@@ -450,10 +465,18 @@ func readAll(ctx context.Context, c roster.Roster, opts Options, runtime connect
 // left and nothing is grouped.
 //
 // Requiring groups specifically cannot register a false positive for a
-// directory that genuinely has none: [Run] already refuses to proceed unless
-// Options.Group names a real, populated group, so a connector that reaches
-// this check has already been handed a fixture asserting at least one group
-// exists.
+// directory that genuinely has none — not because [Run] verifies
+// Options.Group names a real or populated group (it verifies only that the
+// string is non-empty), but because a connector fed a nonexistent
+// Options.Group fails earlier: ListMemberships for a group that does not
+// exist must fail typed, which trips the stage loop just below before this
+// group-count branch is ever reached, and trips [CheckMembershipShape] too. A
+// connector that answers the nonexistent group with a readable-but-empty list
+// instead is still caught by [CheckMembershipShape]'s own requirement that the
+// nominated group have at least one member. [CheckMembershipShape] also
+// correlates Options.Group against what [roster.Roster.ListGroups] itself
+// reported, which is what makes "Options.Group names a real group" hold by
+// construction rather than by the coincidence of those two failure paths.
 func checkListsResolve(rep *Report, r reads) {
 	for _, stage := range []struct {
 		op  string
@@ -488,9 +511,18 @@ func checkListsResolve(rep *Report, r reads) {
 }
 
 // checkMembershipShape requires every returned membership to be for the group
-// that was asked about, and requires there to be some: a membership list with
-// no entries proves nothing about correspondence, so the nominated group has to
-// be a populated one.
+// that was asked about, requires there to be at least one, and requires
+// Options.Group itself to be a group [roster.Roster.ListGroups] actually
+// reported.
+//
+// The third requirement is the one that makes "Options.Group names a real,
+// populated group" hold BY CONSTRUCTION rather than by accident. Without it, a
+// connector whose ListMemberships answers with correctly-shaped,
+// correctly-attributed members for a group id its own ListGroups never lists
+// is fully green: the membership list is real, every entry names the group
+// that was asked about, and nothing about SHAPE alone catches a group that
+// does not otherwise exist. Correlating against ListGroups closes that,
+// cheaply, with the one list this package already reads.
 func checkMembershipShape(rep *Report, opts Options, r reads) {
 	if r.membershipsErr != nil {
 		rep.add(CheckMembershipShape, false, fmt.Sprintf(
@@ -512,7 +544,29 @@ func checkMembershipShape(rep *Report, opts Options, r reads) {
 			opts.Group))
 		return
 	}
+	// r.groupsErr == nil: when ListGroups itself failed to resolve, that is
+	// already CheckListsResolve's failure to report, and there is no group
+	// list here to correlate against at all.
+	if r.groupsErr == nil && !groupIsListed(r.groups, opts.Group) {
+		rep.add(CheckMembershipShape, false, fmt.Sprintf(
+			"group %q, which Options.Group nominates as the group this connector must be able to list the "+
+				"memberships of, is not among the %d group(s) ListGroups reported. Every returned membership names "+
+				"the right group, but a membership list cannot vouch for the existence of the group it is for — "+
+				"nominate a group ListGroups actually returns, or fix ListGroups to report it",
+			opts.Group, len(r.groups)))
+		return
+	}
 	rep.add(CheckMembershipShape, true, fmt.Sprintf("%d membership(s), all for the requested group", len(r.memberships)))
+}
+
+// groupIsListed reports whether id is one of groups' IDs.
+func groupIsListed(groups []roster.Group, id string) bool {
+	for _, g := range groups {
+		if g.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func checkManifest(rep *Report, m manifest.Doc) {
@@ -594,8 +648,14 @@ func checkCapabilityHonesty(rep *Report, runtime connector.Capabilities, m manif
 // error) passes that assertion and would otherwise score green here. So a
 // connector that is declared and implemented is also required to actually
 // establish a watch: [establishesWatch] calls Watch with a cancellable
-// context and requires a non-nil channel with no error, then cancels and
-// requires the channel to close.
+// context, requires a non-nil channel with no error, PROVES with a
+// non-blocking receive taken before cancellation that the channel was not
+// already closed, then cancels and requires the channel to close. Cancelling
+// first and only then checking for closure cannot tell that apart from a
+// channel that was already closed the moment Watch returned —
+// ch := make(chan Change); close(ch); return ch, nil passes a cancel-then-wait
+// check while establishing no subscription at all — which is why the
+// already-closed observation has to happen first.
 func checkWatchDeclared(ctx context.Context, rep *Report, m manifest.Doc, runtime connector.Capabilities, w roster.Watcher, implemented bool) {
 	inManifest := m.Declares(roster.CapWatch)
 	atRuntime := runtime.Has(roster.CapWatch)
@@ -614,12 +674,13 @@ func checkWatchDeclared(ctx context.Context, rep *Report, m manifest.Doc, runtim
 				"is never subscribed to and every reconcile is a full poll",
 			roster.CapWatch, declaredIn(inManifest, atRuntime)))
 	case implemented:
-		if detail, ok := establishesWatch(ctx, w); !ok {
-			rep.add(CheckWatchDeclared, false, detail)
+		observed, ok := establishesWatch(ctx, w)
+		if !ok {
+			rep.add(CheckWatchDeclared, false, observed)
 			return
 		}
-		rep.add(CheckWatchDeclared, true,
-			"declared in the manifest and by Capabilities(), implemented, and Watch establishes a channel that closes on context cancellation")
+		rep.add(CheckWatchDeclared, true, fmt.Sprintf(
+			"declared in the manifest and by Capabilities(), implemented, and %s", observed))
 	default:
 		rep.add(CheckWatchDeclared, true, "not declared, not implemented")
 	}
@@ -629,13 +690,32 @@ func checkWatchDeclared(ctx context.Context, rep *Report, m manifest.Doc, runtim
 // exists: a Go type assertion says nothing about whether the call succeeds,
 // returns a usable channel, or honours ctx.
 //
-// It requires, in order: no error establishing the watch; a non-nil channel
-// (a host that ranges over a nil channel blocks forever); and — after the
-// context is cancelled — that the channel closes within [watchCloseWait]. The
-// wait is a generous upper bound guarding the harness against a connector
-// that never closes its channel, not an assertion that a well-behaved one
-// closes quickly; it never fires for the reference behaviour this contract
-// documents, which closes promptly on cancellation.
+// It requires, in order: no error establishing the watch; a non-nil channel (a
+// host that ranges over a nil channel blocks forever); that a non-blocking
+// receive taken BEFORE ctx is cancelled does not observe the channel already
+// closed; and — after the context is cancelled — that the channel closes
+// within [watchCloseWait].
+//
+// The open-before-cancel step exists because cancelling first and only then
+// watching for a close cannot distinguish "closes because ctx was cancelled"
+// from "was already closed, and was always going to read that way" — both
+// shapes end in an observed close after cancel(), because a close that
+// already happened stays observed. The most idiomatic-looking of the stub
+// Watches this check exists to catch —
+// ch := make(chan Change); close(ch); return ch, nil — passed a
+// cancel-then-wait-for-close check for exactly that reason: it establishes
+// nothing, yet "closes on cancellation" is trivially true of a channel that
+// was never open to begin with. A non-blocking receive never blocks on a
+// closed channel (it is always immediately ready), so taking one before
+// cancelling separates the two: a channel that is still open takes the
+// default branch (or delivers a queued hint), and a channel that was already
+// closed takes the receive branch with open=false, right there, before ctx is
+// ever touched.
+//
+// The [watchCloseWait] wait is a generous upper bound guarding the harness
+// against a connector that never closes its channel, not an assertion that a
+// well-behaved one closes quickly; it never fires for the reference behaviour
+// this contract documents, which closes promptly on cancellation.
 func establishesWatch(ctx context.Context, w roster.Watcher) (detail string, ok bool) {
 	wctx, cancel := context.WithCancel(ctx)
 	ch, err := w.Watch(wctx)
@@ -650,6 +730,27 @@ func establishesWatch(ctx context.Context, w roster.Watcher) (detail string, ok 
 		return "Watch(ctx) returned a nil channel and a nil error. A host that ranges over a nil channel blocks " +
 			"forever and never reconciles again", false
 	}
+
+	// Prove the channel is open BEFORE cancelling — see the doc comment. A
+	// non-blocking receive on a closed channel is always immediately ready, so
+	// this is what tells "closes on cancellation" apart from "was already
+	// closed".
+	select {
+	case _, open := <-ch:
+		if !open {
+			cancel()
+			return "Watch(ctx) returned a channel that was already closed, before ctx was ever cancelled. A channel " +
+				"closed from the start establishes no subscription: a host that ranges over it sees end-of-channel " +
+				"immediately and never receives a single hint, which is indistinguishable from a connector that was " +
+				"never watching anything at all", false
+		}
+		// A hint delivered before we even cancel is a live, open channel;
+		// fall through to the cancellation half of the contract below.
+	default:
+		// Nothing queued yet — the ordinary shape of a fresh subscription
+		// with nothing to report. Also fall through.
+	}
+
 	cancel() // ctx is done; the contract requires the channel to close.
 	deadline := time.NewTimer(watchCloseWait)
 	defer deadline.Stop()
@@ -657,7 +758,9 @@ func establishesWatch(ctx context.Context, w roster.Watcher) (detail string, ok 
 		select {
 		case _, open := <-ch:
 			if !open {
-				return "", true
+				return fmt.Sprintf(
+					"Watch's channel was open before ctx was cancelled, and closed within %s of cancellation",
+					watchCloseWait), true
 			}
 			// A hint delivered as we cancel is fine; keep draining for close.
 		case <-deadline.C:

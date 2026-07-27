@@ -126,6 +126,36 @@ const (
 	Partial
 )
 
+// completenessNames is the single source of truth for the closed Completeness
+// vocabulary: [Completeness.Valid] and [Completeness.String] both derive from
+// it, the same way [PrincipalKind] and cerr.Kind do — and for the same reason:
+// so that an error message reporting what was actually passed never has to
+// assume, and can never lie about, which constant a caller used.
+var completenessNames = map[Completeness]string{
+	Complete: "Complete",
+	Partial:  "Partial",
+}
+
+// Valid reports whether c is in the closed vocabulary. A Completeness that is
+// not is not an assertion of anything — it is an integer someone converted —
+// and [Resolved] refuses it the same way it refuses Partial, but for a
+// different reason: Partial is an honest "not everything"; an invalid value is
+// not even that.
+func (c Completeness) Valid() bool {
+	_, ok := completenessNames[c]
+	return ok
+}
+
+// String renders c's stable name. A value outside the vocabulary renders as
+// invalid_completeness(N) rather than as "Partial" or "Complete", so a message
+// built from c.String() names what was actually passed instead of guessing.
+func (c Completeness) String() string {
+	if name, ok := completenessNames[c]; ok {
+		return name
+	}
+	return "invalid_completeness(" + strconv.Itoa(int(c)) + ")"
+}
+
 // Resolved wraps a list a connector actually read, asserting its
 // [Completeness].
 //
@@ -157,15 +187,28 @@ func Resolved[T any](items []T, c Completeness) (Resolution[T], error) {
 		}
 	}
 	if c != Complete {
+		detail := fmt.Sprintf(
+			"the connector reported a PARTIAL read of %d entr%s as a success (Resolved(items, roster.Partial)); a "+
+				"read that stopped before covering everything it is meant to must be reported as a typed failure "+
+				"(see the cerr package), not as a smaller success — a host cannot safely revoke access for someone "+
+				"it never got to examine",
+			len(items), plural(len(items)))
+		// c is not Partial either: name what was ACTUALLY passed rather than
+		// assuming Partial. Completeness(99), or the zero value from a
+		// forgotten argument, is not "a truncated read reported honestly" —
+		// it is an unrecognised value, and the message must not claim it was
+		// the one legitimate reason (Partial) this branch also exists for.
+		if c != Partial {
+			detail = fmt.Sprintf(
+				"Resolved was called with a Completeness of %s, which is neither roster.Complete nor roster.Partial "+
+					"— an assertion outside the closed vocabulary is refused the same way an honest Partial is, "+
+					"because there is no reading under which trusting an unrecognised completeness value is safe",
+				c)
+		}
 		return Resolution[T]{}, &FaultError{
-			Op:    "List",
-			Fault: FaultPartial,
-			Detail: fmt.Sprintf(
-				"the connector reported a PARTIAL read of %d entr%s as a success (Resolved(items, roster.Partial)); a "+
-					"read that stopped before covering everything it is meant to must be reported as a typed failure "+
-					"(see the cerr package), not as a smaller success — a host cannot safely revoke access for someone "+
-					"it never got to examine",
-				len(items), plural(len(items))),
+			Op:     "List",
+			Fault:  FaultPartial,
+			Detail: detail,
 		}
 	}
 	return Resolution[T]{items: cloneEntries(items), resolved: true}, nil

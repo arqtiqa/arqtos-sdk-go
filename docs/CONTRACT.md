@@ -350,9 +350,9 @@ reconcile bug a destructive one.
 ### It reports directory facts, never arqtos concepts
 
 A roster connector holds **no arqtos policy**. There is no org in these types,
-no igloo, no team, no role and no entitlement — mapping directory facts onto
-arqtos's own organisational model is the **host's** job, on the host's side of
-this boundary.
+no team, no role and no entitlement — mapping directory facts onto arqtos's own
+organisational model is the **host's** job, on the host's side of this
+boundary.
 
 That is not tidiness. A connector that answered *"this person belongs to venture
 X with role Y"* would have encoded the host's organisational model inside a
@@ -608,7 +608,7 @@ if err := rep.Err(); err != nil {
 |---|---|
 | `manifest/valid` | the manifest validates, declares this class, and declares only capabilities the class defines |
 | `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
-| `watch/declared-is-implemented` | `watch` is declared in both places exactly when `roster.Watcher` is implemented, **and** — when it is — that calling `Watch` actually establishes one: a non-nil channel with no error, closing when its context is cancelled |
+| `watch/declared-is-implemented` | `watch` is declared in both places exactly when `roster.Watcher` is implemented, **and** — when it is — that calling `Watch` actually establishes one: a non-nil channel with no error, observed **open before** its context is cancelled, that then closes within a bounded time of cancellation |
 | `machine-principals/declared-is-reported` | a principal with `Kind: machine` appears exactly when `machine_principals` is declared |
 | `transitive-membership/declared-is-reported` | an inherited membership appears exactly when `transitive_membership` is declared |
 | `lists/resolve-not-empty` | all three lists come back **readable** — never a success carrying nothing, and never one asserting `roster.Partial` — and the principal list **and** the group list carry **actual entries**, not an `EmptyRoster()` assertion |
@@ -648,11 +648,25 @@ scores a **fully green report** while telling the host that the entire
 organisation has left **and** that nothing is grouped.
 
 Requiring groups specifically cannot register a false positive against a
-directory that genuinely has none: `Run` already refuses to proceed unless
-`Options.Group` names a real, populated group, so a connector that reaches this
-check has already been handed a fixture asserting at least one group exists —
-there is no fixture combination in which a legitimately groupless directory
-reaches this requirement at all.
+directory that genuinely has none — but not because `Run` verifies
+`Options.Group` names a real or populated group. It does not, and cannot, from
+a string alone: `Run` refuses only an **empty** one. What actually rules it out
+is what a connector fed a nonexistent `Options.Group` hits first: `ListMemberships`
+for a group that does not exist must fail typed (`cerr.KindNotFound`, never an
+empty roster), which fails `lists/resolve-not-empty` at the `ListMemberships`
+stage — before the group-count requirement above is ever reached — and fails
+`memberships/match-requested-group` the same way. A connector that instead
+answers the nonexistent group with a readable-but-empty membership list is
+still caught, by that same check's separate requirement that the nominated
+group have at least one member.
+
+`memberships/match-requested-group` also **correlates** `Options.Group` against
+the groups `ListGroups` itself reported, so a connector that fabricates
+correctly-shaped, correctly-attributed members for a group id its own
+`ListGroups` never claims exists is refused **by name**, not by the coincidence
+of the two failure paths above lining up. That correlation is what makes the
+no-false-positive property hold **by construction**; the two paths above only
+made it hold incidentally, and held before this fix too.
 
 Note also what does *not* save a connector that drops suspended people: its list
 is non-empty, every entry is well-formed, and the resolve check is green.
@@ -670,6 +684,15 @@ second is worse — a host that ranges over a nil channel blocks forever and
 never reconciles again. The check now calls `Watch` with a cancellable
 context and requires a non-nil channel with no error, then cancels and
 requires the channel to close.
+
+Cancelling **first** and checking for closure only afterward cannot, by itself,
+tell that apart from a channel that was already closed the moment `Watch`
+returned: `ch := make(chan Change); close(ch); return ch, nil` — the most
+idiomatic-**looking** of the three stubs above — passes a cancel-then-wait
+check while establishing no subscription at all. So the check also takes a
+**non-blocking receive before cancelling**: a receive on a closed channel is
+always immediately ready, so this catches the already-closed stub without ever
+blocking on a healthy one.
 
 #### The declaration checks are not tautological
 

@@ -97,6 +97,84 @@ func TestResolvedRefusesAPartialAssertion(t *testing.T) {
 	}
 }
 
+// TestCompletenessVocabularyIsClosedAndDerivedFromOneSource: Valid and String
+// both derive from one map, the same way PrincipalKind's and cerr.Kind's do,
+// so a value cannot be half-added — in the enum but nameless, or named but
+// not enumerable.
+func TestCompletenessVocabularyIsClosedAndDerivedFromOneSource(t *testing.T) {
+	for _, c := range []roster.Completeness{roster.Complete, roster.Partial} {
+		if !c.Valid() {
+			t.Fatalf("%v is a vocabulary member but not Valid", c)
+		}
+		if name := c.String(); name == "" || strings.HasPrefix(name, "invalid_") {
+			t.Fatalf("%d renders as %q, which is not a real name", int(c), name)
+		}
+	}
+	if roster.Complete.String() == roster.Partial.String() {
+		t.Fatalf("Complete and Partial must not render identically")
+	}
+}
+
+// TestAnOutOfVocabularyCompletenessCannotClaimToBePartial is the point of
+// adding Valid/String at all: an error message built from c.String() must
+// name what was ACTUALLY passed. Before this, Resolved hardcoded "Partial" in
+// its message for ANY non-Complete value, so Resolved(items,
+// Completeness(99)) — a bug, not an honest partial-read assertion — produced
+// a FaultError claiming the caller passed roster.Partial, which is false.
+func TestAnOutOfVocabularyCompletenessCannotClaimToBePartial(t *testing.T) {
+	bogus := roster.Completeness(99)
+	if bogus.Valid() {
+		t.Fatalf("Completeness(99) must not be Valid")
+	}
+	if got := bogus.String(); got != "invalid_completeness(99)" {
+		t.Fatalf("Completeness(99).String() = %q", got)
+	}
+	if bogus.String() == roster.Partial.String() {
+		t.Fatalf("an invalid Completeness must not render like Partial")
+	}
+
+	// The exact phrase the old, hardcoded message used to claim regardless of
+	// what was actually passed. Its presence here would mean the message still
+	// asserts a specific call (Resolved(items, roster.Partial)) that did not
+	// happen — a different, false, and more specific claim than the honest
+	// "neither Complete nor Partial" wording the fix uses instead.
+	const falseCallClaim = "Resolved(items, roster.Partial)"
+
+	_, err := roster.Resolved(truncatedForCompleteness, bogus)
+	if err == nil {
+		t.Fatalf("Resolved must refuse an out-of-vocabulary Completeness")
+	}
+	if strings.Contains(err.Error(), falseCallClaim) {
+		t.Fatalf("the error must not claim the caller wrote Resolved(items, roster.Partial) when it did not: %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid_completeness(99)") {
+		t.Fatalf("the error must name what was ACTUALLY passed, got: %v", err)
+	}
+
+	// The zero value — what a forgotten Completeness argument produces — must
+	// be refused the same way, and for the same honest reason.
+	var zero roster.Completeness
+	if zero.Valid() {
+		t.Fatalf("the zero Completeness must not be Valid")
+	}
+	_, zeroErr := roster.Resolved(truncatedForCompleteness, zero)
+	if zeroErr == nil {
+		t.Fatalf("Resolved(items, Completeness(0)) must be refused")
+	}
+	if strings.Contains(zeroErr.Error(), falseCallClaim) {
+		t.Fatalf("Resolved(items, Completeness(0)) must not be reported as Resolved(items, roster.Partial): %v", zeroErr)
+	}
+
+	// The genuine Partial case must still say Partial — this is not a
+	// regression check pinning the WRONG thing.
+	_, partialErr := roster.Resolved(truncatedForCompleteness, roster.Partial)
+	if !strings.Contains(partialErr.Error(), falseCallClaim) {
+		t.Fatalf("an HONEST roster.Partial assertion must still be named as such: %v", partialErr)
+	}
+}
+
+var truncatedForCompleteness = []roster.Principal{person(idPersonA), person(idPersonB)}
+
 func assertUnresolvedFault[T any](t *testing.T, res roster.Resolution[T], err error) {
 	t.Helper()
 	if err == nil {

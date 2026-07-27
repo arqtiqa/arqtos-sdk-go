@@ -9,7 +9,7 @@
 # always be exercised.
 #
 # Usage: assert-tests-ran.sh <report.json>
-#   MIN_TESTS          minimum number of passing tests overall (default 170)
+#   MIN_TESTS          minimum number of passing tests overall (default 265)
 #   REQUIRED_PACKAGES  space-separated package suffixes that must each have
 #                      contributed at least one passing test
 #
@@ -47,15 +47,21 @@
 # gate staying green throughout, because MIN_TESTS never dropped far enough
 # to notice and no required package named it.
 #
-# The floor is kept within reach of the real count (280 at the time of
-# writing) rather than far below it. A floor of 60 against 280 tests would let
+# The floor is kept within reach of the real count (304 at the time of
+# writing) rather than far below it. A floor of 60 against 304 tests would let
 # most of the suite stop building before this gate noticed — which is the same
 # "green because nothing looked" failure the script exists to prevent, and it
 # is exactly how the plugin package was stripped unnoticed under an earlier
-# floor. At 265, losing any single guard-bearing package trips MIN_TESTS on its
-# own, before REQUIRED_PACKAGES even names it: roster (31) and rosterconform
-# (59) each do, as plugin (28) already did. Slack is left for the one test that
-# skips rather than fails on a runner without a usable subprocess
+# floor. At 265, losing a large enough guard-bearing package still trips
+# MIN_TESTS on its own, before REQUIRED_PACKAGES even names it — rosterconform
+# (75) does, at the current total. roster (38) and plugin (28) no longer would
+# by themselves: the margin between the real count and the floor has grown
+# since 265 was chosen, past their size. That is exactly why REQUIRED_PACKAGES
+# names every guard-bearing package explicitly rather than relying on
+# MIN_TESTS alone — a package smaller than the current margin needs the
+# explicit listing to be guarded at all, and which packages clear that bar
+# shifts, package by package, as the suite grows. Slack is left for the one
+# test that skips rather than fails on a runner without a usable subprocess
 # (examples/credentialloader-provider).
 #
 # Raising this floor is part of adding a connector class, not an afterthought:

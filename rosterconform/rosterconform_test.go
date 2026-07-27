@@ -294,6 +294,21 @@ func (r *neverClosingWatchRoster) Watch(context.Context) (<-chan roster.Change, 
 	return make(chan roster.Change), nil // deliberately never closed
 }
 
+// alreadyClosedWatchRoster is the most idiomatic-LOOKING of the three stubs,
+// and the one a cancel-then-wait-for-close check cannot tell from a working
+// watch: it hands back a channel that is closed before ctx is ever touched.
+// Cancelling ctx and then observing the channel closed is consistent with
+// EITHER "this channel closes because ctx was cancelled" or "this channel was
+// already closed and always will be" — establishesWatch has to observe the
+// channel open BEFORE cancelling to tell the two apart at all.
+type alreadyClosedWatchRoster struct{ baseRoster }
+
+func (r *alreadyClosedWatchRoster) Watch(context.Context) (<-chan roster.Change, error) {
+	ch := make(chan roster.Change)
+	close(ch) // "established", and instantly gone. Pushes nothing, ever.
+	return ch, nil
+}
+
 // droppingSuspendedRoster is the trap most likely to cause real harm. The
 // deactivated identity is still in the directory; this connector omits it, the
 // host reads "left the organisation", and everything belonging to somebody on
@@ -347,6 +362,21 @@ func (r *emptyNominatedGroupRoster) ListMemberships(_ context.Context, groupID s
 		return roster.Resolution[roster.Membership]{}, cerr.New(cerr.KindNotFound, "ListMemberships", nil)
 	}
 	return roster.EmptyRoster[roster.Membership](), nil
+}
+
+// groupOmittedFromListGroupsRoster is the gap a shape-only membership check
+// cannot see: ListMemberships answers correctly for idGroup — real members,
+// every one correctly attributed — but ListGroups never reports idGroup as
+// existing at all. Every entry names the right group; nothing about the
+// SHAPE of the membership list is wrong. Only correlating Options.Group
+// against what ListGroups itself returned catches a connector fabricating
+// members for a group id its own ListGroups does not know about.
+type groupOmittedFromListGroupsRoster struct{ baseRoster }
+
+func (r *groupOmittedFromListGroupsRoster) ListGroups(context.Context) (roster.Resolution[roster.Group], error) {
+	return roster.Resolved([]roster.Group{
+		{ID: idParent, Handle: idParent, DisplayName: "Placeholder Parent Group"},
+	}, roster.Complete) // idGroup, the one Options.Group nominates, is missing
 }
 
 // vendorTextRoster is REQ-ARQ-P-19's failure: it fails with the backend's own
@@ -476,6 +506,12 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 			wantFail: rosterconform.CheckMembershipShape,
 		},
 		{
+			name:     "ListGroups omits the nominated group while ListMemberships answers for it",
+			conn:     &groupOmittedFromListGroupsRoster{},
+			manifest: manifestFor(),
+			wantFail: rosterconform.CheckMembershipShape,
+		},
+		{
 			name:     "untyped, vendor-text failure (REQ-ARQ-P-19)",
 			conn:     &vendorTextRoster{},
 			manifest: manifestFor(),
@@ -526,6 +562,12 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 		{
 			name:     "declares and implements watch, but Watch returns a nil channel (Finding 3)",
 			conn:     &nilChannelWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}},
+			manifest: manifestFor(roster.CapWatch),
+			wantFail: rosterconform.CheckWatchDeclared,
+		},
+		{
+			name:     "declares and implements watch, but Watch returns an already-closed channel",
+			conn:     &alreadyClosedWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}},
 			manifest: manifestFor(roster.CapWatch),
 			wantFail: rosterconform.CheckWatchDeclared,
 		},
@@ -914,14 +956,73 @@ func TestReadableEmptyGroupListIsNotGreen(t *testing.T) {
 	if !strings.Contains(detail, "NO GROUPS") {
 		t.Fatalf("the failure must say what was missing, got: %s", detail)
 	}
-	// This must not be a false positive against a directory that genuinely
-	// has no groups: Run already refuses to proceed without a populated
-	// Options.Group, so nothing reaching this check can legitimately be
-	// groupless.
-	if _, err := rosterconform.Run(context.Background(), &baseRoster{}, rosterconform.Options{
-		Manifest: manifestFor(), AbsentGroup: idNoGroup, SuspendedPrincipal: idSuspended, Group: "",
-	}); err == nil {
-		t.Fatalf("Run must refuse rather than let a groupless run reach the check at all")
+}
+
+// TestNonexistentGroupCannotScoreGreen proves the no-false-positive property
+// TestReadableEmptyGroupListIsNotGreen used to gesture at with a strictly
+// weaker check: it asserted only that Run refuses an EMPTY Options.Group
+// string (already covered by TestRunRefusesToPretend), and treated that as
+// proof that "nothing reaching this check can legitimately be groupless." It
+// is not: Run validates only that the string is non-empty, never that it
+// names a real or populated group — a NON-EMPTY, merely-nonexistent group
+// sails straight past Run and into the checks.
+//
+// The property still holds, by the mechanism the package doc now names: a
+// group that does not exist must fail ListMemberships typed, which trips
+// lists/resolve-not-empty and memberships/match-requested-group before the
+// group-substance branch is ever reached — and memberships/match-requested-group
+// separately correlates Options.Group against what ListGroups itself
+// reported, so a connector that instead fabricates members for a group id
+// its own ListGroups does not know about is caught too.
+func TestNonexistentGroupCannotScoreGreen(t *testing.T) {
+	bogusGroup := "placeholder-group-that-does-not-exist"
+	rep, err := rosterconform.Run(context.Background(), &baseRoster{}, rosterconform.Options{
+		Manifest: manifestFor(), AbsentGroup: idNoGroup, SuspendedPrincipal: idSuspended, Group: bogusGroup,
+	})
+	if err != nil {
+		t.Fatalf("Run must PROCEED with a non-empty, merely-nonexistent Options.Group — it validates only that the "+
+			"string is non-empty — so this property can even be exercised: %v", err)
+	}
+	if rep.OK() {
+		t.Fatalf("a compliant connector fed a NONEXISTENT (but non-empty) Options.Group scored a green report; the "+
+			"no-false-positive property does not hold:\n%s", rep)
+	}
+	if !failed(rep, rosterconform.CheckListsResolve) {
+		t.Fatalf("%q must be among the checks that fail a nonexistent group:\n%s", rosterconform.CheckListsResolve, rep)
+	}
+	if !failed(rep, rosterconform.CheckMembershipShape) {
+		t.Fatalf("%q must be among the checks that fail a nonexistent group:\n%s", rosterconform.CheckMembershipShape, rep)
+	}
+}
+
+// TestGroupNotInListGroupsCannotScoreGreen is the correlation check added
+// alongside the fix above, proved directly: a connector whose ListMemberships
+// answers real, correctly-attributed members for Options.Group while its own
+// ListGroups never reports that group as existing is exactly the shape
+// nothing about membership SHAPE alone catches — every entry names the right
+// group. Only correlating Options.Group against ListGroups closes it, and
+// that correlation is what makes "Options.Group names a real group" hold by
+// construction rather than by the coincidence of the failure paths above.
+func TestGroupNotInListGroupsCannotScoreGreen(t *testing.T) {
+	rep, err := rosterconform.Run(context.Background(), &groupOmittedFromListGroupsRoster{}, opts(manifestFor()))
+	if err != nil {
+		t.Fatalf("the harness could not run: %v", err)
+	}
+	if rep.OK() {
+		t.Fatalf("a connector whose ListGroups omits the group its ListMemberships answers for scored a green report:\n%s", rep)
+	}
+	if !failed(rep, rosterconform.CheckMembershipShape) {
+		t.Fatalf("%q must be the check that fails:\n%s", rosterconform.CheckMembershipShape, rep)
+	}
+	// This must not be caught by the resolve check instead: ListGroups is
+	// non-empty and readable (it reports idParent). If lists/resolve-not-empty
+	// is what failed, the correlation check itself is not being exercised.
+	if failed(rep, rosterconform.CheckListsResolve) {
+		t.Fatalf("lists/resolve-not-empty must not be what catches this; ListGroups is readable and non-empty:\n%s", rep)
+	}
+	detail := detailOf(rep, rosterconform.CheckMembershipShape)
+	if !strings.Contains(detail, "not among") {
+		t.Fatalf("the failure must say the group is not among what ListGroups reported, got: %s", detail)
 	}
 }
 
@@ -965,6 +1066,11 @@ func TestTruncatedReadNotAssertingPartialIsTheKnownResidualLimitation(t *testing
 // TestWatchThatNeverEstablishesIsNotGreen is Finding 3, stated on its own. A
 // Go type assertion proves roster.Watcher's method exists; it proves nothing
 // about what calling it does.
+//
+// The already-closed case is the one a cancel-then-wait-for-close check
+// cannot catch at all: it is the most idiomatic-LOOKING Go stub of the four
+// here, and passed this check before establishesWatch started proving the
+// channel was open BEFORE cancelling it.
 func TestWatchThatNeverEstablishesIsNotGreen(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -973,6 +1079,7 @@ func TestWatchThatNeverEstablishesIsNotGreen(t *testing.T) {
 		{"Watch always fails to establish", &stubWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}}},
 		{"Watch returns a nil channel", &nilChannelWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}}},
 		{"Watch never closes its channel", &neverClosingWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}}},
+		{"Watch returns an already-closed channel", &alreadyClosedWatchRoster{baseRoster{caps: connector.Capabilities{roster.CapWatch}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rep, err := rosterconform.Run(context.Background(), tc.conn, opts(manifestFor(roster.CapWatch)))

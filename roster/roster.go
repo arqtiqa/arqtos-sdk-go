@@ -187,9 +187,9 @@ func (k PrincipalKind) String() string {
 // A Principal is one identity as the directory holds it.
 //
 // Every field is a directory fact. None of them is an arqtos concept: there is
-// no org, no igloo, no team, no role and no entitlement here, because the
-// moment a connector reports one of those it has started deciding host policy
-// from inside a vendor adapter.
+// no org, no team, no role and no entitlement here, because the moment a
+// connector reports one of those it has started deciding host policy from
+// inside a vendor adapter.
 type Principal struct {
 	// ID is the directory's STABLE identifier for this identity — the one
 	// that survives a rename and a change of address.

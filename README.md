@@ -137,8 +137,8 @@ var _ credential.CredentialLoader = Loader{}
 A `Roster` is a **read-only** adapter over one directory — an identity provider,
 a workspace directory, a code host's teams, a flat file. It reports what the
 directory says about principals, groups and memberships, and nothing about
-arqtos: no org, no igloo, no team, no role. Mapping directory facts onto
-arqtos's own model is the host's job, on the host's side of the boundary.
+arqtos: no org, no team, no role. Mapping directory facts onto arqtos's own
+model is the host's job, on the host's side of the boundary.
 
 Three properties do most of the work, and all three exist because of what the
 host does with the answer:
@@ -155,12 +155,13 @@ host does with the answer:
   *every* call — `roster.Complete` or `roster.Partial` — with no default. A
   real directory of any size means `ListPrincipals` paginates internally, and a
   real pagination loop fails partway at least once in production: a 429 on page
-  7 of 250. `roster.Resolved(itemsSoFar, roster.Partial)` is what you reach for
-  there, and it is **just as unreadable as an empty list** — a page fetched
-  before the failure is not a smaller success, so your loop must turn that
-  failure into a typed `cerr` error, the same way a wholesale read failure
-  already must. `roster.Complete` is the ordinary case: an atomic read, or
-  pagination that ran to its own natural end.
+  7 of 250. The natural line to write at that point is
+  `roster.Resolved(itemsSoFar, roster.Partial)` — and `Resolved` **refuses it**,
+  exactly as it refuses an empty list: a page fetched before the failure is not
+  a smaller success. Return a typed `cerr` error instead (`cerr.KindUnavailable`,
+  `cerr.KindTimeout`, ...), the same way a wholesale read failure already must.
+  `roster.Complete` is the ordinary case: an atomic read, or pagination that ran
+  to its own natural end.
 - **Suspended is not absent.** Report a deactivated identity, with
   `Active: false`. Omitting it tells the host the person left the organisation,
   and the host revokes everything belonging to somebody on parental leave.
