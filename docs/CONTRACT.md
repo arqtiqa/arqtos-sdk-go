@@ -9,13 +9,15 @@ contract method returns errors in.
 |---|---|---|---|
 | [`CredentialLoader`](#credentialloader-methods) | a secret store | [`credential`](../credential/credential.go) | [`credconform`](../credconform/) |
 | [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
+| [`CodeCI`](#the-codeci-contract) | a code host's PR/CI surface | [`codeci`](../codeci/codeci.go) | [`codeciconform`](../codeciconform/) |
 
-Both classes are implemented by **native** (in-process, compiled into the host)
-connectors, and both are also implemented by **out-of-process** (Track-B)
-connectors. Nothing in either class's section below is specific to a runtime
-shape: the wire layer only ever marshals to and from the same Go types — see
-[Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract)
-for where each class's wire protocol is defined.
+`CredentialLoader` and `Roster` are implemented by **native** (in-process,
+compiled into the host) connectors, and both are also implemented by
+**out-of-process** (Track-B) connectors — see
+[Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract).
+`CodeCI` is native-only today: it carries no `.proto` and no Track-B wire
+binding, the same position `Roster` and `CredentialLoader` each started from
+before their own wire protocol landed as a separate piece of work.
 
 The set of classes is **closed**: `connector.Classes()` is the whole list,
 `Class.Valid()` rejects anything outside it, and the `connector.yml`
@@ -791,6 +793,151 @@ shape a harness can distinguish from the truth from the outside.
   connector without it: correctness lives in the host's reconcile loop either
   way, and an event only makes it converge sooner.
 
+## The `CodeCI` contract
+
+A **codeci connector** adapts one code host's pull/merge-request and CI
+surface — GitHub's PRs/checks/workflow-runs, GitLab's merge requests/pipelines.
+It is deliberately a **separate class** from code-host administration (repo
+creation, webhooks, runner tokens, git remotes): same vendor, different
+contract, so an org can pair either half with a different backend or a
+different token.
+
+`CodeCI` is derived from **two** vendors' APIs, not one — an ABC written
+against a single backend reliably encodes that backend's accidents as
+contract. It is written against GitHub's current, in-production PR/CI surface
+and against GitLab's documented REST API; it has not yet been proven against a
+running GitLab connector, so treat the required methods as confident, not
+closed.
+
+### `CodeCI` methods
+
+`CodeCI` embeds `connector.Connector` and adds:
+
+| Method | Semantics |
+|---|---|
+| `CreatePR(ctx, fullName, branch, base, title, body) (PR, error)` | Opens a pull/merge request from `branch` against `base`. |
+| `ListPRs(ctx, fullName, state) (Resolution[PR], error)` | Every pull/merge request in `state`, paged to completion. `state` must be `PRState.UsableAsFilter()`; `PRStateUnspecified` is `cerr.KindInvalid`. |
+| `MergePR(ctx, fullName, prID, method) error` | Merges `prID`. MUST validate `method.Specified()` **before** doing anything else, and MUST refuse a pull/merge request currently reported as a draft — both `cerr.KindInvalid`, both before any merge is attempted. |
+| `GetDiff(ctx, fullName, prID) (Resolution[DiffFile], error)` | Every changed file in `prID`, paged to completion. A real pull/merge request always has at least one changed file, so `EmptyList` is never a legitimate answer here. |
+| `ListBranches(ctx, fullName) (Resolution[Branch], error)` | Every branch, paged to completion. |
+| `GetCheckRuns(ctx, fullName, ref) (Resolution[CheckRun], error)` | Every check/status entry against `ref`. A ref with no CI configured is a genuine, expressible empty result. |
+| `GetWorkflowRun(ctx, fullName, runID) (WorkflowRun, error)` | One CI automation run (a GitHub Actions workflow run, a GitLab pipeline). One that does not exist is `cerr.KindNotFound`. |
+
+`RerunWorkflow`/`CancelWorkflow` are the optional `CIController` operation
+behind `CapCIControl` — see [capabilities](#the-codeci-capability-vocabulary)
+below.
+
+**The vendor's own transport split is invisible here.** GitHub answers "what
+is the CI status of a ref" over GraphQL and "rerun this workflow" over REST,
+because Actions has no rich GraphQL surface for the second. `CodeCI`'s methods
+do not know or care which transport an implementation uses for which
+operation — "one GraphQL client" (the framework-side half of this Story) means
+an implementation must not hand-roll a **second** GraphQL client where a typed
+one already exists in its module, not that every operation must share one
+wire protocol.
+
+**One token chain.** A `CodeCI` connector receives its credential material
+from a `credential.CredentialLoader` at construction, in memory, and never
+reads one from the environment — the same discipline `codehost`-shaped
+connectors already document, and for the same reason: a fallback to an
+ambient variable authenticates as whichever identity that variable happens to
+hold, silently, in most environments.
+
+### `Resolution`: reimplemented, not aliased, and here is why
+
+`codeci.Resolution[T]` is the **same shape** as `roster.Resolution[T]` — a
+list result in which "the read failed" and "the code host genuinely has none
+of these" cannot be confused, the zero value is unresolved rather than empty,
+and a truncated (`Partial`) read cannot be built as a readable success. See
+[Roster's own writeup](#resolution-an-unresolved-roster-cannot-look-like-a-roster-of-nobody)
+for the mechanics — they hold verbatim here, PR/diff/branch/check-run in place
+of principal/group/membership.
+
+It is a **second, independent implementation** of that shape rather than a
+type alias onto `roster.Resolution[T]`. `roster.Resolution`'s own fault
+messages and `String()` rendering name the roster contract by name (`"an
+unresolved *roster*..."`, `"[roster of N entries]"`), which would be actively
+misleading surfaced from `codeci` — a caller debugging a failed `ListPRs`
+reading *"the connector reported success while carrying no list; a *directory*
+read that returned nothing..."* would go looking for a directory that was
+never involved. `codeci`'s own `Fault`/`FaultError`/`CheckResolution` say
+`"the CodeCI contract"` and describe CI-shaped consequences (a truncated
+`GetCheckRuns` read as complete masking a failing check) rather than
+directory-shaped ones (an offboarding sweep revoking access).
+
+| `Fault` | Meaning |
+|---|---|
+| `FaultUnresolved` | success carrying no list |
+| `FaultPartial` | success asserting `codeci.Partial` — a truncated read reported instead of a typed failure |
+
+### The `CodeCI` capability vocabulary
+
+| Capability | Wire name | Why it exists |
+|---|---|---|
+| `CapCIControl` | `ci_control` | Reading and mutating CI are plausibly different permissions: a token or app installation scoped for review can read check/pipeline status without holding the separately-privileged, write-scoped permission a rerun or cancel needs — the same reasoning `codehost`'s runner-token capability is built on. Optional operation: `CIController` (`RerunWorkflow`, `CancelWorkflow`). |
+
+A connector without `CapCIControl` MUST still implement every required,
+read-only `CodeCI` operation; it simply has nothing behind `CIController`.
+
+### Checking your connector: `codeciconform`
+
+[`codeciconform`](../codeciconform/) runs the parts of this contract a
+compiler cannot check:
+
+```go
+rep, err := codeciconform.Run(ctx, myConnector, codeciconform.Options{
+	Manifest:    myManifest,
+	Repo:        "org/populated-repo",   // >=1 open PR, >=1 branch
+	UnknownRepo: "org/does-not-exist",
+	CheckedRef:  "main",                 // has >=1 check run
+	DiffPR:      "1",                    // has >=1 changed file
+	UnknownPR:   "999999",
+	DraftPR:     "2",                    // IS a draft
+	OpenPR:      "3",                    // open, NOT a draft
+})
+if err != nil {
+	return err // the check could not be run at all
+}
+if err := rep.Err(); err != nil {
+	return err // the connector ran, and is not conformant
+}
+```
+
+| Check | What it requires |
+|---|---|
+| `manifest/valid` | the manifest validates and declares this class |
+| `class/implements` | `Implements()` reports `connector.ClassCodeCI` |
+| `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
+| `optional/declared-is-implemented` | `ci_control` is declared exactly when `CIController` is implemented — "implemented" is a Go type assertion against the connector's own type, **never** derived from `Capabilities()` |
+| `lists/no-empty-success` | `ListPRs`, `ListBranches`, `GetCheckRuns` and `GetDiff` against the fixtures all resolve **readable, with entries** |
+| `lists/failure-is-typed-and-fail-closed` | `ListPRs(UnknownRepo)` and `GetDiff(Repo, UnknownPR)` each fail with a classified `cerr.Kind` **and** an unreadable resolution |
+| `merge/refuses-unspecified-method` | `MergePR(Repo, OpenPR, MergeMethodUnspecified)` is refused, **without merging** `OpenPR` |
+| `merge/refuses-draft` | `MergePR(Repo, DraftPR, MergeMethodMerge)` is refused, **without merging** `DraftPR` |
+| `health/answers` | `Health()` reports a status or a classified failure |
+
+**The two merge checks call `MergePR` for real, against a live fixture, and
+are safe to run repeatedly.** A conformant connector validates the method and
+checks for draft status **before** attempting any merge — which is exactly
+what makes calling `MergePR(Repo, OpenPR, MergeMethodUnspecified)` and
+`MergePR(Repo, DraftPR, MergeMethodMerge)` non-destructive: neither call ever
+reaches the merge itself. A connector that has NOT implemented one of these
+guards merges the fixture — a loud, legible failure of the check, rather than
+a silent one.
+
+Every field of `Options` is required, for the same reason `credconform` and
+`rosterconform` require theirs: a check that cannot be driven is not skipped,
+because a report that is green because nothing looked is worse than no
+report.
+
+### Why this class has no Track-B wire protocol yet
+
+`CredentialLoader` and `Roster` each shipped native-only first and gained
+their `.proto`/`plugin`/`transport` wiring as a separate, later piece of work.
+`CodeCI` is deliberately scoped the same way here: a formal ABC and a
+conformance harness that any native Go implementation — GitHub, GitLab, a
+third code host — compiles against today. Out-of-process support is a
+follow-on Story, not a prerequisite for this one.
+
 ## Versioning
 
 This module defines the **Go semantic contract** above: interfaces, value
@@ -798,7 +945,8 @@ types, and the error taxonomy. Everything on this page applies identically
 whether a connector is compiled into the host (native) or runs out-of-process
 (Track-B) — the wire layer below only ever marshals to/from the same
 `credential.CredentialLoader`, `roster.Roster`, `ref.Ref`,
-`credential.Lease`, `roster.Resolution[T]` and `cerr.Error` types.
+`credential.Lease`, `roster.Resolution[T]` and `cerr.Error` types. `codeci.CodeCI`
+and `codeci.Resolution[T]` are native-only, as noted above.
 
 ### Track-B: the out-of-process wire contract
 
