@@ -779,184 +779,6 @@ func (*RevokeResponse) Descriptor() ([]byte, []int) {
 	return file_credentialloader_proto_rawDescGZIP(), []int{13}
 }
 
-type HealthRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *HealthRequest) Reset() {
-	*x = HealthRequest{}
-	mi := &file_credentialloader_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *HealthRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*HealthRequest) ProtoMessage() {}
-
-func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
-func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{14}
-}
-
-// HealthResponse reports reachability of the backing store. `status` is
-// 0 = healthy, 1 = degraded, 2 = unavailable.
-type HealthResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        int32                  `protobuf:"varint,1,opt,name=status,proto3" json:"status,omitempty"`
-	Detail        string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *HealthResponse) Reset() {
-	*x = HealthResponse{}
-	mi := &file_credentialloader_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *HealthResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*HealthResponse) ProtoMessage() {}
-
-func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
-func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *HealthResponse) GetStatus() int32 {
-	if x != nil {
-		return x.Status
-	}
-	return 0
-}
-
-func (x *HealthResponse) GetDetail() string {
-	if x != nil {
-		return x.Detail
-	}
-	return ""
-}
-
-type CapabilitiesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CapabilitiesRequest) Reset() {
-	*x = CapabilitiesRequest{}
-	mi := &file_credentialloader_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CapabilitiesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CapabilitiesRequest) ProtoMessage() {}
-
-func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CapabilitiesRequest.ProtoReflect.Descriptor instead.
-func (*CapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{16}
-}
-
-// CapabilitiesResponse lists the optional behaviours this connector supports,
-// drawn from the class's closed capability vocabulary — for CredentialLoader:
-// "read", "lease", "rotate", "oidc", "approle", "batch_resolve".
-//
-// This list is load-bearing at DIAL TIME, not only for documentation: a host
-// decides from it whether this provider can be asked to batch, and it must
-// agree with the connector's shipped manifest. Declaring a capability the
-// provider does not honour is worse than declaring nothing at all.
-type CapabilitiesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Capabilities  []string               `protobuf:"bytes,1,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CapabilitiesResponse) Reset() {
-	*x = CapabilitiesResponse{}
-	mi := &file_credentialloader_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CapabilitiesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CapabilitiesResponse) ProtoMessage() {}
-
-func (x *CapabilitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CapabilitiesResponse.ProtoReflect.Descriptor instead.
-func (*CapabilitiesResponse) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *CapabilitiesResponse) GetCapabilities() []string {
-	if x != nil {
-		return x.Capabilities
-	}
-	return nil
-}
-
 // ResolveBatchRequest asks for many references in ONE call.
 type ResolveBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -967,7 +789,7 @@ type ResolveBatchRequest struct {
 
 func (x *ResolveBatchRequest) Reset() {
 	*x = ResolveBatchRequest{}
-	mi := &file_credentialloader_proto_msgTypes[18]
+	mi := &file_credentialloader_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -979,7 +801,7 @@ func (x *ResolveBatchRequest) String() string {
 func (*ResolveBatchRequest) ProtoMessage() {}
 
 func (x *ResolveBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[18]
+	mi := &file_credentialloader_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -992,7 +814,7 @@ func (x *ResolveBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBatchRequest.ProtoReflect.Descriptor instead.
 func (*ResolveBatchRequest) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{18}
+	return file_credentialloader_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ResolveBatchRequest) GetRefs() []*Ref {
@@ -1025,7 +847,7 @@ type ResolveBatchResult struct {
 
 func (x *ResolveBatchResult) Reset() {
 	*x = ResolveBatchResult{}
-	mi := &file_credentialloader_proto_msgTypes[19]
+	mi := &file_credentialloader_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +859,7 @@ func (x *ResolveBatchResult) String() string {
 func (*ResolveBatchResult) ProtoMessage() {}
 
 func (x *ResolveBatchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[19]
+	mi := &file_credentialloader_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +872,7 @@ func (x *ResolveBatchResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBatchResult.ProtoReflect.Descriptor instead.
 func (*ResolveBatchResult) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{19}
+	return file_credentialloader_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ResolveBatchResult) GetRef() *Ref {
@@ -1088,7 +910,7 @@ type ResolveBatchResponse struct {
 
 func (x *ResolveBatchResponse) Reset() {
 	*x = ResolveBatchResponse{}
-	mi := &file_credentialloader_proto_msgTypes[20]
+	mi := &file_credentialloader_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1100,7 +922,7 @@ func (x *ResolveBatchResponse) String() string {
 func (*ResolveBatchResponse) ProtoMessage() {}
 
 func (x *ResolveBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[20]
+	mi := &file_credentialloader_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1113,7 +935,7 @@ func (x *ResolveBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBatchResponse.ProtoReflect.Descriptor instead.
 func (*ResolveBatchResponse) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{20}
+	return file_credentialloader_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ResolveBatchResponse) GetResults() []*ResolveBatchResult {
@@ -1127,7 +949,7 @@ var File_credentialloader_proto protoreflect.FileDescriptor
 
 const file_credentialloader_proto_rawDesc = "" +
 	"\n" +
-	"\x16credentialloader.proto\x12\fconnector.v1\"E\n" +
+	"\x16credentialloader.proto\x12\fconnector.v1\x1a\x0fconnector.proto\"E\n" +
 	"\x03Ref\x12\x14\n" +
 	"\x05vault\x18\x01 \x01(\tR\x05vault\x12\x12\n" +
 	"\x04item\x18\x02 \x01(\tR\x04item\x12\x14\n" +
@@ -1163,14 +985,7 @@ const file_credentialloader_proto_rawDesc = "" +
 	"\x05lease\x18\x01 \x01(\v2\x13.connector.v1.LeaseR\x05lease\":\n" +
 	"\rRevokeRequest\x12)\n" +
 	"\x05lease\x18\x01 \x01(\v2\x13.connector.v1.LeaseR\x05lease\"\x10\n" +
-	"\x0eRevokeResponse\"\x0f\n" +
-	"\rHealthRequest\"@\n" +
-	"\x0eHealthResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\x05R\x06status\x12\x16\n" +
-	"\x06detail\x18\x02 \x01(\tR\x06detail\"\x15\n" +
-	"\x13CapabilitiesRequest\":\n" +
-	"\x14CapabilitiesResponse\x12\"\n" +
-	"\fcapabilities\x18\x01 \x03(\tR\fcapabilities\"<\n" +
+	"\x0eRevokeResponse\"<\n" +
 	"\x13ResolveBatchRequest\x12%\n" +
 	"\x04refs\x18\x01 \x03(\v2\x11.connector.v1.RefR\x04refs\"\x9e\x01\n" +
 	"\x12ResolveBatchResult\x12#\n" +
@@ -1201,7 +1016,7 @@ func file_credentialloader_proto_rawDescGZIP() []byte {
 	return file_credentialloader_proto_rawDescData
 }
 
-var file_credentialloader_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_credentialloader_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_credentialloader_proto_goTypes = []any{
 	(*Ref)(nil),                  // 0: connector.v1.Ref
 	(*Material)(nil),             // 1: connector.v1.Material
@@ -1217,13 +1032,13 @@ var file_credentialloader_proto_goTypes = []any{
 	(*RenewResponse)(nil),        // 11: connector.v1.RenewResponse
 	(*RevokeRequest)(nil),        // 12: connector.v1.RevokeRequest
 	(*RevokeResponse)(nil),       // 13: connector.v1.RevokeResponse
-	(*HealthRequest)(nil),        // 14: connector.v1.HealthRequest
-	(*HealthResponse)(nil),       // 15: connector.v1.HealthResponse
-	(*CapabilitiesRequest)(nil),  // 16: connector.v1.CapabilitiesRequest
-	(*CapabilitiesResponse)(nil), // 17: connector.v1.CapabilitiesResponse
-	(*ResolveBatchRequest)(nil),  // 18: connector.v1.ResolveBatchRequest
-	(*ResolveBatchResult)(nil),   // 19: connector.v1.ResolveBatchResult
-	(*ResolveBatchResponse)(nil), // 20: connector.v1.ResolveBatchResponse
+	(*ResolveBatchRequest)(nil),  // 14: connector.v1.ResolveBatchRequest
+	(*ResolveBatchResult)(nil),   // 15: connector.v1.ResolveBatchResult
+	(*ResolveBatchResponse)(nil), // 16: connector.v1.ResolveBatchResponse
+	(*HealthRequest)(nil),        // 17: connector.v1.HealthRequest
+	(*CapabilitiesRequest)(nil),  // 18: connector.v1.CapabilitiesRequest
+	(*HealthResponse)(nil),       // 19: connector.v1.HealthResponse
+	(*CapabilitiesResponse)(nil), // 20: connector.v1.CapabilitiesResponse
 }
 var file_credentialloader_proto_depIdxs = []int32{
 	0,  // 0: connector.v1.ResolveRequest.ref:type_name -> connector.v1.Ref
@@ -1239,23 +1054,23 @@ var file_credentialloader_proto_depIdxs = []int32{
 	0,  // 10: connector.v1.ResolveBatchResult.ref:type_name -> connector.v1.Ref
 	1,  // 11: connector.v1.ResolveBatchResult.material:type_name -> connector.v1.Material
 	3,  // 12: connector.v1.ResolveBatchResult.failure:type_name -> connector.v1.Failure
-	19, // 13: connector.v1.ResolveBatchResponse.results:type_name -> connector.v1.ResolveBatchResult
+	15, // 13: connector.v1.ResolveBatchResponse.results:type_name -> connector.v1.ResolveBatchResult
 	4,  // 14: connector.v1.CredentialLoader.Resolve:input_type -> connector.v1.ResolveRequest
 	6,  // 15: connector.v1.CredentialLoader.List:input_type -> connector.v1.ListRequest
 	8,  // 16: connector.v1.CredentialLoader.Lease:input_type -> connector.v1.LeaseRequest
 	10, // 17: connector.v1.CredentialLoader.Renew:input_type -> connector.v1.RenewRequest
 	12, // 18: connector.v1.CredentialLoader.Revoke:input_type -> connector.v1.RevokeRequest
-	14, // 19: connector.v1.CredentialLoader.Health:input_type -> connector.v1.HealthRequest
-	16, // 20: connector.v1.CredentialLoader.Capabilities:input_type -> connector.v1.CapabilitiesRequest
-	18, // 21: connector.v1.CredentialLoader.ResolveBatch:input_type -> connector.v1.ResolveBatchRequest
+	17, // 19: connector.v1.CredentialLoader.Health:input_type -> connector.v1.HealthRequest
+	18, // 20: connector.v1.CredentialLoader.Capabilities:input_type -> connector.v1.CapabilitiesRequest
+	14, // 21: connector.v1.CredentialLoader.ResolveBatch:input_type -> connector.v1.ResolveBatchRequest
 	5,  // 22: connector.v1.CredentialLoader.Resolve:output_type -> connector.v1.ResolveResponse
 	7,  // 23: connector.v1.CredentialLoader.List:output_type -> connector.v1.ListResponse
 	9,  // 24: connector.v1.CredentialLoader.Lease:output_type -> connector.v1.LeaseResponse
 	11, // 25: connector.v1.CredentialLoader.Renew:output_type -> connector.v1.RenewResponse
 	13, // 26: connector.v1.CredentialLoader.Revoke:output_type -> connector.v1.RevokeResponse
-	15, // 27: connector.v1.CredentialLoader.Health:output_type -> connector.v1.HealthResponse
-	17, // 28: connector.v1.CredentialLoader.Capabilities:output_type -> connector.v1.CapabilitiesResponse
-	20, // 29: connector.v1.CredentialLoader.ResolveBatch:output_type -> connector.v1.ResolveBatchResponse
+	19, // 27: connector.v1.CredentialLoader.Health:output_type -> connector.v1.HealthResponse
+	20, // 28: connector.v1.CredentialLoader.Capabilities:output_type -> connector.v1.CapabilitiesResponse
+	16, // 29: connector.v1.CredentialLoader.ResolveBatch:output_type -> connector.v1.ResolveBatchResponse
 	22, // [22:30] is the sub-list for method output_type
 	14, // [14:22] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
@@ -1268,13 +1083,14 @@ func file_credentialloader_proto_init() {
 	if File_credentialloader_proto != nil {
 		return
 	}
+	file_connector_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_credentialloader_proto_rawDesc), len(file_credentialloader_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

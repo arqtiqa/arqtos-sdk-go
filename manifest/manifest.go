@@ -179,6 +179,93 @@ func (d Doc) Validate() error {
 	return nil
 }
 
+// RequireHost is the min_host_version NEGOTIATION: it reports whether a host
+// at hostVersion is new enough to dial the connector this manifest describes.
+//
+// [Doc.Validate] proves the field is PRESENT for a provider. That is a
+// different question from whether it is SATISFIED, and only the second one
+// keeps an incompatible provider out of a running host. Before this existed,
+// min_host_version was a string a provider author wrote and nothing ever read
+// — a declaration with no consequence, which is indistinguishable from no
+// declaration at all.
+//
+// # It fails CLOSED, and that is the opposite default from error classification
+//
+// An absent or unparseable version — on EITHER side — is refused. A host that
+// cannot establish it is new enough is a host that must not dial: the whole
+// point of the field is that the provider is asserting it needs behaviour an
+// older host does not have, and guessing in the provider's favour runs a
+// connector against a contract it already said it cannot work with.
+//
+// This is deliberately the reverse of the cerr default, where an unclassified
+// failure is [cerr.KindUnknown] and escalates nothing. Both are correct, and
+// the cerr package documents the same asymmetry from its own side: an
+// unverifiable connector must not run, while an unclassified transient failure
+// must not escalate. Do not unify them.
+//
+// A version is MAJOR.MINOR.PATCH, three non-negative integers. Anything else
+// is unparseable and therefore refused, which is why this accepts no
+// pre-release or build suffix: a comparison this gate cannot make
+// unambiguously is one it must not make at all.
+func (d Doc) RequireHost(hostVersion string) error {
+	want, err := parseVersion(d.MinHostVersion)
+	if err != nil {
+		return fmt.Errorf(
+			"manifest: connector %q declares an unusable min_host_version: %w; a version gate that cannot be "+
+				"evaluated is refused rather than assumed satisfied — the provider itself is asserting it needs a "+
+				"host it can name", d.Name, err)
+	}
+	got, err := parseVersion(hostVersion)
+	if err != nil {
+		return fmt.Errorf(
+			"manifest: this host cannot state its own contract version: %w; a host that cannot establish it is new "+
+				"enough for connector %q must not dial it", err, d.Name)
+	}
+	if compareVersion(got, want) < 0 {
+		return fmt.Errorf(
+			"manifest: connector %q requires a host at min_host_version %s, and this host is %s; the connector is "+
+				"refused rather than dialled, because it has already said this host lacks behaviour it depends on",
+			d.Name, d.MinHostVersion, hostVersion)
+	}
+	return nil
+}
+
+// parseVersion splits a MAJOR.MINOR.PATCH version into its three numbers. It
+// is strict on purpose — see [Doc.RequireHost] for why an unparseable version
+// is refused rather than tolerated.
+func parseVersion(v string) ([3]int, error) {
+	var out [3]int
+	if v == "" {
+		return out, fmt.Errorf("version is empty")
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return out, fmt.Errorf("version %q is not MAJOR.MINOR.PATCH", v)
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || p != strconv.Itoa(n) {
+			return out, fmt.Errorf("version %q has a non-numeric or non-canonical component %q", v, p)
+		}
+		out[i] = n
+	}
+	return out, nil
+}
+
+// compareVersion orders two parsed versions: -1 if a is older than b, 0 if
+// they are equal, +1 if a is newer.
+func compareVersion(a, b [3]int) int {
+	for i := range a {
+		switch {
+		case a[i] < b[i]:
+			return -1
+		case a[i] > b[i]:
+			return 1
+		}
+	}
+	return 0
+}
+
 // validateCapabilities rejects any declared capability outside the closed
 // vocabulary of the class in Implements. A class with no registered
 // vocabulary is passed through — see classCapabilities for why.
