@@ -1,0 +1,301 @@
+// The Track-B wire contract for the arqtos Roster connector class: a READ-ONLY
+// view of a directory's principals, its groups, and the memberships between
+// them.
+//
+// This file is the contract for provider authors who will never read the Go
+// SDK — including authors writing in another language. Everything a host relies
+// on is stated here, in this file, rather than only in the Go doc comments of
+// the reference implementation. If the two ever disagree, this file is what the
+// wire actually carries.
+//
+// # The one rule that matters most
+//
+// A directory read that DID NOT RESOLVE must never reach a host looking like a
+// directory that is genuinely empty.
+//
+// This is the same conflation the CredentialLoader contract refuses for an
+// empty secret, and it is deliberately the SAME SHAPE here rather than a second
+// invention — but the blast radius is worse. A credential that resolves to ""
+// fails one authentication. A roster that reads as nobody removes everyone's
+// access at once: a host sweeping for departed people computes "in arqtos, no
+// longer in the directory" and revokes it, so an empty list that actually meant
+// "the read failed" deprovisions the entire estate — correctly, according to
+// everything the host was told.
+//
+// A protobuf `repeated` field DEFAULTS TO EMPTY, and proto3 does not put an
+// empty repeated field on the wire at all. So a list mapped straight onto a
+// bare `repeated` field cannot express the difference: "I read the directory
+// and found nobody" and "I did not read the directory" are the same bytes. That
+// is why every list here travels inside its own message, and why that message
+// carries an assertion flag. See PrincipalRoster below.
+//
+// # There is no way to say "partial"
+//
+// A read that stopped before covering everything it is meant to — a paginated
+// listing that failed on page 7 of 250 — is NOT expressible as a success on
+// this wire, deliberately. It is a typed failure: return a gRPC status error
+// (UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED as applicable). A host
+// cannot safely revoke access for a principal the connector never got to
+// examine, so a truncated read must not arrive as a smaller success. Sending
+// what you managed to collect, with no indication it is incomplete, is the same
+// failure as the one above with a smaller radius: the sweep revokes everyone
+// past the point your pagination broke.
+//
+// # Watch is not on this wire
+//
+// The Roster class has an optional watch capability (push notification of
+// directory change) in its Go contract. It has no RPC here, so an
+// out-of-process provider CANNOT declare it and must be polled. Polling is the
+// fallback that capability's own contract already defines for a connector
+// without it — correctness lives in the host's reconcile loop either way, and
+// an event only makes it converge sooner.
+
+syntax = "proto3";
+
+package connector.v1;
+
+// The base-contract messages (Health, Capabilities, Close) are shared by every
+// connector class rather than restated per class — see connector.proto.
+import "connector.proto";
+
+option go_package = "github.com/arqtiqa/arqtos-sdk-go/connectorpb";
+
+// Principal is ONE identity as the directory holds it.
+//
+// Every field is a directory fact. None of them is an arqtos concept: there is
+// no org, no team, no role and no entitlement here, because the moment a
+// connector reports one of those it has started deciding host policy from
+// inside a vendor adapter.
+message Principal {
+  // The directory's STABLE identifier — the one that survives a rename and a
+  // change of address. NOT the email: email changes, and a host that keyed on
+  // it treats a renamed person as a departed person plus a new hire, the first
+  // half of which is a full deprovision.
+  string id = 1;
+
+  // The login as the directory spells it, unnormalised. For display and for
+  // correlating with vendor UIs — not for identity.
+  string handle = 2;
+
+  // MAY be empty, and an empty one is not an error: machine identities
+  // frequently have no mailbox, and some directories hold people with no
+  // address either.
+  string email = 3;
+
+  string display_name = 4;
+
+  // Whether the directory considers this identity currently enabled.
+  //
+  // A DEACTIVATED IDENTITY IS STILL REPORTED, with active = false. It has not
+  // left the directory, and a host that sees it disappear concludes that it
+  // has — then revokes everything belonging to someone who is suspended, on
+  // leave, or mid-transfer. Absence from the list means absence from the
+  // DIRECTORY; this field is how "present but disabled" is said.
+  //
+  // Note that false is proto3's default for a bool, so this is the field a
+  // careless mapping loses without any error anywhere. Losing it in the other
+  // direction — reporting a suspended person as active — means their access is
+  // never withdrawn.
+  bool active = 5;
+
+  // What sort of identity this is: 0 = unknown, 1 = human, 2 = machine. It
+  // carries the numbering of the Go PrincipalKind vocabulary, which is the
+  // single source for the closed set.
+  //
+  // 0 (unknown) is the safe default: a connector that has not classified an
+  // identity says so, and a host that treats machine identities differently
+  // from human ones then knows it must apply neither rule. A number outside
+  // this set is read as 0 rather than guessed at.
+  //
+  // Reporting a machine principal (2) requires the "machine_principals"
+  // capability. A host refuses one from a connector that has not declared it:
+  // the declaration is what makes the ABSENCE of machine principals readable
+  // as a fact about the directory rather than a limit of the connector.
+  int32 kind = 6;
+}
+
+// Group is ONE group as the directory holds it.
+message Group {
+  // The directory's stable identifier, for the same reason Principal.id is.
+  string id = 1;
+  string handle = 2;
+  string display_name = 3;
+  // The groups this group is nested inside, where the directory supports
+  // nesting. Empty for a flat directory, and that emptiness is not a failure.
+  repeated string parent_ids = 4;
+}
+
+// Membership is ONE principal's membership of ONE group.
+message Membership {
+  // The member's Principal.id.
+  //
+  // It need not name a principal from ListPrincipals: some directories admit
+  // groups as members of groups, and external or guest identities a directory
+  // read does not enumerate. A host resolves what it recognises and reports
+  // what it does not; it must not treat an unrecognised member as an absent
+  // one.
+  string principal_id = 1;
+
+  // The Group.id this membership is in.
+  //
+  // Every membership in a ListMemberships response MUST carry the group id
+  // that was REQUESTED. A host refuses the whole response otherwise: it cannot
+  // attribute an entry for a group it did not ask about, and guessing the
+  // correspondence is how the wrong people end up in the wrong group.
+  string group_id = 2;
+
+  // Whether the membership is held directly. false means INHERITED through
+  // group nesting, and reporting an inherited membership requires the
+  // "transitive_membership" capability — a host refuses one from a connector
+  // that has not declared it, for the same reason as machine principals.
+  bool direct = 3;
+}
+
+// PrincipalRoster is a resolved list of principals, and the presence rules
+// below are this contract's load-bearing part. GroupRoster and
+// MembershipRoster below are the same three rules for the other two lists —
+// read this comment for all three.
+//
+// Read the four cases as a WHOLE MESSAGE, not as a repeated field:
+//
+//   1. NO PrincipalRoster message at all (the containing field is unset)
+//      -> nothing was resolved. The host treats this as a failure and refuses
+//         to produce a readable roster from it.
+//
+//   2. PrincipalRoster with one or more `principals`
+//      -> that is the directory's list. `empty_by_assertion` is ignored here;
+//         entries present always mean a resolved list.
+//
+//   3. PrincipalRoster with NO `principals` AND `empty_by_assertion = true`
+//      -> the provider ASSERTS the directory genuinely holds nobody. The host
+//         produces a readable roster of length zero.
+//
+//   4. PrincipalRoster with no `principals` and NO `empty_by_assertion`
+//      -> nothing was resolved. Identical to case 1. This is deliberate: it is
+//         the encoding a provider produces by ACCIDENT (an unset struct, a
+//         default-constructed message, an empty slice it forwarded from a
+//         failed backend call), and the accidental encoding must have the SAFE
+//         meaning.
+//
+// proto3 does not put an empty repeated field on the wire at all, so cases 3
+// and 4 differ ONLY by the boolean. That is exactly why the boolean exists:
+// without it, a conformant "genuinely empty directory" and a rogue "I read
+// nothing" are byte-identical and the host cannot tell them apart — at which
+// point every host must choose one meaning for both, and either choice is
+// wrong for the other case.
+//
+// Set empty_by_assertion ONLY if your backend can distinguish a SUCCESSFUL
+// READ THAT FOUND NOTHING from an unauthenticated, throttled, misdirected or
+// failed one. If it cannot make that distinction, you have a failure on your
+// hands, not an empty directory: return a gRPC status error instead.
+message PrincipalRoster {
+  repeated Principal principals = 1;
+  bool empty_by_assertion = 2;
+}
+
+// GroupRoster is a resolved list of groups. Same presence rules as
+// PrincipalRoster — read its comment.
+message GroupRoster {
+  repeated Group groups = 1;
+  bool empty_by_assertion = 2;
+}
+
+// MembershipRoster is a resolved list of memberships. Same presence rules as
+// PrincipalRoster — read its comment.
+//
+// A newly created group with no members is the ordinary case for
+// `empty_by_assertion` here, and it is a state a host must be able to see: the
+// access that group carried has to come off. What it is not is somewhere to
+// put a failed read.
+message MembershipRoster {
+  repeated Membership memberships = 1;
+  bool empty_by_assertion = 2;
+}
+
+message ListPrincipalsRequest {}
+
+// ListPrincipalsResponse carries the directory's identities, subject to
+// PrincipalRoster's presence rules. An UNSET roster field means nothing was
+// resolved; returning a gRPC status error is better still, because it also
+// says WHY.
+message ListPrincipalsResponse {
+  PrincipalRoster roster = 1;
+}
+
+message ListGroupsRequest {}
+
+message ListGroupsResponse {
+  GroupRoster roster = 1;
+}
+
+message ListMembershipsRequest {
+  // The group whose members are wanted. A group that DOES NOT EXIST is
+  // NOT_FOUND, never an empty roster — see the service comment below.
+  string group_id = 1;
+}
+
+message ListMembershipsResponse {
+  MembershipRoster roster = 1;
+}
+
+// Roster is the out-of-process (Track-B) service a directory provider serves
+// and a host dials. It mirrors the roster.Roster Go interface 1:1.
+//
+// # Read-only, on purpose
+//
+// There is no Create, no Update, no Delete, and none is coming. arqtos
+// provisions arqtos-side artifacts; it does not create people in someone
+// else's directory. A class that could write to a directory would make every
+// reconcile bug a destructive one.
+//
+// # Errors
+//
+// Every failure is a gRPC status error whose CODE carries the classification —
+// a host acts on the code, never on the message text:
+//
+//   NOT_FOUND           the group asked about does not exist
+//   PERMISSION_DENIED   no access, including a backend session not signed in
+//   UNAVAILABLE         the directory is transiently unreachable
+//   UNIMPLEMENTED       this connector does not support the operation
+//   INVALID_ARGUMENT    malformed input
+//   DEADLINE_EXCEEDED   the operation timed out
+//   RESOURCE_EXHAUSTED  the directory reported a quota or rate limit
+//   INTERNAL            reserved for host-detected contract violations
+//   UNKNOWN             the provider could not classify the failure
+//
+// Error MESSAGES cross the wire verbatim and may be logged by the host, so
+// they MUST NOT contain directory records about identifiable people.
+service Roster {
+  // ListPrincipals returns EVERY identity in the directory this connector
+  // serves, INCLUDING deactivated ones (with Principal.active = false).
+  rpc ListPrincipals(ListPrincipalsRequest) returns (ListPrincipalsResponse);
+
+  // ListGroups returns every group in the directory this connector serves.
+  rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse);
+
+  // ListMemberships returns the memberships of the SINGLE group named by
+  // group_id.
+  //
+  // Two things about it are refused by the host rather than merely documented:
+  //
+  //   - every returned Membership.group_id MUST equal the requested group_id;
+  //   - a group that does not exist is NOT_FOUND, not an empty roster.
+  //
+  // The second is the one that looks harmless. "This group has no members" and
+  // "there is no such group" lead a reconcile loop to opposite conclusions:
+  // given the first for the second, it removes the access that group carried.
+  rpc ListMemberships(ListMembershipsRequest) returns (ListMembershipsResponse);
+
+  // Health reports reachability of the directory.
+  rpc Health(HealthRequest) returns (HealthResponse);
+
+  // Capabilities lists what this connector supports, from the Roster class's
+  // closed vocabulary: "watch", "transitive_membership",
+  // "machine_principals". A host reads this ONCE, at dial time.
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+
+  // Close releases what the provider holds — a session against someone else's
+  // directory API, typically. It is idempotent, and it is not process
+  // teardown: the host owns that, by killing the process.
+  rpc Close(CloseRequest) returns (CloseResponse);
+}

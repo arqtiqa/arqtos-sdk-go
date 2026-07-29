@@ -21,3 +21,14 @@ lint:
     # for no benefit, so the rule is excepted here rather than the code
     # changed.
     - SERVICE_SUFFIX
+    # RPC_REQUEST_RESPONSE_UNIQUE wants each request/response message used by
+    # exactly ONE rpc. The base-contract messages in connector.proto
+    # (HealthRequest/Response, CapabilitiesRequest/Response,
+    # CloseRequest/Response) are deliberately shared by every class's service,
+    # because Health means the same thing for a secret store and for a
+    # directory and a host reads the same fields off either. Satisfying the
+    # rule would mean one copy per class — definitions growing with the class
+    # count while the meaning stayed fixed, and copies free to drift. That is
+    # the restating-instead-of-deriving failure this SDK removes everywhere
+    # else, so the rule is excepted rather than the contract duplicated.
+    - RPC_REQUEST_RESPONSE_UNIQUE

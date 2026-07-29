@@ -44,7 +44,7 @@ Ratified 2026-07-27, after both schemes were found live in one repo.
 | [`credential`](credential/) | The `CredentialLoader` connector class: `Resolve` / `List` / `Lease` / `Renew` / `Revoke`, plus `Resolution` (a resolve result in which a credential that **did not resolve cannot be read as an empty one** — an empty value is expressible, but only by asserting it with `ResolvedEmpty()`), `Material` (redacted, revealable-on-demand, wipeable secret bytes), `Lease`, and the optional `BatchResolver` operation behind `CapBatchResolve`. |
 | [`credconform`](credconform/) | The conformance harness for a `CredentialLoader`: run it in your own CI to check the contract properties a compiler cannot — no empty-success, typed failures, and a manifest whose declared capabilities match the running connector. |
 | [`roster`](roster/) | The `Roster` connector class: a **read-only** view of a directory's `Principal`s, `Group`s and `Membership`s, reported as vendor-neutral facts with no arqtos org model in them. Carries `Resolution[T]` (a list result in which a directory that **was not read cannot be read as a directory of nobody** — genuine emptiness is expressible, but only by asserting it with `EmptyRoster()`), the host-side guards `CheckResolution` / `CheckPrincipals` / `CheckMemberships`, and the optional `Watcher` operation behind `CapWatch`. |
-| [`rosterconform`](rosterconform/) | The conformance harness for a `Roster`: no unresolved-as-empty, a deactivated principal reported rather than dropped, memberships that match the group requested, typed failures, and declared capabilities that match both the running connector and the data it returns. |
+| [`rosterconform`](rosterconform/) | The conformance harness for a `Roster`: no unresolved-as-empty, a deactivated principal reported rather than dropped, memberships that match the group requested, typed failures, and declared capabilities that match both the running connector and the data it returns. `RunOutOfProcess` runs all of it against a spawned provider binary, across a real gRPC boundary — the only way the marshalling failures are visible at all. |
 | [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
@@ -249,6 +249,29 @@ run given an empty group, a group that merely has no members, or no deactivated
 principal cannot exercise the check it was meant to drive, and a report that is
 green because nothing looked is worse than no report.
 
+**If you ship your roster as an out-of-process provider (`kind: provider`), that
+run is not enough.** `Run` takes a `roster.Roster` and cannot tell a native
+connector from a host stub talking to a subprocess, so it records
+`TransportUnrecorded` rather than claiming the wire was exercised. Add
+`rosterconform.RunOutOfProcess`, which launches your built binary, dials it the
+way a host does — `min_host_version` negotiation included — and runs every check
+across a real gRPC boundary:
+
+```go
+rep, err := rosterconform.RunOutOfProcess(ctx, rosterconform.Provider{
+	Path:        pathToYourBuiltProviderBinary,
+	HostVersion: yourHostContractVersion,
+}, opts)
+```
+
+An entire class of failure is invisible in-process, because in-process nothing
+is marshalled: an unresolved read arriving as an empty directory, a suspended
+principal losing its `Active` flag, a membership arriving for a group nobody
+asked about. The spawning lives in the SDK rather than in your tests because a
+connector repository forbids `os/exec` in its own package tree — see
+[`examples/roster-provider/roundtrip_test.go`](examples/roster-provider/roundtrip_test.go)
+for the whole pattern.
+
 ## Scaffolding a new connector
 
 Rather than copying the skeleton above by hand, a scaffolder generates a working
@@ -355,16 +378,29 @@ provider binary (Track-B), talked to over gRPC via
 [`hashicorp/go-plugin`](https://github.com/hashicorp/go-plugin).
 
 This module also ships the Track-B wire layer built on top of that same
-contract: the `.proto`/generated stubs (`proto/`, `connectorpb/`), the
-marshalling and error-mapping helpers (`transport/`), the go-plugin
-handshake and dispense wiring (`plugin/`), and the provider manifest schema
-(`manifest/`). See
+contract, for **both** connector classes: the `.proto`/generated stubs
+(`proto/`, `connectorpb/`), the marshalling and error-mapping helpers
+(`transport/`), the go-plugin handshake and dispense wiring (`plugin/`), and
+the provider manifest schema (`manifest/`) — whose `min_host_version` is
+negotiated at dial time, not merely declared. See
 [`docs/CONTRACT.md`](docs/CONTRACT.md#track-b-the-out-of-process-wire-contract)
 for the full layer-by-layer breakdown, and
 [`examples/credentialloader-provider/`](examples/credentialloader-provider/main.go)
-for a complete, vendor-free reference provider to copy as a starting point
-for a real one. Out of scope here (a separate, later contract): the
-host-side registry and dial/broker wiring, and a `secrets.Provider` adapter.
+or [`examples/roster-provider/`](examples/roster-provider/main.go) for a
+complete, vendor-free reference provider to copy as a starting point for a
+real one.
+
+The one rule a provider author must not get wrong is the same for both classes:
+a read that resolved **nothing** must not arrive at the host looking like an
+empty secret or an empty directory. Emptiness is *asserted* on the wire, never
+inferred from an absent field — because a protobuf `repeated` field and a
+zero-length `bytes` field are both simply absent, so the encoding a hurried
+author emits by accident has to mean "unresolved". For a roster the cost of
+getting it wrong is an estate-wide deprovision.
+
+Out of scope here (a separate, later contract): the host-side connector
+registry — discovery, lifecycle and the broker wiring for managing many
+connectors at once — and a `secrets.Provider` adapter.
 
 ## License
 

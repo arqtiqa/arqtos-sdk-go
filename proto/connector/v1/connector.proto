@@ -1,0 +1,57 @@
+// The BASE contract every arqtos connector class shares on the wire,
+// independent of class — the proto half of connector.Connector.
+//
+// These messages live in their own file, and are imported by every class's
+// service, because they are ONE contract operation rather than one per class.
+// Health means the same thing for a credential store and for a directory, and
+// a host reads the same two fields off either. Duplicating them per class
+// (RosterHealthRequest, CredentialLoaderHealthRequest, ...) would make the
+// number of definitions grow with the number of classes while the meaning
+// stayed fixed, and the copies would then drift — which is the failure mode
+// this SDK removes everywhere else by deriving instead of restating.
+//
+// Consequence for buf lint: RPC_REQUEST_RESPONSE_UNIQUE wants each
+// request/response message used by exactly one RPC, and sharing these
+// deliberately breaks that. The rule is excepted in buf.yaml, with the reason
+// recorded there.
+
+syntax = "proto3";
+
+package connector.v1;
+
+option go_package = "github.com/arqtiqa/arqtos-sdk-go/connectorpb";
+
+message HealthRequest {}
+
+// HealthResponse reports reachability of the backing store. `status` is
+// 0 = healthy, 1 = degraded, 2 = unavailable — the connector.HealthStatus
+// vocabulary, whose numbering is what crosses here.
+//
+// It is not an auth check and it is not a conformance verdict: it says whether
+// the thing behind this connector can be reached right now, so a host can
+// circuit-break on it.
+message HealthResponse {
+  int32 status = 1;
+  string detail = 2;
+}
+
+message CapabilitiesRequest {}
+
+// CapabilitiesResponse lists the optional behaviours this connector supports,
+// drawn from the CLOSED capability vocabulary of the class it implements.
+//
+// This list is load-bearing at DIAL TIME, not only for documentation: a host
+// decides from it what it may ask this connector to do, and it must agree with
+// the connector's shipped manifest. Declaring a capability the provider does
+// not honour is worse than declaring nothing at all — the host plans for a
+// behaviour that is not there.
+message CapabilitiesResponse {
+  repeated string capabilities = 1;
+}
+
+message CloseRequest {}
+
+// CloseResponse is the acknowledgement that the provider released what it
+// held. Close is IDEMPOTENT: a second Close, or a Close after the host has
+// already killed the process, is not an error.
+message CloseResponse {}

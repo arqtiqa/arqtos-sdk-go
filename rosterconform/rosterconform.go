@@ -124,20 +124,40 @@
 // It cannot happen here, for two reasons, and both are load-bearing rather
 // than incidental:
 //
-//   - This class is in-process only. "Implements roster.Watcher" is a Go type
-//     assertion against the connector's own type, which no declaration can
-//     influence.
+//   - "Implements roster.Watcher" is a Go type assertion against the
+//     connector's own type, which no declaration can influence. That holds
+//     across the Track-B boundary too, and by construction rather than by
+//     luck: watch has no RPC on that wire (see plugin/roster.go), so the
+//     dispensed host stub never satisfies roster.Watcher whatever the provider
+//     declares. The consequence for a provider author is real and is stated
+//     there — an out-of-process Roster connector cannot declare watch, and is
+//     polled.
 //   - The two behavioural capabilities are judged from the DATA the connector
 //     returned — a principal whose Kind is machine, a membership whose Direct
-//     is false — and data is not derived from a manifest either.
+//     is false — and data is not derived from a manifest either. This is what
+//     keeps them independent over the wire, where the host stub DOES read the
+//     capability RPC (it needs the declaration to apply the host-side guards):
+//     the declaration reaches the guards, never the judgement.
 //
 // The tests drive each of these checks through all four combinations of
 // (declared, actually the case) and pin the verdict of each. A tautological
 // check can only produce two distinct verdicts across those four inputs, so
 // the truth table is what proves the check independent rather than a comment
-// asserting it. If a Track-B transport is added for this class later, the stub
-// must NOT derive its Watcher-ness from the capability RPC, or that proof
-// silently stops meaning anything.
+// asserting it. Whoever gives watch an RPC must NOT derive the stub's
+// Watcher-ness from the capability RPC, or that proof silently stops meaning
+// anything — probe the provider's behaviour instead.
+//
+// # In-process is not the same run
+//
+// [Run] takes a roster.Roster, so it works unchanged against a host stub
+// talking to a subprocess — but it cannot TELL, and a report from it records
+// [TransportUnrecorded] rather than claiming the wire was exercised.
+// [RunOutOfProcess] spawns a provider binary and runs every check across a
+// real gRPC boundary. A connector shipped as an out-of-process provider needs
+// that one: the entire class of marshalling bugs — an unresolved read arriving
+// as an empty directory, a suspended principal losing its flag, a membership
+// arriving for a group nobody asked about — is invisible to a run that never
+// serialised anything.
 //
 // # The harness is driven by non-compliant connectors too
 //
@@ -277,9 +297,34 @@ type Report struct {
 	// Connector is the name the manifest gives the connector under test, so a
 	// failure is attributable without cross-referencing the run.
 	Connector string
+	// Transport records HOW the connector under test was reached, because a
+	// green report does not mean the same thing in both cases.
+	//
+	// [Run] takes a roster.Roster and cannot tell a natively-compiled
+	// connector from a host stub talking to a subprocess — so it records
+	// [TransportUnrecorded] rather than guessing, and a report carrying that
+	// is not evidence the wire was exercised. [RunOutOfProcess] knows, and
+	// says so.
+	//
+	// The distinction is the same "green because nothing looked" failure this
+	// package's own checks are built around, one level up: an out-of-process
+	// connector whose conformance was only ever proved in-process has had the
+	// entire class of wire bugs go unexamined.
+	Transport string
 	// Results holds one entry per check that was run, in run order.
 	Results []Result
 }
+
+// Transport values for [Report.Transport].
+const (
+	// TransportUnrecorded is what [Run] records: it was handed a
+	// roster.Roster and cannot know what is behind it.
+	TransportUnrecorded = "transport not recorded"
+	// TransportOutOfProcess is what [RunOutOfProcess] records — the
+	// connector ran as a separate process and every check crossed a real
+	// gRPC boundary.
+	TransportOutOfProcess = "out-of-process"
+)
 
 // OK reports whether every check that ran passed.
 func (r Report) OK() bool { return len(r.Failures()) == 0 }
@@ -314,7 +359,7 @@ func (r Report) Err() error {
 // String renders the report as one line per check, for CI logs.
 func (r Report) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "rosterconform: connector=%s", r.connectorName())
+	fmt.Fprintf(&b, "rosterconform: connector=%s transport=%s", r.connectorName(), r.transportName())
 	for _, res := range r.Results {
 		status := "PASS"
 		if !res.Pass {
@@ -326,6 +371,13 @@ func (r Report) String() string {
 		}
 	}
 	return b.String()
+}
+
+func (r Report) transportName() string {
+	if r.Transport == "" {
+		return TransportUnrecorded
+	}
+	return r.Transport
 }
 
 func (r Report) connectorName() string {
@@ -364,7 +416,7 @@ func Run(ctx context.Context, c roster.Roster, opts Options) (Report, error) {
 		}
 	}
 
-	rep := Report{Connector: opts.Manifest.Name}
+	rep := Report{Connector: opts.Manifest.Name, Transport: TransportUnrecorded}
 	runtime := c.Capabilities()
 
 	checkManifest(&rep, opts.Manifest)

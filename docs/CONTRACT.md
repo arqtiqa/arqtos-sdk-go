@@ -11,10 +11,11 @@ contract method returns errors in.
 | [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
 
 Both classes are implemented by **native** (in-process, compiled into the host)
-connectors. `CredentialLoader` is additionally implemented by
-**out-of-process** connectors; nothing in its section is specific to either
-runtime shape — see [Versioning and the wire protocol](../README.md#versioning-and-the-wire-protocol) for where the out-of-process wire
-protocol is defined.
+connectors, and both are also implemented by **out-of-process** (Track-B)
+connectors. Nothing in either class's section below is specific to a runtime
+shape: the wire layer only ever marshals to and from the same Go types — see
+[Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract)
+for where each class's wire protocol is defined.
 
 The set of classes is **closed**: `connector.Classes()` is the whole list,
 `Class.Valid()` rejects anything outside it, and the `connector.yml`
@@ -636,6 +637,39 @@ is green because nothing looked is worse than no report. In particular:
   cannot see whether suspended people survive the read, and that is the most
   destructive failure this contract admits.
 
+#### ⚠️ In-process is not the same run
+
+`Run` takes a `roster.Roster`, so it works unchanged against a host stub talking
+to a subprocess — but it **cannot tell**, and a report from it records
+`TransportUnrecorded` rather than claiming the wire was exercised. If you ship
+`kind: provider`, run `rosterconform.RunOutOfProcess` as well:
+
+```go
+rep, err := rosterconform.RunOutOfProcess(ctx, rosterconform.Provider{
+	Path:        pathToYourBuiltProviderBinary,
+	HostVersion: yourHostContractVersion,
+}, opts)
+```
+
+It launches the binary, dials it exactly as a host does — including the
+`min_host_version` negotiation — and runs every check above across a real gRPC
+boundary. The entire class of marshalling failure is invisible to an in-process
+run, because in-process nothing is marshalled: an unresolved read arriving as an
+empty directory, a suspended principal losing its `Active` flag, a membership
+arriving for a group nobody asked about. `TestAConnectorThatOnlyPassesInProcessFailsOverTheWire`
+in [`rosterconform/outofprocess_test.go`](../rosterconform/outofprocess_test.go)
+is that gap made falsifiable: one connector, green in-process, red across the
+wire, with exactly one check flipping.
+
+The exec lives here rather than in your own tests on purpose: a connector
+repository forbids `os/exec` in its own package tree, so it cannot spawn its own
+binary. The harness does it instead.
+
+A returned error means the run could not be **carried out** — no path, a binary
+that will not launch, or a provider the negotiation refused. A refused provider
+is not a conformance failure: it was never dialled, so there is nothing to
+report checks about.
+
 #### Presence is not substance
 
 `lists/resolve-not-empty` demands that the principal list hold principals AND
@@ -705,19 +739,24 @@ very capability declaration the check was verifying.
 
 It cannot happen here, and both reasons are load-bearing:
 
-- This class is **in-process only**. "Implements `roster.Watcher`" is a Go type
-  assertion against the connector's own type, which no declaration can
-  influence.
+- "Implements `roster.Watcher`" is a Go type assertion against the connector's
+  own type, which no declaration can influence. That holds across the Track-B
+  boundary too, by construction rather than by luck: **watch has no RPC on that
+  wire**, so a dispensed host stub never satisfies `roster.Watcher` whatever the
+  provider declares.
 - The two behavioural capabilities are judged from **the data the connector
   returned** — a `Kind` of machine, a `Direct` of false — and data is not derived
-  from a manifest either.
+  from a manifest either. That is what keeps them independent over the wire,
+  where the host stub *does* read the capability RPC (it needs the declaration
+  to apply the host-side guards): the declaration reaches the guards, never the
+  judgement.
 
 The tests drive each of these checks through all four combinations of *(declared,
 actually the case)* and pin the verdict of each. A check reading one signal twice
 can only produce two distinct verdicts across those four inputs, so the truth
-table is the proof; the comment is not. **If a Track-B transport is added for
-this class, its host-side stub must not derive its `Watcher`-ness from a
-capability RPC**, or that proof silently stops meaning anything.
+table is the proof; the comment is not. **Whoever gives watch an RPC must not
+derive the stub's `Watcher`-ness from the capability RPC**, or that proof
+silently stops meaning anything — probe the provider's behaviour instead.
 
 Each check also has a test driving it with a connector built to violate exactly
 the property it checks — one reporting an unresolved list as a success, one
@@ -746,18 +785,20 @@ shape a harness can distinguish from the truth from the outside.
 - **No writing to a directory.** Read-only, permanently.
 - **No reconcile loop.** That is the host's. This contract is only what the loop
   consumes.
-- **No out-of-process transport yet.** In-process first; the wire contract for
-  this class lands with its own design, and until then a roster connector is
-  `kind: native`.
+- **No push notification out-of-process.** `CapWatch` has no RPC on the Track-B
+  wire, so a `kind: provider` roster connector cannot declare it and is polled.
+  Polling is the fallback that capability's contract already defines for a
+  connector without it: correctness lives in the host's reconcile loop either
+  way, and an event only makes it converge sooner.
 
 ## Versioning
 
 This module defines the **Go semantic contract** above: interfaces, value
 types, and the error taxonomy. Everything on this page applies identically
-whether a `CredentialLoader` is compiled into the host (native) or runs
-out-of-process (Track-B) — the wire layer below only ever marshals to/from
-the same `credential.CredentialLoader`, `ref.Ref`, `credential.Lease`, and
-`cerr.Error` types.
+whether a connector is compiled into the host (native) or runs out-of-process
+(Track-B) — the wire layer below only ever marshals to/from the same
+`credential.CredentialLoader`, `roster.Roster`, `ref.Ref`,
+`credential.Lease`, `roster.Resolution[T]` and `cerr.Error` types.
 
 ### Track-B: the out-of-process wire contract
 
@@ -765,8 +806,20 @@ A Track-B connector is a separate binary — a **provider** — that a host
 launches as a subprocess and talks to over gRPC via
 [`hashicorp/go-plugin`](https://github.com/hashicorp/go-plugin). The wire
 layer composes go-plugin rather than reinventing process/handshake/transport
-management; this module adds only the pieces specific to the
-`CredentialLoader` class:
+management; this module adds only the pieces specific to each connector class.
+
+The base-contract messages — `HealthRequest`/`HealthResponse`,
+`CapabilitiesRequest`/`CapabilitiesResponse`, `CloseRequest`/`CloseResponse` —
+are defined **once**, in
+[`proto/connector/v1/connector.proto`](../proto/connector/v1/connector.proto),
+and shared by every class's service. `Health` means the same thing for a secret
+store and for a directory, and a host reads the same fields off either; one copy
+per class would make the number of definitions grow with the class count while
+the meaning stayed fixed, and the copies would be free to drift. (buf's
+`RPC_REQUEST_RESPONSE_UNIQUE` is excepted for exactly that, with the reason
+recorded in `buf.yaml`.)
+
+#### `CredentialLoader` over the wire
 
 | Layer | Package | What it is |
 |---|---|---|
@@ -806,10 +859,90 @@ process actually exits (dies-with-session); [`conform_test.go`](../examples/cred
 runs `credconform` against `memLoader` in-process and requires both
 capabilities to be conformant — the pattern to copy for verifying your own.
 
-Out of scope here (a separate, later Story): the host-side registry, the
-go-plugin dial + broker wiring, and a `secrets.Provider` adapter — this
-module ships only the provider-side wire contract and a self-contained
-reference implementation.
+#### `Roster` over the wire
+
+| Layer | Package | What it is |
+|---|---|---|
+| Contract | [`proto/connector/v1/roster.proto`](../proto/connector/v1/roster.proto) | The `.proto` defining `Principal`/`Group`/`Membership`, the three roster-list messages, and the `Roster` gRPC service (`ListPrincipals`, `ListGroups`, `ListMemberships`, `Health`, `Capabilities`, `Close`). Like the `CredentialLoader` proto it carries the presence rules **in the file**, for authors who will never read the Go. |
+| Marshalling | [`transport/roster.go`](../transport/roster.go) | `PrincipalToPB`/`FromPB`, `GroupToPB`/`FromPB`, `MembershipToPB`/`FromPB`, and the three `…RosterToPB`/`…RosterFromPB` pairs that own the presence + `empty_by_assertion` rules. Errors share `ErrToStatus`/`ErrFromStatus` with the other class. |
+| Transport binding | [`plugin/roster.go`](../plugin/roster.go) | `plugin.RosterName`, `plugin.RosterPluginMap(impl)` for the **provider** side, and `plugin.RosterHostPluginMap(name, manifest, hostVersion)` for the **host** side. `Dispense(plugin.RosterName)` returns a value that itself satisfies `roster.Roster`. |
+| Conformance | [`rosterconform.RunOutOfProcess`](../rosterconform/outofprocess.go) | Launches a provider binary, dials it, and runs every check across the real boundary. |
+
+**⚠️ `Resolution[T]` survives the wire, and a naive mapping destroys it.** This is
+the part of the Roster wire to get right, and it is the same rule as `Material`'s
+rather than a second invention:
+
+| Wire | Meaning |
+|---|---|
+| no roster message | nothing was resolved |
+| roster message with entries | a list (the assertion flag is ignored) |
+| roster message, no entries, `empty_by_assertion = true` | a genuinely empty directory |
+| roster message, no entries, **no** assertion | **nothing was resolved** |
+
+The last row is the load-bearing one, for the same mechanical reason as the
+credential case: **a protobuf `repeated` field defaults to empty, and proto3 does
+not put an empty one on the wire at all.** A list mapped straight onto a bare
+`repeated` field therefore erases the difference between a failed read and a
+directory that genuinely holds nobody — they are the same bytes, and no host can
+recover the distinction. The blast radius is worse than the credential case: a
+credential resolving to `""` fails one authentication, while a roster reading as
+nobody makes a host's offboarding sweep revoke **everyone's** access at once,
+correctly according to everything it was told.
+
+That is not a theoretical risk in this repo's history: the naive mapping was
+built first and the guard test watched to fail against it, on all four accidental
+encodings, before the wrapper message and the flag were introduced. The test is
+`TestUnresolvedRosterDoesNotCrossAsAnEmptyDirectory` in [`plugin/roster_test.go`](../plugin/roster_test.go).
+
+**No `partial` on the wire.** A read that stopped early is a typed failure, not a
+smaller success, so there is deliberately no encoding for one to arrive in — a
+host cannot safely revoke access for a principal the connector never examined.
+See [A truncated read cannot look like a complete one either](#a-truncated-read-cannot-look-like-a-complete-one-either).
+
+**The host stub is a guard, not just a transport.** Everything a provider sends
+passes through the `roster` package's own host-side checks —
+`roster.CheckPrincipals`, `roster.CheckMemberships`, `roster.CheckResolution` —
+before a host sees it. So an out-of-process provider cannot make a read that
+resolved nothing look like an empty directory, cannot report a machine principal
+or an inherited membership it has not declared, and cannot return a membership
+for a group the host did not ask about: each comes back as a
+`*roster.FaultError` **naming that connector**. The stub reads the provider's
+`Capabilities` once, at dial time, because the guards need the declaration and
+capabilities are static in this contract; a failed probe refuses the dial rather
+than assuming an empty set, which would attribute the host's own missing
+question to the provider.
+
+**`min_host_version` is negotiated, not merely declared.**
+`manifest.Doc.RequireHost(hostVersion)` is the gate, and
+`plugin.RosterHostPluginMap` is the only host-side constructor — it requires both
+the manifest and the host's version, so the gate cannot be left off. It **fails
+closed**: an absent or unparseable version on either side is refused, because a
+host that cannot establish it is new enough must not dial a provider that has
+already said it needs more. That is deliberately the reverse of the `cerr`
+default (an unclassified failure escalates nothing); the two are not to be
+unified — see [`Unknown` does not trip the breaker](#unknown-does-not-trip-the-breaker).
+
+**Reference provider.** [`examples/roster-provider/`](../examples/roster-provider/main.go)
+is a complete, vendor-free `Roster` provider: a placeholder directory holding an
+active principal, a **suspended** one, a machine identity, nested groups and an
+empty group, served via `goplugin.Serve`. Copy `main.go` as the starting point
+for a real one (Okta, Entra, Google Workspace, a code host's teams) — swap the
+method bodies for calls to the directory API; the `plugin.Handshake` +
+`plugin.RosterPluginMap(...)` + `goplugin.Serve` wiring does not change. It
+declares and implements two capabilities beyond the baseline
+(`transitive_membership`, `machine_principals`) so a copier sees a capability
+wired end to end. [`conform_test.go`](../examples/roster-provider/conform_test.go)
+runs `rosterconform` in-process; [`roundtrip_test.go`](../examples/roster-provider/roundtrip_test.go)
+builds the binary and runs `rosterconform.RunOutOfProcess` against it as a real
+subprocess, drives the host-side dial API directly, and confirms the process
+actually exits after `Kill` (dies-with-session).
+
+Out of scope here (a separate, later Story): the host-side connector
+**registry** — discovery, manifest loading, lifecycle and the broker wiring a
+host needs to manage many connectors at once — and a `secrets.Provider`
+adapter. What this module ships is each class's wire contract, the host-side
+stub and dial helpers a host builds that registry *on*, and a self-contained
+reference provider per class.
 
 ## Declarative connectors: the MCP protocol surface
 
