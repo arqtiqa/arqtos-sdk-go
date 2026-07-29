@@ -19,6 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/arqtiqa/arqtos-sdk-go/codeci"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/ref"
@@ -89,6 +90,7 @@ var knownImplements = func() map[connector.Class]bool {
 var classCapabilities = map[connector.Class]connector.Capabilities{
 	connector.ClassCredentialLoader: credential.KnownCapabilities(),
 	connector.ClassRoster:           roster.KnownCapabilities(),
+	connector.ClassCodeCI:           codeci.KnownCapabilities(),
 }
 
 // envNameRE matches a bare environment-variable NAME (e.g. INFISICAL_TOKEN):

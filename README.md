@@ -7,8 +7,8 @@ internals.
 
 A connector is a small, focused adapter between arqtos and one external system
 (a secret store, a directory, a tracker, ...). This module defines the connector
-classes — **`CredentialLoader`** and **`Roster`** — plus the shared building
-blocks every connector class is built from.
+classes — **`CredentialLoader`**, **`Roster`** and **`CodeCI`** — plus the shared
+building blocks every connector class is built from.
 
 This module is dependency-light by design: the semantic contract itself is
 stdlib-only. Third-party dependencies are confined to the packages that need
@@ -45,6 +45,8 @@ Ratified 2026-07-27, after both schemes were found live in one repo.
 | [`credconform`](credconform/) | The conformance harness for a `CredentialLoader`: run it in your own CI to check the contract properties a compiler cannot — no empty-success, typed failures, and a manifest whose declared capabilities match the running connector. |
 | [`roster`](roster/) | The `Roster` connector class: a **read-only** view of a directory's `Principal`s, `Group`s and `Membership`s, reported as vendor-neutral facts with no arqtos org model in them. Carries `Resolution[T]` (a list result in which a directory that **was not read cannot be read as a directory of nobody** — genuine emptiness is expressible, but only by asserting it with `EmptyRoster()`), the host-side guards `CheckResolution` / `CheckPrincipals` / `CheckMemberships`, and the optional `Watcher` operation behind `CapWatch`. |
 | [`rosterconform`](rosterconform/) | The conformance harness for a `Roster`: no unresolved-as-empty, a deactivated principal reported rather than dropped, memberships that match the group requested, typed failures, and declared capabilities that match both the running connector and the data it returns. `RunOutOfProcess` runs all of it against a spawned provider binary, across a real gRPC boundary — the only way the marshalling failures are visible at all. |
+| [`codeci`](codeci/) | The `CodeCI` connector class: pull/merge-request lifecycle (`CreatePR` / `ListPRs` / `MergePR` / `GetDiff`), `ListBranches`, and CI status (`GetCheckRuns` / `GetWorkflowRun`), plus the optional `RerunWorkflow` / `CancelWorkflow` behind `CapCIControl`. Carries `Resolution[T]` (the same fail-closed list shape as `roster.Resolution`, reimplemented here with CI-appropriate wording rather than aliased, so a failed `ListPRs` is never reported as "roster of nobody"), and requires `MergePR` to validate its `MergeMethod` and refuse a draft **before** attempting a merge. Distinct from a code-host-administration class: same vendor, different contract. |
+| [`codeciconform`](codeciconform/) | The conformance harness for a `CodeCI`: no empty-success across `ListPRs`/`ListBranches`/`GetCheckRuns`/`GetDiff`, typed fail-closed reads, `MergePR` refusing an unspecified method and a draft (each exercised against a real fixture, never merging it), and declared capabilities that match both the manifest and the running connector's actual `CIController` implementation — checked by type assertion, never derived from `Capabilities()` itself. |
 | [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
