@@ -1,0 +1,61 @@
+package main
+
+import (
+	"context"
+	_ "embed"
+	"testing"
+
+	"github.com/arqtiqa/arqtos-sdk-go/manifest"
+	"github.com/arqtiqa/arqtos-sdk-go/rosterconform"
+)
+
+// connectorYAML embeds the connector.yml this binary actually ships, so this
+// test and the running binary can never read two different manifests.
+//
+//go:embed connector.yml
+var connectorYAML []byte
+
+// thisManifest parses and validates connector.yml.
+func thisManifest(t *testing.T) manifest.Doc {
+	t.Helper()
+	doc, err := manifest.Parse(connectorYAML)
+	if err != nil {
+		t.Fatalf("connector.yml does not parse: %v", err)
+	}
+	if err := doc.Validate(); err != nil {
+		t.Fatalf("connector.yml does not validate: %v", err)
+	}
+	return doc
+}
+
+// TestConformantInProcess is the fast, always-on half of conformance: no
+// subprocess, no serialisation. It is NOT sufficient on its own — an
+// out-of-process run is what actually exercises the wire this connector
+// ships over (see main.go's package comment) — but it is the signal you get
+// on every `go test ./...` while you replace the placeholder methods with
+// real ones.
+func TestConformantInProcess(t *testing.T) {
+	rep, err := rosterconform.Run(context.Background(), &{{.StructName}}{}, rosterconform.Options{
+		Manifest:           thisManifest(t),
+		Group:              fixtureGroup,
+		AbsentGroup:        fixtureAbsentGroup,
+		SuspendedPrincipal: fixtureSuspended,
+	})
+	if err != nil {
+		t.Fatalf("rosterconform.Run could not be carried out: %v", err)
+	}
+	if !rep.OK() {
+		t.Fatalf("this connector must be conformant, including every declared capability:\n%s", rep)
+	}
+	if rep.Transport != rosterconform.TransportUnrecorded {
+		t.Fatalf("Transport = %q; an in-process Run cannot know what is behind a roster.Roster and must not claim it does",
+			rep.Transport)
+	}
+}
+
+// TestManifestValidates covers what a host checks before it loads anything:
+// connector.yml parses, implements Roster, declares only capabilities in the
+// Roster vocabulary, and states min_host_version (required for kind: provider).
+func TestManifestValidates(t *testing.T) {
+	_ = thisManifest(t)
+}

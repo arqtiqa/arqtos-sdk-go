@@ -50,6 +50,7 @@ Ratified 2026-07-27, after both schemes were found live in one repo.
 | [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
+| [`scaffold`](scaffold/) / [`cmd/create-arqtos-connector`](cmd/create-arqtos-connector/) | Generates a Track-B `Roster` connector skeleton — see [Scaffolding a new connector](#scaffolding-a-new-connector). |
 
 See [`docs/CONTRACT.md`](docs/CONTRACT.md) for the full method-by-method semantics
 and [`docs/SECURITY.md`](docs/SECURITY.md) for the security rules every connector
@@ -276,10 +277,31 @@ for the whole pattern.
 
 ## Scaffolding a new connector
 
-Rather than copying the skeleton above by hand, a scaffolder generates a working
-connector project (module, stub implementation, tests) from a template — see
-`create-arqtos-connector`. Use it to start a new `CredentialLoader` connector
-project with the compile-time contract check already wired in.
+Rather than copying the skeleton above by hand, [`cmd/create-arqtos-connector`](cmd/create-arqtos-connector/)
+generates a complete, buildable **Track-B (out-of-process) `Roster` connector**
+project — the shape a third-party connector actually ships, and the one
+`rosterconform.RunOutOfProcess` is the gate for:
+
+```
+go run ./cmd/create-arqtos-connector \
+  -name okta-roster \
+  -module github.com/you/okta-roster-connector \
+  -out ./okta-roster-connector
+cd ./okta-roster-connector
+go build ./...
+go test ./...
+```
+
+The generated project — `go.mod` pinned to this module at `v0.2.0` (the tag
+carrying the Roster wire protocol and the out-of-process harness; no
+`GOPRIVATE` or credential setup, because this module is public), `main.go`,
+`connector.yml`, and an in-process conformance test — **compiles and passes
+rosterconform immediately**, against a fixed placeholder directory, before a
+single line of real logic exists. `main.go`'s comments carry the two mistakes
+this contract has already made someone pay for once each: an unresolved read
+must never arrive as an empty directory, and `Capabilities()` must be
+hardcoded honest rather than derived from `connector.yml`. It also does not,
+and cannot, declare `watch` — see [`plugin/roster.go`](plugin/roster.go).
 
 ## Verifying a connector against the contract
 
