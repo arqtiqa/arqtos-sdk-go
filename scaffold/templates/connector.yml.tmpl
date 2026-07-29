@@ -1,0 +1,23 @@
+# connector.yml — the manifest a host reads BEFORE it ever launches this
+# binary. See arqtos-sdk-go's manifest package (manifest.Parse / Doc.Validate)
+# and docs/CONTRACT.md for the full schema.
+#
+# capabilities below MUST exactly match what main.go's Capabilities() method
+# returns, and neither may be derived from the other — see the comment on
+# Capabilities() in main.go for why. rosterconform's capability-honesty check
+# is only worth anything because these two are edited by hand, separately,
+# and can therefore actually drift when someone forgets one side.
+#
+# roster.CapWatch ("watch") is not listed, and must not be: it has no RPC on
+# this SDK's Track-B wire (see main.go's package comment), so an
+# out-of-process provider cannot honour it. A host without it already polls.
+name: {{.Name}}
+implements: Roster
+kind: provider
+# min_host_version gates dial-time: a host older than this is refused before
+# it ever calls a method. Keep this in sync with main.go's minHostVersion
+# constant.
+min_host_version: "{{.MinHostVersion}}"
+capabilities:
+  - transitive_membership
+  - machine_principals
