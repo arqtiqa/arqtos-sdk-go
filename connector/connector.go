@@ -16,6 +16,14 @@ const (
 	// memberships between them (an identity provider, a workspace directory,
 	// a code host's teams, a flat file). See the roster package.
 	ClassRoster Class = "Roster"
+	// ClassCodeCI is pull-request, branch, diff and CI check/workflow-run
+	// operations against a code host's PR/CI surface — create/list/merge a
+	// pull or merge request, read its diff, list branches, read check status
+	// and CI run state. It is distinct from a code-host-administration class
+	// (repository creation, webhooks, runner tokens): same vendor, different
+	// contract, so an org can pair either half with a different backend. See
+	// the codeci package.
+	ClassCodeCI Class = "CodeCI"
 	// ClassRecordStore, ClassTracker, ClassCodeHost, ... land with their designs.
 )
 
@@ -27,6 +35,7 @@ const (
 var classes = []Class{
 	ClassCredentialLoader,
 	ClassRoster,
+	ClassCodeCI,
 }
 
 // Classes returns the closed set of connector classes, sorted, as a copy. A
