@@ -1,0 +1,75 @@
+# Publish a GitHub Release when a v* tag is pushed.
+#
+# ⚠️ THIS FILE IS DUPLICATED, DELIBERATELY, AND MUST STAY BYTE-IDENTICAL.
+#
+# The same file lives in arqtos-connectors and arqtos-sdk-go. It is NOT a shared
+# reusable workflow, because arqtos-sdk-go is PUBLIC and every candidate host is
+# private: calling a private reusable workflow would give the public SDK a
+# dependency on private arqtiqa infrastructure (against arqtos-sdk-go#13) and
+# would make the SDK unforkable — an outside contributor could not resolve the
+# workflow at all.
+#
+# Divergence is caught instead of prevented: a drift gate in arqtos-connectors
+# compares the two copies and FAILS when they differ (arqtos#288). Edit one, and
+# that gate goes red until the other matches. Do not "fix" a drift failure by
+# deleting the gate.
+#
+# Why this exists: without it a pushed tag creates the git tag and nothing else.
+# Go module resolution is satisfied by the tag alone, so builds keep working and
+# nothing goes red — the missing Release is visible only to a human looking for
+# it. Four tags cut on 2026-07-30 had no Release until they were made by hand.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # actions/checkout leaves the tag REF but not necessarily the annotated tag
+      # OBJECT, and the annotation is the release notes. Fetch it explicitly.
+      - name: Fetch the annotated tag object
+        run: git fetch --force origin "+refs/tags/*:refs/tags/*"
+
+      # A lightweight tag carries no message, so --notes-from-tag would publish an
+      # empty release. Refuse loudly rather than shipping a blank record.
+      - name: Refuse a lightweight tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          KIND="$(git cat-file -t "$TAG" 2>/dev/null || echo missing)"
+          if [ "$KIND" != "tag" ]; then
+            echo "::error::$TAG is a $KIND, not an annotated tag. The release notes come from the tag annotation, so an unannotated tag would publish an empty release. Re-cut it with: git tag -a $TAG -F <notes-file>"
+            exit 1
+          fi
+          if [ -z "$(git tag -l "$TAG" --format='%(contents)' | tr -d '[:space:]')" ]; then
+            echo "::error::$TAG is annotated but its message is empty; there are no notes to publish."
+            exit 1
+          fi
+
+      - name: Create the GitHub Release from the tag annotation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Idempotent on a workflow re-run: an existing release is reported and
+          # accepted rather than failing red, because a re-run is legitimate and a
+          # gate that cries wolf gets ignored. It is NOT created twice.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::a release already exists for $TAG — leaving it untouched"
+            exit 0
+          fi
+          gh release create "$TAG" --title "$TAG" --notes-from-tag --verify-tag
+          echo "::notice::published the release for $TAG from its tag annotation"
