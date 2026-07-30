@@ -2,12 +2,19 @@ GO ?= go
 
 # The targets here are the same gates .github/workflows/ci.yml runs, so a green
 # `make ci` locally means the same thing as a green run on the branch.
-.PHONY: all build test test-cover cover-gate lint fmt vet staticcheck verify tidy-check ci
+.PHONY: all build test test-cover cover-gate lint fmt vet staticcheck verify tidy-check ip-isolation ci
 
 all: build lint test
 
 build:
 	$(GO) build ./...
+
+# Walks both the require graph (go mod graph) and the import graph
+# (go list -deps -test) for any arqtiqa module other than this one — see the
+# script for why neither graph alone is the full picture and why -test
+# matters. This is the IP boundary between the public SDK and arqtos-cli.
+ip-isolation:
+	@GO=$(GO) bash scripts/check-ip-isolation.sh
 
 # -race is not optional: the SDK is a contract other people's code runs
 # concurrently against.
@@ -64,4 +71,4 @@ test-cover:
 cover-gate: test-cover
 	@bash .github/scripts/coverage-gate.sh $(COVERPROFILE)
 
-ci: verify build lint staticcheck tidy-check cover-gate
+ci: verify build ip-isolation lint staticcheck tidy-check cover-gate
