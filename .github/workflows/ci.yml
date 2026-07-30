@@ -43,6 +43,17 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # This SDK is the public IP boundary the external-developer model
+      # rests on. Walks both the require graph (go mod graph) and the
+      # import graph (go list -deps -test) for any arqtiqa module other
+      # than this one, direct or transitive, and names the import chain
+      # when it finds one. See scripts/check-ip-isolation.sh for why a
+      # go.mod grep does not do this job. Runs on every OS in the matrix,
+      # not just once — the require/import graph can differ across build
+      # tags.
+      - name: IP isolation (no arqtos-cli / arqtiqa dependency)
+        run: make ip-isolation
+
       - name: gofmt
         run: make fmt
 
