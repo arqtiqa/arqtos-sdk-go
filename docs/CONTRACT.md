@@ -287,6 +287,26 @@ connector returned a bare error": `KindOf` answers `KindUnknown` for both, and
 only the second is a conformance failure. The breaker treats them the same
 way, which is what makes the safe default safe.
 
+### Reporting a rate limit rather than guessing at one
+
+`KindRateLimited` is the one kind that must come from **positive evidence** — the
+backend saying so — because it is the one kind that opens a breaker. Reading that
+evidence off a real backend is more work than it looks: GitHub alone signals
+three separate limits three separate ways, and one of them is not a status code
+or a header at all.
+
+A GitHub-backed connector does not need to re-derive that.
+[`githubratelimit`](../githubratelimit/) reads all three, distinguishes them, and
+returns a `*githubratelimit.Error` that unwraps to `KindRateLimited` — so a host
+classifying with `cerr.KindOf` / `cerr.TripsBreaker` gets the right answer
+without knowing the type exists. See
+[Handling GitHub rate limits](../README.md#handling-github-rate-limits).
+
+Nothing in the contract requires it. A connector against another backend
+classifies its own quota refusals as `KindRateLimited` the same way, and the
+rule is unchanged: report it on evidence, never on a guess about an error the
+connector did not recognise — that is what `KindUnknown` is for.
+
 ## Checking your connector: `credconform`
 
 [`credconform`](../credconform/) runs the parts of this contract a compiler

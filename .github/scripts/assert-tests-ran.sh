@@ -9,7 +9,7 @@
 # always be exercised.
 #
 # Usage: assert-tests-ran.sh <report.json>
-#   MIN_TESTS          minimum number of passing tests overall (default 265)
+#   MIN_TESTS          minimum number of passing tests overall (default 500)
 #   REQUIRED_PACKAGES  space-separated package suffixes that must each have
 #                      contributed at least one passing test
 #
@@ -43,6 +43,14 @@
 #               connector answering every list with EmptyRoster, and the
 #               out-of-process run plus the demonstration that a connector
 #               passing in-process can still fail across the wire
+#   githubratelimit  the three-mechanism rate-limit gate — where "primary,
+#               secondary and GraphQL point cost are three different things"
+#               is actually enforced, where a rate-limited call is proven to
+#               discard a partial value rather than return it, and where the
+#               package's own tests are gated against asserting wall-clock
+#               time. Two of those are silent when they regress: a collapsed
+#               mechanism under-waits and looks like a flaky backend, and a
+#               partial value that escapes looks like a complete answer.
 #
 # These were not required before, and the omission was exactly the failure the
 # script exists to catch: the packages where this module's guarantees live
@@ -53,19 +61,19 @@
 # gate staying green throughout, because MIN_TESTS never dropped far enough
 # to notice and no required package named it.
 #
-# The floor is kept within reach of the real count (340 at the time of
+# The floor is kept within reach of the real count (550 at the time of
 # writing) rather than far below it. A floor far below would let most of the
 # suite stop building before this gate noticed — which is the same "green
 # because nothing looked" failure the script exists to prevent, and it is
 # exactly how the plugin package was stripped unnoticed under an earlier floor.
-# At 300, losing a large enough guard-bearing package still trips MIN_TESTS on
-# its own, before REQUIRED_PACKAGES even names it — rosterconform (81) and
-# plugin (53) both do, at the current total. roster (38) does not, by itself:
-# the margin between the real count and the floor is 40. That is exactly why
-# REQUIRED_PACKAGES names every guard-bearing package explicitly rather than
-# relying on MIN_TESTS alone — a package smaller than the current margin needs
-# the explicit listing to be guarded at all, and which packages clear that bar
-# shifts, package by package, as the suite grows.
+# At 500, losing a large enough guard-bearing package still trips MIN_TESTS on
+# its own, before REQUIRED_PACKAGES even names it — githubratelimit (118),
+# rosterconform (81) and plugin (53) all do, at the current total. roster (38)
+# does not, by itself: the margin between the real count and the floor is 50.
+# That is exactly why REQUIRED_PACKAGES names every guard-bearing package
+# explicitly rather than relying on MIN_TESTS alone — a package smaller than
+# the current margin needs the explicit listing to be guarded at all, and which
+# packages clear that bar shifts, package by package, as the suite grows.
 #
 # The margin also absorbs the tests that SKIP rather than fail on a runner
 # without a usable subprocess: examples/credentialloader-provider (1) and
@@ -76,8 +84,9 @@
 # therefore always run.
 #
 # Raising this floor is part of adding a connector class OR a transport for
-# one, not an afterthought: a floor left at the previous count is a floor the
-# new work's entire test suite can vanish beneath.
+# one — or any package carrying a guarantee, which is how githubratelimit
+# joined the list — not an afterthought: a floor left at the previous count is
+# a floor the new work's entire test suite can vanish beneath.
 
 set -euo pipefail
 
@@ -87,8 +96,8 @@ if [ -z "$report" ]; then
 	exit 2
 fi
 
-min_tests="${MIN_TESTS:-300}"
-required_packages="${REQUIRED_PACKAGES:-mcpconform credential credconform transport plugin roster rosterconform}"
+min_tests="${MIN_TESTS:-500}"
+required_packages="${REQUIRED_PACKAGES:-mcpconform credential credconform transport plugin roster rosterconform githubratelimit}"
 
 if [ ! -s "$report" ]; then
 	echo "assert-tests-ran: '$report' is missing or empty — the test step produced no machine-readable output" >&2

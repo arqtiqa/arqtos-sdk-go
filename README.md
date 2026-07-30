@@ -47,6 +47,7 @@ Ratified 2026-07-27, after both schemes were found live in one repo.
 | [`rosterconform`](rosterconform/) | The conformance harness for a `Roster`: no unresolved-as-empty, a deactivated principal reported rather than dropped, memberships that match the group requested, typed failures, and declared capabilities that match both the running connector and the data it returns. `RunOutOfProcess` runs all of it against a spawned provider binary, across a real gRPC boundary — the only way the marshalling failures are visible at all. |
 | [`codeci`](codeci/) | The `CodeCI` connector class: pull/merge-request lifecycle (`CreatePR` / `ListPRs` / `MergePR` / `GetDiff`), `ListBranches`, and CI status (`GetCheckRuns` / `GetWorkflowRun`), plus the optional `RerunWorkflow` / `CancelWorkflow` behind `CapCIControl`. Carries `Resolution[T]` (the same fail-closed list shape as `roster.Resolution`, reimplemented here with CI-appropriate wording rather than aliased, so a failed `ListPRs` is never reported as "roster of nobody"), and requires `MergePR` to validate its `MergeMethod` and refuse a draft **before** attempting a merge. Distinct from a code-host-administration class: same vendor, different contract. |
 | [`codeciconform`](codeciconform/) | The conformance harness for a `CodeCI`: no empty-success across `ListPRs`/`ListBranches`/`GetCheckRuns`/`GetDiff`, typed fail-closed reads, `MergePR` refusing an unspecified method and a draft (each exercised against a real fixture, never merging it), and declared capabilities that match both the manifest and the running connector's actual `CIController` implementation — checked by type assertion, never derived from `Capabilities()` itself. |
+| [`githubratelimit`](githubratelimit/) | GitHub's **three** rate-limit mechanisms handled as three separate things: `MechanismPrimary` (the hourly quota, in `x-ratelimit-*` headers), `MechanismSecondary` (abuse detection — a `retry-after`, a 429, or a body naming a secondary limit), and `MechanismGraphQLCost` (a point budget in the response **body**, refused on HTTP **200**). Carries `Classify`, the fail-closed `PrimaryBudget` / `PointBudget` (whose zero value is *unknown*, never *healthy*), and a concurrency-safe `Gate` with `Admit` (pre-emptive, so a multi-step sweep never half-applies), `Do` (which **discards** a value that arrived alongside a rate-limit refusal), jittered backoff and an injected `Clock`. Deliberately vendor-named — see [Handling GitHub rate limits](#handling-github-rate-limits). |
 | [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
@@ -340,6 +341,145 @@ input proves nothing about what it would catch.
 The remaining conformance surface — full contract shape, secret-handling (no
 material to logs, disk or wire; dies-with-session), and protocol-version
 negotiation — lands alongside these checks.
+
+## Handling GitHub rate limits
+
+`githubratelimit` is the one package here named after a vendor, and that is
+deliberate. Every other package is vendor-neutral because an ABC derived from a
+single backend encodes that backend's accidents as contract. These three
+mechanisms **are** GitHub's, down to the header names and the units, so the name
+says so — nobody should reach for this as "the rate limiter" and quietly inherit
+GitHub's shape for a backend that does not have it.
+
+It lives in the SDK because a host reaches GitHub through more than one surface
+(a tracker and a PR/CI surface at least) and each needs the identical
+discipline. Two implementations are two implementations that drift, and the
+drift is invisible until one of them under-waits in production.
+
+### The three mechanisms are not one mechanism
+
+| | Signal | Response |
+|---|---|---|
+| **Primary** — the hourly quota | `x-ratelimit-remaining` / `x-ratelimit-reset`, on **every** response including successful ones | wait until the reset; and because the budget arrives before exhaustion, `Gate.Admit` waits **before** spending it |
+| **Secondary** — abuse detection (burst rate, concurrency) | a `retry-after` header, a **429**, or a 403 whose body names a secondary limit | honour `retry-after`; **jittered** exponential backoff when it names none. Waiting out the *primary* reset does not clear this |
+| **GraphQL point cost** | `data.rateLimit` in the response **body** — no header at all — and refused on HTTP **200** with a `RATE_LIMITED` entry in `errors` | wait until `resetAt`; accounted separately, because one query can cost hundreds of points while the REST request count barely moves |
+
+On a secondary refusal the primary budget typically reads **healthy**, so a
+handler that derived its wait from the budget computes a wait of *nothing* and
+retries straight back into the limit. That is the failure this package exists to
+prevent, and `Classify` reports which mechanism refused so the two never
+collapse.
+
+### Fail closed, in two places
+
+`Do` returns the zero value alongside any rate-limit error — even when the
+attempt reported no error. GitHub refuses a point-exhausted GraphQL query with
+HTTP 200 and *partial* `data`, so a caller decoding that body has a value, a nil
+error, and half an answer; a truncated result indistinguishable from a complete
+one is exactly the defect being discarded here.
+
+`PrimaryBudget` and `PointBudget` have an **unknown** zero value, not a healthy
+one. An unmeasured budget is never `Exhausted()` (no evidence of exhaustion, so
+nothing to wait for) and has no `Headroom()` (no evidence of room, so nothing to
+admit a sequence against).
+
+### A multi-step sequence completes, or does not start
+
+The guarantee is **completes-after-waiting**, and it is bought by not letting the
+sequence begin until the whole of it fits:
+
+```go
+gate := githubratelimit.New(githubratelimit.Options{
+    Reserve: 50, // keep room for the final status read and the error report
+    Notify: func(w githubratelimit.Wait) {
+        log.Printf("waiting %s on the github %s limit until %s (attempt %d/%d)",
+            w.Delay, w.Mechanism, w.Until.Format(time.RFC3339), w.Attempt, w.Attempts)
+    },
+})
+
+// One call, before the first mutation, for the whole sequence.
+if err := gate.Admit(ctx, len(mutations)); err != nil {
+    return err // typed, and it names when the limit clears
+}
+for _, m := range mutations {
+    apply(m)
+}
+```
+
+A sequence larger than the entire quota is refused as `cerr.KindInvalid` without
+waiting: no amount of waiting makes it fit, and a wait that can never succeed is
+a hang with extra steps. The gate cannot roll back a mutation that already
+happened — admitting the whole sequence up front is the mechanism that keeps
+there from being one.
+
+### One request
+
+```go
+pr, err := githubratelimit.Do(ctx, gate, "GetPR",
+    func(ctx context.Context) (PR, githubratelimit.Observation, error) {
+        resp, err := client.Do(req.WithContext(ctx))
+        if err != nil {
+            return PR{}, githubratelimit.Observation{}, err
+        }
+        defer resp.Body.Close()
+        body, err := io.ReadAll(resp.Body)
+        if err != nil {
+            return PR{}, githubratelimit.FromHTTP(resp, nil), err
+        }
+        return decode(body), githubratelimit.FromHTTP(resp, body), nil
+    })
+```
+
+`Do` retries **rate-limit refusals only**. A 500, a 404, a 403 for a missing
+scope, a transport error — each is returned verbatim on the first attempt. A
+wrapper that also retried those would turn a broken backend into a slow one and
+a missing permission into a five-attempt stall.
+
+### Waits are visible, and time is injected
+
+`Options.Notify` receives a `Wait` **before** each pause, carrying the
+mechanism, the delay, the wall-clock time it ends, and whether the mechanism
+*dictated* the wait or the gate computed a jittered backoff. A sweep that pauses
+for eleven minutes in silence is indistinguishable from a hung one, and an
+operator kills the second — turning a wait that would have completed into the
+half-applied sweep the wait existed to prevent.
+
+`Options.Clock` is the only source of now and of sleeping, so tests for a
+package whose whole job is waiting do not wait: they assert the **computed**
+backoff and the **number** of attempts, both exact. The package's own test suite
+is gated against reading the real clock at all — a test asserting elapsed time
+is asserting a property of the CI runner, and under `-race` with coverage
+instrumentation that runner is slow enough to make such a test flake rather than
+fail honestly.
+
+`Options.Resource` scopes a gate to **one** quota bucket. Search is 30 requests
+a minute against core's 5000 an hour, so a gate that folded them into one number
+would stall every core request for the rest of the hour the first time a search
+was refused. A host reaching more than one bucket builds more than one gate.
+
+### Three sharp edges the API deliberately encodes
+
+**The header constants are canonical, not as GitHub documents them.**
+`githubratelimit.HeaderRemaining` is `"X-Ratelimit-Remaining"` — lower-case `l`.
+`http.Header` is a map whose keys `Get`/`Set` canonicalize, so the documented
+spelling `"X-RateLimit-Remaining"` is **invisible** to `Get` when a consumer
+builds or reads the map directly. Use the constants and both routes work.
+
+**A `retry-after` is clamped at `MaxRetryAfter` (24h).** `time.Duration` counts
+nanoseconds in an `int64`, so `retry-after: 18446744074` multiplied out
+*overflows* and comes back as a plausible-looking 290 ms — a silent under-wait
+dressed as compliance. Nothing longer than a day is a rate limit GitHub has, so
+the value is clamped down rather than rejected: the mechanism is still reported,
+and only the duration is capped.
+
+**A backoff is never zero.** `Options.Jitter` of 1 (full jitter) has a window
+floor of zero by definition, so an unlucky draw would compute no delay at all —
+a tight retry straight back into the limit that just refused the request.
+`Gate.Backoff` floors at `MinBackoff`.
+
+A zero `Gate` — `var g Gate`, or one embedded in another struct — defaults itself
+on first use rather than panicking on its nil clock or reporting a rate limit for
+a request it never made.
 
 ## Declarative connectors and MCP
 
