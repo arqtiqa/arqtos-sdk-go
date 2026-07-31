@@ -1,0 +1,34 @@
+# The issue chooser for arqtos-sdk-go.
+#
+# blank_issues_enabled defaults to TRUE when absent. Left at the default, every
+# required field on every form becomes optional again: a reporter simply picks
+# the empty box instead. The whole difference between a form and a free-text
+# template is enforcement, so this line is the one that makes the other files
+# mean anything.
+blank_issues_enabled: false
+
+# Both targets are in THIS repository, which is public. That is the constraint,
+# not a coincidence: a contact link renders for anyone who can see the issue
+# tab, so pointing one at a repository they cannot read returns a 404 — and a
+# 404 reads as "there is no way to report this", which is the state intake
+# exists to end. Every link here therefore stays inside the world-readable
+# surface.
+#
+# ⚠️ The security link points at SECURITY.md rather than straight at
+# /security/advisories/new. Measured, not assumed: private vulnerability
+# reporting is DISABLED on this repository
+# (`GET /repos/.../private-vulnerability-reporting` → `{"enabled":false}`), and
+# while it is off that URL is not usable by the reporters this chooser is for —
+# it would be the same 404 in a different costume. SECURITY.md is world-readable
+# and says what to do, so it cannot dead-end. Enabling private vulnerability
+# reporting is a repository SETTING, not a file in this branch; once an operator
+# turns it on, this entry should point directly at
+# https://github.com/arqtiqa/arqtos-sdk-go/security/advisories/new so the route
+# is one click instead of two.
+contact_links:
+  - name: Report a security vulnerability — privately, never as an issue
+    url: https://github.com/arqtiqa/arqtos-sdk-go/blob/main/SECURITY.md
+    about: >-
+      The private disclosure route, plus what a useful vulnerability report contains. Never
+      file a vulnerability as a public issue — that publishes the weakness at the moment
+      nothing can be done about it.

@@ -1,0 +1,53 @@
+name: Problem report
+description: Something is unclear, or you got stuck, and you cannot say precisely what is wrong
+title: "[problem] "
+labels: ["triage:needed", "intake:external"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This form asks for no reproduction, and that is deliberate.** If a surface confused
+        you, the confusion is the defect — in the surface, not in you. Reports like this one
+        carry the most signal and are the easiest for us to lose, because the bug form's
+        demand for a reproduction turns away exactly the person who has one to make.
+
+        You are not expected to diagnose anything. Telling us where you got stuck **is** the
+        contribution. Please use this form freely, including when you suspect the answer is
+        "you have misunderstood something" — if the documents let you misunderstand it, that
+        is ours to fix.
+
+        Two exclusions, the same as everywhere: nothing security-sensitive here (use the
+        private disclosure link in the chooser), and no credentials, tokens or raw environment
+        dumps.
+
+  - type: textarea
+    id: what-you-were-doing
+    attributes:
+      label: What you were trying to do
+      description: >-
+        The goal in your own words. "Wire a connector to a store we already run" is a complete
+        answer — you do not need to phrase it in our vocabulary.
+    validations:
+      required: true
+
+  - type: textarea
+    id: where-you-got-stuck
+    attributes:
+      label: Where you got stuck
+      description: >-
+        The point at which you stopped being sure what to do next. Naming the document, the
+        function, or the message that lost you is enough. If you guessed, tell us what you
+        guessed — a wrong guess shows us what the surface implied.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **What happens next.** Your report is labelled for triage automatically and
+        **acknowledged before anything is decided** — you cannot see our tracker, so silence
+        would be indistinguishable from being ignored, and you should not have to guess. It is
+        then either converted into tracked work or closed *with a reason*. A closed report is
+        not a rejected one: often it is already fixed, already tracked, or working as intended
+        in a way the documentation failed to convey — and that last case is itself a defect we
+        log. We do not promise a date. We do promise you will know which of the three happened.

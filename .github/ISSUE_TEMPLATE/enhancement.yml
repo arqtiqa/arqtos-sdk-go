@@ -1,0 +1,61 @@
+name: Enhancement request
+description: You need something the SDK does not do
+title: "[enhancement] "
+labels: ["triage:needed", "intake:external"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This form asks what problem you are solving, not what to build.** A request phrased
+        only as a solution hides the need behind one person's guess at the fix — and we would
+        rather solve your actual problem than implement your workaround. Describe the wall you
+        hit; if you also have a design in mind, the last field is for it.
+
+        Nothing security-sensitive here (use the private disclosure link in the chooser), and
+        no credentials, tokens or raw environment dumps.
+
+  - type: textarea
+    id: problem-it-solves
+    attributes:
+      label: The problem this would solve
+      description: >-
+        What you were unable to do, and what it cost you — a workaround you maintain, a check
+        you cannot make, a guarantee you cannot give your own callers. Concrete beats general.
+    validations:
+      required: true
+
+  - type: textarea
+    id: who-benefits
+    attributes:
+      label: Who this helps, besides you
+      description: >-
+        Which kind of user hits this — anyone writing a connector, anyone running one in
+        production, anyone auditing one? If the answer is genuinely "only my situation", say
+        so; that is useful and it is not a reason to withhold the request.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround-today
+    attributes:
+      label: What you do today instead
+      description: Optional. How you are living without it, and what that costs.
+
+  - type: textarea
+    id: shape-you-had-in-mind
+    attributes:
+      label: A shape you had in mind
+      description: >-
+        Optional, and deliberately last. An API sketch is welcome as evidence about the
+        problem, not as the specification — we may solve it somewhere else entirely.
+
+  - type: markdown
+    attributes:
+      value: |
+        **What happens next.** Your report is labelled for triage automatically and
+        **acknowledged before anything is decided** — you cannot see our tracker, so silence
+        would be indistinguishable from being ignored, and you should not have to guess. It is
+        then either converted into tracked work or closed *with a reason*. A closed report is
+        not a rejected one: often it is already fixed, already tracked, or working as intended
+        in a way the documentation failed to convey — and that last case is itself a defect we
+        log. We do not promise a date. We do promise you will know which of the three happened.

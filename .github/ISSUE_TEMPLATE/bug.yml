@@ -1,0 +1,81 @@
+name: Bug report
+description: Something in the SDK is broken and you can show it
+title: "[bug] "
+labels: ["triage:needed", "intake:external"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You do not need access to our tracker, an account with us, or any permission beyond a
+        normal GitHub account. This form is the whole path.
+
+        **Not for security vulnerabilities.** Go back and use the private disclosure link in the
+        chooser. A public issue is a public advisory with no fix available yet.
+
+        **Never paste a credential, a token, or a raw environment dump.** Describe a secret
+        reference by its shape — `op://<vault>/<item>/<field>` — never by its value. A partial
+        report is better than a leaked key.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >-
+        What you observed, including the exact error text if there was one, with any secret
+        values removed first.
+      placeholder: |
+        Resolving a credential reference returned an error whose message carried the whole
+        reference through to the caller's log.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: >-
+        The behaviour you were relying on. If a document, a doc comment or a contract promised
+        it, quote or link that — a broken promise is a sharper bug report than a surprise.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        The module version you compiled against — a semver tag such as `v1.2.3`, or the short
+        commit SHA if you pinned one. "latest" is not a version; we cannot reproduce against it.
+      placeholder: v1.2.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: >-
+        Numbered steps, or a minimal Go snippet someone else can compile. **If you cannot
+        produce one, do not abandon the report** — go back and use the Problem report form
+        instead. A report without a reproduction is still worth having. A report you never
+        file is not.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Go version and platform
+      description: Optional. `go version` output, and the OS you saw it on.
+      render: text
+
+  - type: markdown
+    attributes:
+      value: |
+        **What happens next.** Your report is labelled for triage automatically and
+        **acknowledged before anything is decided** — you cannot see our tracker, so silence
+        would be indistinguishable from being ignored, and you should not have to guess. It is
+        then either converted into tracked work or closed *with a reason*. A closed report is
+        not a rejected one: often it is already fixed, already tracked, or working as intended
+        in a way the documentation failed to convey — and that last case is itself a defect we
+        log. We do not promise a date. We do promise you will know which of the three happened.
