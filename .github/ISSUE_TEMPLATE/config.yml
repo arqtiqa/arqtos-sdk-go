@@ -14,17 +14,20 @@ blank_issues_enabled: false
 # exists to end. Every link here therefore stays inside the world-readable
 # surface.
 #
-# ⚠️ The security link points at SECURITY.md rather than straight at
-# /security/advisories/new. Measured, not assumed: private vulnerability
-# reporting is DISABLED on this repository
-# (`GET /repos/.../private-vulnerability-reporting` → `{"enabled":false}`), and
-# while it is off that URL is not usable by the reporters this chooser is for —
-# it would be the same 404 in a different costume. SECURITY.md is world-readable
-# and says what to do, so it cannot dead-end. Enabling private vulnerability
-# reporting is a repository SETTING, not a file in this branch; once an operator
-# turns it on, this entry should point directly at
-# https://github.com/arqtiqa/arqtos-sdk-go/security/advisories/new so the route
-# is one click instead of two.
+# ⚠️ The security link points at SECURITY.md, which then names the advisory form
+# directly. Two hops, deliberately: the instruction a reporter must read BEFORE
+# they start typing is "never paste a real credential — describe its shape", and
+# a form they land on cold is a form they fill in cold.
+#
+# What matters is that the chain ENDS somewhere that exists. Measured, not
+# assumed: `GET /repos/arqtiqa/arqtos-sdk-go/private-vulnerability-reporting`
+# answers `{"enabled":true}`, so the advisory form SECURITY.md names is being
+# rendered. It was `{"enabled":false}` when these forms were first written, which
+# made this link a dead end wearing a policy document as a disguise — the target
+# was readable, and the button it told you to press was not there. If that
+# setting is ever turned back off, this route dead-ends again and
+# `TestIssueForms_When_TheSecurityRouteIsFollowed_ItEndsAtAChannelMeasuredToExist`
+# in arqtos-sdk-go internal/issueforms is what says so.
 contact_links:
   - name: Report a security vulnerability — privately, never as an issue
     url: https://github.com/arqtiqa/arqtos-sdk-go/blob/main/SECURITY.md

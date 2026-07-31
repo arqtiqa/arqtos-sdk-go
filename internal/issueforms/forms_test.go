@@ -9,11 +9,25 @@
 // before arqtiqa/arqtos-sdk-go#12. So the file that claims a field is required
 // has to be checked by something.
 //
-// What this gate CANNOT do, stated here rather than in a report that ages out:
-// GitHub enforces `validations.required` in the new-issue UI, and that path is
-// not reachable by API. A live blank submission per form remains the only proof
-// that a reporter is actually stopped, and it is not automatable. This gate
-// proves the file SAYS what it must; it does not prove GitHub ENFORCED it.
+// What this gate CANNOT do, stated here rather than in a report that ages out.
+// Two of #12's acceptance criteria are OUTSTANDING, and neither is checkable
+// from inside the estate that owns these repositories:
+//
+//   - AC-2 (a blank submission per form is rejected) is OUTSTANDING. GitHub
+//     enforces `validations.required` in the new-issue UI, and that path is not
+//     reachable by API. A live blank submission per form remains the only proof
+//     that a reporter is actually stopped, and it is not automatable. This gate
+//     proves the file SAYS what it must; it does not prove GitHub ENFORCED it.
+//
+//   - AC-6 (filing is possible without estate access) is OUTSTANDING. It
+//     requires a reporter who is NOT a member of the organisation owning these
+//     repositories, and no such identity exists here: the only second account
+//     available at the time of writing is an organisation MEMBER, so a
+//     successful filing from it would prove nothing about a stranger. Absence
+//     of a statement reads as "met"; this is the statement.
+//     TestIntake_When_FilingFromOutsideTheOrg_TheAnswerIsUNKNOWN keeps it
+//     visible in `go test -v` output and takes the outside account by
+//     environment variable, so no real handle is baked into a public file.
 //
 // Roots. By default the gate reads this repository. `ARQTOS_ISSUE_FORM_ROOTS`
 // (colon-separated absolute paths) adds sibling checkouts, so the same rule set
@@ -204,6 +218,48 @@ var leakPatterns = []struct {
 	// An absolute home path names a machine's user account.
 	{"an absolute home path", regexp.MustCompile(`(?:/Users/|/home/)[A-Za-z0-9._-]+/`)},
 }
+
+// ---------------------------------------------------------------------------
+// what a form may say about a tool it does not ship
+// ---------------------------------------------------------------------------
+
+// safetyClaimPatterns are assertions a form is not entitled to make. A form can
+// ask a reporter to redact; it cannot promise them that what they paste is
+// clean. The promise is the dangerous half: a reporter who believes the output
+// is safe stops reading it, which is the exact moment a credential ships. The
+// instruction must therefore survive the tool being absent, buggy, or thorough
+// only about the hazards someone thought of — so no wording here may rest on it.
+var safetyClaimPatterns = []struct {
+	what string
+	re   *regexp.Regexp
+}{
+	{"a claim that filling or pasting something is safe", regexp.MustCompile(`(?i)safe\s+to\s+(fill|paste|post|share|include|attach|send)`)},
+	{"a bare claim that something IS safe", regexp.MustCompile(`(?i)\b(is|are|was|were|will\s+be|makes\s+it|keeps\s+it)\s+safe\b`)},
+	// Deliberately NOT a bare /guarantee/: an enhancement form legitimately
+	// invites "a guarantee you cannot give your own callers", and a gate that
+	// fails honest prose gets switched off. The hazard is a guarantee about
+	// REDACTION, so the pattern is bound to that subject.
+	{"a guarantee about what redaction removes", regexp.MustCompile(`(?is)(guarantee[a-z]*\s+(that\s+)?(nothing|no\s+secret|the\s+output|redaction|it\s+omits)|proven\s+to\s+omit|cannot\s+leak|never\s+leaks|no\s+secret\s+can|strips\s+every|omits\s+every|removes\s+every)`)},
+}
+
+var (
+	// redactFlagNamed: a form naming the flag by name is making a claim about a
+	// binary this repository does not build and cannot pin the version of.
+	redactFlagNamed = regexp.MustCompile(`--redact`)
+
+	// reviewBeforePost: the instruction that has to be there whatever the tool
+	// does. The reporter reads the output before it leaves their machine.
+	reviewBeforePost = regexp.MustCompile(`(?is)\b(read|review|check)\b[^.]{0,90}\bbefore\b[^.]{0,90}\b(post|posting|paste|pasting|submit|submitting|filing|file|send|sending)\b`)
+
+	// availabilityCond: what makes the instruction true whether or not the flag
+	// has shipped. Without it, a reporter on a version that does not carry the
+	// flag meets an instruction that fails, and their next move is the raw dump.
+	availabilityCond = regexp.MustCompile(`(?is)(if\s+your\s+version|if\s+the\s+flag|if\s+that\s+flag|if\s+your\s+arqtos|when\s+(it\s+is\s+|it's\s+)?available|where\s+available|if\s+it\s+is\s+not|unknown\s+flag|not\s+every\s+version|older\s+version|does\s+not\s+(have|carry|recognise|recognize))`)
+
+	// claimsFlagExists: a present-tense existence claim. Not wrong in itself —
+	// wrong when the binary disagrees, which is what this gate measures.
+	claimsFlagExists = regexp.MustCompile(`(?is)((that|the|this)\s+flag\s+exists|--redact\s+exists|the\s+flag\s+is\s+available|flag\s+exists\s+precisely)`)
+)
 
 // promotionPatterns are the mechanisms by which a workflow could put an
 // arriving intake issue onto a project board. Note what is NOT here: an
@@ -610,7 +666,6 @@ func TestIssueForms_When_TheChooserIsShown_BlankIssuesAreClosedAndSecurityIsRout
 			t.Fatalf("%s: %s declares no contact_links — a vulnerability then has no route except a public issue, which is a public advisory with no fix available yet",
 				r.slug, r.chooserPath)
 		}
-		securityRoute := regexp.MustCompile(`(?i)vulnerab|security`)
 		var found bool
 		for _, l := range c.ContactLinks {
 			if strings.TrimSpace(l.Name) == "" || strings.TrimSpace(l.About) == "" {
@@ -619,7 +674,7 @@ func TestIssueForms_When_TheChooserIsShown_BlankIssuesAreClosedAndSecurityIsRout
 			if !strings.HasPrefix(l.URL, "https://") {
 				t.Errorf("%s: %s: contact link %q is not https: %q", r.slug, r.chooserPath, l.Name, l.URL)
 			}
-			if securityRoute.MatchString(l.Name) || securityRoute.MatchString(l.About) {
+			if securityRouteRE.MatchString(l.Name) || securityRouteRE.MatchString(l.About) {
 				found = true
 			}
 		}
@@ -739,6 +794,254 @@ func TestIssueForms_When_TheFormsArePublic_NoSecretOrAccountIdentifierLeaks(t *t
 			}
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// the security route, followed to a terminal state
+// ---------------------------------------------------------------------------
+//
+// The check the first cut of this gate did not have, and the reason the branch
+// shipped a dead end: it resolved the contact link's target REPOSITORY and
+// stopped there. The target was readable, so the check passed — and the document
+// behind it told the reporter to press a button that GitHub was not rendering,
+// because private vulnerability reporting was measurably DISABLED. One hop
+// verified, terminal state unverified, and a reporter following the link ends
+// nowhere. So this follows the whole chain, and the only accepted endings are
+// ones whose existence was MEASURED.
+
+var (
+	advisoryNewURL = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/security/advisories/new/?$`)
+	// unanchored, for finding the route named inside a policy document
+	advisoryNewInProse = regexp.MustCompile(`https://github\.com/([^/\s)]+)/([^/\s)]+)/security/advisories/new`)
+	blobURL            = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$`)
+	addressInProse     = regexp.MustCompile(`(?:mailto:)?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+	securityRouteRE    = regexp.MustCompile(`(?i)vulnerab|security`)
+)
+
+// pvrMeasured answers whether private vulnerability reporting is on, from the
+// response BODY. Never from the exit code: `gh api` exits 0 for
+// `{"enabled":false}`, which is the answer that matters most here.
+func pvrMeasured(slug string) (bool, string) {
+	out, err := gh("api", "repos/"+slug+"/private-vulnerability-reporting")
+	if err != nil {
+		return false, fmt.Sprintf("the setting endpoint does not answer for %s — GitHub offers private vulnerability reporting on PUBLIC repositories only, so a private repository cannot host this channel at all (%v)", slug, err)
+	}
+	if strings.Contains(out, `"enabled":true`) {
+		return true, fmt.Sprintf("GET repos/%s/private-vulnerability-reporting → %s", slug, out)
+	}
+	return false, fmt.Sprintf("GET repos/%s/private-vulnerability-reporting → %s — the button that URL opens is not being rendered", slug, out)
+}
+
+func securityLinks(r *root) []string {
+	var out []string
+	for _, l := range r.chooser.ContactLinks {
+		if securityRouteRE.MatchString(l.Name) || securityRouteRE.MatchString(l.About) {
+			out = append(out, l.URL)
+		}
+	}
+	return out
+}
+
+// readPolicyDoc prefers the LOCAL working tree when the target repository is one
+// of the loaded roots. A gate has to fail on the BRANCH that proposes a dead end
+// rather than wait for the dead end to become `main`'s problem; once merged the
+// two agree. Which source answered is always logged.
+func readPolicyDoc(all []*root, owner, repo, ref, path string) (content, source string, err error) {
+	slug := owner + "/" + strings.TrimSuffix(repo, ".git")
+	for _, r := range all {
+		if r.slug != slug {
+			continue
+		}
+		p := filepath.Join(r.dir, filepath.FromSlash(path))
+		b, rerr := os.ReadFile(p)
+		if rerr == nil {
+			return string(b), fmt.Sprintf("%s/%s in the local working tree (checked ahead of %s@%s)", slug, path, slug, ref), nil
+		}
+	}
+	out, gerr := gh("api", fmt.Sprintf("repos/%s/contents/%s?ref=%s", slug, path, ref), "-H", "Accept: application/vnd.github.raw")
+	if gerr != nil {
+		return "", "", fmt.Errorf("cannot read %s at %s in %s: %w", path, ref, slug, gerr)
+	}
+	return out, fmt.Sprintf("%s@%s:%s (fetched)", slug, ref, path), nil
+}
+
+// followSecurityRoute walks one contact-link URL to a terminal state. depth is
+// capped at one indirection: a chooser entry may point at a policy document, and
+// that document must name the channel. A route needing more hops than that is a
+// route no reporter finishes.
+func followSecurityRoute(all []*root, url string, depth int) (reached bool, why string) {
+	if depth > 1 {
+		return false, fmt.Sprintf("%s is more than one indirection from a channel — each extra hop is somewhere a reporter stops", url)
+	}
+	if m := advisoryNewURL.FindStringSubmatch(url); m != nil {
+		slug := m[1] + "/" + m[2]
+		on, detail := pvrMeasured(slug)
+		if on {
+			return true, "the private advisory form on " + slug + ": " + detail
+		}
+		return false, "the URL is the advisory form on " + slug + " but " + detail
+	}
+	if m := blobURL.FindStringSubmatch(url); m != nil {
+		content, source, err := readPolicyDoc(all, m[1], m[2], m[3], m[4])
+		if err != nil {
+			return false, err.Error()
+		}
+		for _, hit := range advisoryNewInProse.FindAllString(content, -1) {
+			if ok, sub := followSecurityRoute(all, hit, depth+1); ok {
+				return true, source + " names " + sub
+			} else if depth == 0 {
+				// Record the rejected candidate: a document naming a dead URL is
+				// worse than one naming none, because it looks answered.
+				why = source + " names " + hit + " — " + sub
+			}
+		}
+		if addressInProse.MatchString(content) {
+			return true, source + " names an address to write to, which needs nothing enabled on GitHub to work"
+		}
+		if why != "" {
+			return false, why
+		}
+		return false, source + " names NO reachable channel: no advisory-form URL and no address. Telling a reporter to \"use private vulnerability reporting\" is not a route — the feature is a per-repository setting, and a reporter cannot tell a missing button from their own confusion"
+	}
+	return false, fmt.Sprintf("%s is not a shape this gate can follow to a terminal state, and a route nobody followed is a route nobody verified", url)
+}
+
+func TestIssueForms_When_TheSecurityRouteIsFollowed_ItEndsAtAChannelMeasuredToExist(t *testing.T) {
+	if err := ghReady(); err != nil {
+		skipUnknown(t, fmt.Errorf("whether a disclosure channel exists is a live repository setting: %w", err))
+	}
+	all := roots(t)
+	for _, r := range all {
+		t.Run(r.slug, func(t *testing.T) {
+			links := securityLinks(r)
+			if len(links) == 0 {
+				t.Fatalf("%s: %s routes no contact link at a security report", r.slug, r.chooserPath)
+			}
+			for _, u := range links {
+				reached, why := followSecurityRoute(all, u, 0)
+				if !reached {
+					t.Errorf("%s: %s: the security route DEAD-ENDS.\n  from: %s\n  why:  %s\n"+
+						"A reporter who cannot reach a private channel either files the vulnerability as a public issue — a public advisory with no fix available — or files nothing.",
+						r.slug, r.chooserPath, u, why)
+					continue
+				}
+				t.Logf("%s: %s → terminal state: %s", r.slug, u, why)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// what a form may promise about redaction
+// ---------------------------------------------------------------------------
+
+func TestIssueForms_When_AFormAsksForDiagnostics_ItPromisesNoSafetyAndSurvivesTheToolBeingAbsent(t *testing.T) {
+	eachRoot(t, func(t *testing.T, r *root) {
+		scanned := 0
+		for _, lf := range r.forms {
+			scanned++
+			for _, sc := range safetyClaimPatterns {
+				if loc := sc.re.FindIndex(lf.raw); loc != nil {
+					line := 1 + strings.Count(string(lf.raw[:loc[0]]), "\n")
+					t.Errorf("%s: %s:%d asserts %s. A form may ask a reporter to redact; it may not tell them the result is clean — a reporter who believes it stops reading the output, and that is the moment a credential ships. Say what to run and tell them to review it.",
+						r.slug, lf.path, line, sc.what)
+				}
+			}
+			if !redactFlagNamed.Match(lf.raw) {
+				continue
+			}
+			if !reviewBeforePost.Match(lf.raw) {
+				t.Errorf("%s: %s names `--redact` but never tells the reporter to review the output before it leaves their machine. That instruction is the only part of this that does not depend on a tool behaving.",
+					r.slug, lf.path)
+			}
+			if !availabilityCond.Match(lf.raw) {
+				t.Errorf("%s: %s names `--redact` unconditionally. This repository does not build that binary and cannot pin which version a reporter runs, so the instruction has to hold when the flag is absent too — a reporter who hits `unknown flag: --redact` and has no fallback pastes the raw output.",
+					r.slug, lf.path)
+			}
+		}
+		// The chooser's RENDERED text too — a contact link's name and about are
+		// shown to the reporter, so a safety promise can hide there. Its comments
+		// deliberately are not scanned: they reach no reporter, and they are where
+		// the measurements behind these files are recorded.
+		for _, l := range r.chooser.ContactLinks {
+			scanned++
+			shown := l.Name + " " + l.About
+			for _, sc := range safetyClaimPatterns {
+				if sc.re.MatchString(shown) {
+					t.Errorf("%s: %s: contact link %q asserts %s in text the reporter is shown",
+						r.slug, r.chooserPath, l.Name, sc.what)
+				}
+			}
+		}
+		if scanned == 0 {
+			t.Fatalf("%s: nothing scanned — a clean result over an empty set is not a clean result", r.slug)
+		}
+	})
+}
+
+// The live half: a present-tense claim about a flag, checked against the binary.
+// A form saying "that flag exists" while `arqtos doctor --help` does not mention
+// it is a false instruction shipped to a stranger.
+func TestIssueForms_When_AFormNamesADoctorFlag_ItsPresenceIsMeasuredNotAssumed(t *testing.T) {
+	all := roots(t)
+	type named struct {
+		slug, path string
+		raw        []byte
+	}
+	var naming []named
+	for _, r := range all {
+		for _, lf := range r.forms {
+			if redactFlagNamed.Match(lf.raw) {
+				naming = append(naming, named{r.slug, lf.path, lf.raw})
+			}
+		}
+	}
+	if len(naming) == 0 {
+		t.Skip("no form names `arqtos doctor --redact`; nothing to measure")
+	}
+	if _, err := exec.LookPath("arqtos"); err != nil {
+		skipUnknown(t, fmt.Errorf("`arqtos` is not on PATH here, so whether `--redact` exists cannot be determined: %w", err))
+	}
+	// The VALUE decides. `arqtos doctor --help` exits 0 either way.
+	out, _ := exec.Command("arqtos", "doctor", "--help").CombinedOutput()
+	present := strings.Contains(string(out), "--redact")
+	t.Logf("measured: `arqtos doctor --help` %s `--redact`", map[bool]string{true: "lists", false: "does NOT list"}[present])
+	if present {
+		return
+	}
+	for _, n := range naming {
+		if loc := claimsFlagExists.FindIndex(n.raw); loc != nil {
+			line := 1 + strings.Count(string(n.raw[:loc[0]]), "\n")
+			t.Errorf("%s: %s:%d states that the flag EXISTS, and the installed binary disagrees — `arqtos doctor --help` does not list `--redact`. A present-tense claim about a sibling branch's flag is false for every reporter running a release.",
+				n.slug, n.path, line)
+		}
+		if !availabilityCond.Match(n.raw) {
+			t.Errorf("%s: %s names `--redact` with no fallback, and the installed binary does not have it. The reporter's next move after `unknown flag` is the raw dump this field exists to prevent.",
+				n.slug, n.path)
+		}
+	}
+}
+
+// AC-6 — filing without estate access — is OUTSTANDING and cannot be closed
+// from here. This test exists so that fact is reported rather than inferred from
+// its absence, and so the day a genuinely outside identity exists the check has
+// somewhere to live. The account is supplied by environment variable: a real
+// handle does not belong in a file a stranger reads.
+func TestIntake_When_FilingFromOutsideTheOrg_TheAnswerIsUNKNOWN(t *testing.T) {
+	all := roots(t)
+	owner := strings.SplitN(all[0].slug, "/", 2)[0]
+
+	acct := strings.TrimSpace(os.Getenv("ARQTOS_INTAKE_OUTSIDE_ACCOUNT"))
+	if acct == "" {
+		skipUnknown(t, fmt.Errorf("AC-6 OUTSTANDING: no outside identity was supplied (ARQTOS_INTAKE_OUTSIDE_ACCOUNT is unset), so whether a reporter with no access to the %s estate can file was NOT tested", owner))
+	}
+	if err := ghReady(); err != nil {
+		skipUnknown(t, fmt.Errorf("AC-6 OUTSTANDING: membership of the supplied account cannot be resolved: %w", err))
+	}
+	if _, err := gh("api", fmt.Sprintf("orgs/%s/members/%s", owner, acct)); err == nil {
+		skipUnknown(t, fmt.Errorf("AC-6 OUTSTANDING: the supplied account is a MEMBER of %s, so a successful filing from it proves nothing about a stranger — GET orgs/%s/members/<acct> answered, which is the 204 that means 'is a member'", owner, owner))
+	}
+	skipUnknown(t, fmt.Errorf("AC-6 OUTSTANDING: the supplied account is outside %s, but filing is a new-issue UI action and cannot be driven by API — the live filing remains to be done by hand", owner))
 }
 
 func TestIssueForms_When_IntakeArrives_NothingPromotesItOntoTheBoard(t *testing.T) {

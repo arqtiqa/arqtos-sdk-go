@@ -2,11 +2,29 @@
 
 ## Reporting a vulnerability
 
-**Do not open a public issue.** Use GitHub's private vulnerability reporting on this repository
-(**Security → Report a vulnerability**), which opens a channel visible only to the maintainers.
+**Do not open a public issue.** Open a private report here:
+
+**<https://github.com/arqtiqa/arqtos-sdk-go/security/advisories/new>**
+
+That form opens a channel visible only to the maintainers. It needs a GitHub account and nothing else —
+no access to any private repository, and no relationship with the maintainers. The same page is reachable
+as **Security → Report a vulnerability** in this repository's tabs.
 
 A public issue is a public advisory with no fix available yet — it tells everyone about the weakness at
 the moment nothing can be done about it. That is the one outcome this policy exists to prevent.
+
+### This is the route for every arqtos surface
+
+Use it for the SDK, for the skills and packs, and for the external berg — not just for this module. This
+repository is the world-readable one, and GitHub offers private vulnerability reporting on **public**
+repositories only, so this is where the channel can exist. Say in the report which surface you mean.
+
+### If the link does not work for you
+
+Say so **in a public issue on this repository, without the details** — one line is enough: *"I have a
+security report and cannot reach the advisory form."* Naming the weakness is what must not be public; the
+fact that you have one is not sensitive, and a maintainer will come back with somewhere to send it. That
+is strictly better than the alternative it replaces, which is filing the details publicly, or not filing.
 
 ## What to include
 
