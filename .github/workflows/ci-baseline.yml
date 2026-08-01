@@ -1,0 +1,34 @@
+name: ci-baseline
+
+# Enforces the org's declared CI baseline: no bare interpreter, no off-baseline
+# action pin, no two versions of one action in this repo.
+#
+# ⚠️ NOT a required check yet, deliberately. It lands reporting first; promoting
+# it to blocking is a separate, explicit step once the estate has been quiet on
+# it. A gate promoted while still noisy trains people to bypass it, and a gate
+# that lands RED gets disabled rather than obeyed.
+#
+# The baseline lives in ONE place — arqtiqa/arqtos-actions/ci-baseline.yml — and
+# this workflow passes no manifest, so this repo cannot drift by holding a stale
+# copy of it.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci-baseline:
+    name: ci-baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: arqtiqa/arqtos-actions/.github/actions/ci-baseline@v1
