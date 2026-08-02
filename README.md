@@ -13,8 +13,8 @@ building blocks every connector class is built from.
 This module is dependency-light by design: the semantic contract itself is
 stdlib-only. Third-party dependencies are confined to the packages that need
 them — `gopkg.in/yaml.v3` for the schemas, the gRPC/go-plugin stack for the
-Track-B wire layer, and the official MCP Go SDK for the declarative-connector
-protocol surface.
+Track-B wire layer, the official MCP Go SDK for the declarative-connector
+protocol surface, and `github.com/vektah/gqlparser/v2` for `gqlcheck`.
 
 Those are per-package costs, not per-consumer ones. Under Go's module-graph
 pruning, a consumer that imports only `ref` + `cerr` + `credential` compiles
@@ -48,6 +48,7 @@ Ratified 2026-07-27, after both schemes were found live in one repo.
 | [`codeci`](codeci/) | The `CodeCI` connector class: pull/merge-request lifecycle (`CreatePR` / `ListPRs` / `MergePR` / `GetDiff`), `ListBranches`, and CI status (`GetCheckRuns` / `GetWorkflowRun`), plus the optional `RerunWorkflow` / `CancelWorkflow` behind `CapCIControl`. Carries `Resolution[T]` (the same fail-closed list shape as `roster.Resolution`, reimplemented here with CI-appropriate wording rather than aliased, so a failed `ListPRs` is never reported as "roster of nobody"), and requires `MergePR` to validate its `MergeMethod` and refuse a draft **before** attempting a merge. Distinct from a code-host-administration class: same vendor, different contract. |
 | [`codeciconform`](codeciconform/) | The conformance harness for a `CodeCI`: no empty-success across `ListPRs`/`ListBranches`/`GetCheckRuns`/`GetDiff`, typed fail-closed reads, `MergePR` refusing an unspecified method and a draft (each exercised against a real fixture, never merging it), and declared capabilities that match both the manifest and the running connector's actual `CIController` implementation — checked by type assertion, never derived from `Capabilities()` itself. |
 | [`githubratelimit`](githubratelimit/) | GitHub's **three** rate-limit mechanisms handled as three separate things: `MechanismPrimary` (the hourly quota, in `x-ratelimit-*` headers), `MechanismSecondary` (abuse detection — a `retry-after`, a 429, or a body naming a secondary limit), and `MechanismGraphQLCost` (a point budget in the response **body**, refused on HTTP **200**). Carries `Classify`, the fail-closed `PrimaryBudget` / `PointBudget` (whose zero value is *unknown*, never *healthy*), and a concurrency-safe `Gate` with `Admit` (pre-emptive, so a multi-step sweep never half-applies), `Do` (which **discards** a value that arrived alongside a rate-limit refusal), jittered backoff and an injected `Clock`. Deliberately vendor-named — see [Handling GitHub rate limits](#handling-github-rate-limits). |
+| [`gqlcheck`](gqlcheck/) | Validates the GraphQL a connector **sends** against the schema the backend actually serves — `LoadSchema` / `LoadSchemaFile`, then `ValidateDocument`, `ValidateRootSelection` (a run-time-assembled root selection, wrapped in an operation whose variable declarations are **inferred from the schema** rather than guessed), `ValidateVariables` (the values a document is sent with, which the document itself says nothing about) and `EnumValues`. A `Report` is `Valid` / `Invalid` / `Unknown` / `NotChecked` and **only the first is a pass** — a document that would not parse has not been checked. Every `Finding` carries the rule, the message, the position and the **selection path** that reaches the offending node. Vendor-free: the SDL is the caller's to supply and to pin — see [Validating GraphQL documents](#validating-graphql-documents). |
 | [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
@@ -341,6 +342,48 @@ input proves nothing about what it would catch.
 The remaining conformance surface — full contract shape, secret-handling (no
 material to logs, disk or wire; dies-with-session), and protocol-version
 negotiation — lands alongside these checks.
+
+## Validating GraphQL documents
+
+A connector that talks GraphQL sends text. A fixture server answers whatever it
+is asked, so a suite built on one is **green for a document the real backend
+rejects outright** — measured: a leaf added to an inline fragment on an interface
+that has no such field, every read through that document broken in production,
+and not one test red.
+
+[`gqlcheck`](gqlcheck/) is the check a fixture server cannot stand in for. It asks
+document-versus-**schema**, which is a different question from
+document-versus-decode (does the selection request every leaf my struct carries?)
+and neither implies the other.
+
+```go
+schema, err := gqlcheck.LoadSchemaFile("testdata/schema.graphql") // YOUR pinned SDL
+if err != nil {
+	return err
+}
+
+r := schema.ValidateDocument("catalogueQuery", catalogueQuery)
+if !r.OK() {
+	t.Fatalf("%s", r) // names the rule, the message and the selection path
+}
+```
+
+Three things about it are load-bearing:
+
+- **Only `Valid` is a pass.** `Unknown` is what a document that would not parse
+  gets, and `NotChecked` is what a caller records when it did not look at all.
+  `Report.OK()` is false for both — a checker that reports the unchecked as clean
+  is how the defect it exists for ships behind a green suite.
+- **This module vendors no schema.** A vendored SDL is a vendor artefact with a
+  refresh policy attached, and it belongs with whoever depends on that backend.
+  ⚠️ Where two modules check against the same backend, they must read **one**
+  pinned copy: two pins drift, and the second one drifts silently.
+- **It does not find your documents.** Something has to hand it the text. Driving
+  every document a package contains — a Go-source sweep, a wire gate that walks
+  back from the transport — is caller-side machinery bound to a package loader,
+  and it is deliberately not in this module. `gqlcheck` takes a schema and text
+  and returns a verdict; see the package doc for the three corrections recorded
+  against that machinery, kept there for anyone building the finding half.
 
 ## Handling GitHub rate limits
 
