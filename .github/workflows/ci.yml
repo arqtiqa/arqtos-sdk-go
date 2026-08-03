@@ -54,8 +54,11 @@ jobs:
       - name: IP isolation (no arqtos-cli / arqtiqa dependency)
         run: make ip-isolation
 
+      # ⚠️ MUST be fmt-check, never fmt. ADR-ARQ-J-02 made `fmt` WRITE (matching
+      # `go fmt`), so calling it here would silently format the checkout and
+      # pass — a formatting gate that can never fail.
       - name: gofmt
-        run: make fmt
+        run: make fmt-check
 
       - name: go vet
         run: make lint
