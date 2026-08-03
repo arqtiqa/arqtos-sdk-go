@@ -611,6 +611,26 @@ Out of scope here (a separate, later contract): the host-side connector
 registry — discovery, lifecycle and the broker wiring for managing many
 connectors at once — and a `secrets.Provider` adapter.
 
+## CI: the private-content firewall
+
+Every pull request and every push to `main` scans the tracked tree against
+[`.github/scripts/private-content-denylist.txt`](.github/scripts/private-content-denylist.txt).
+A match **fails the build**; a missing denylist exits **2 (misconfigured)** rather
+than reporting a clean scan.
+
+⚠️ **This repository is public, so it is the one where the scan matters most** —
+and it was the one running without it (arqtos-sdk-go#38). A repo with no gate
+is not "ungated pending work": the green check is already there and nothing is
+producing it.
+
+⚠️ **The denylist here omits one rule its siblings carry: the `op://` locator
+shape.** The [`ref`](ref/) package exists to parse those references, so its tests
+contain them by necessity — and an `op://vault/item/field` reference is an
+*address*, carrying no credential material. Credential-material rules are
+unaffected: a real token planted in `ref/ref_test.go` is still refused, by name.
+The omission is argued in full in the denylist's own header, along with why it
+must not be widened.
+
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
