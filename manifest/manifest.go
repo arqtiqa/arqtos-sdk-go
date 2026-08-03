@@ -24,6 +24,7 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/ref"
 	"github.com/arqtiqa/arqtos-sdk-go/roster"
+	"github.com/arqtiqa/arqtos-sdk-go/tracker"
 )
 
 // Kind is a connector's runtime shape.
@@ -91,6 +92,7 @@ var classCapabilities = map[connector.Class]connector.Capabilities{
 	connector.ClassCredentialLoader: credential.KnownCapabilities(),
 	connector.ClassRoster:           roster.KnownCapabilities(),
 	connector.ClassCodeCI:           codeci.KnownCapabilities(),
+	connector.ClassTracker:          tracker.KnownCapabilities(),
 }
 
 // envNameRE matches a bare environment-variable NAME (e.g. INFISICAL_TOKEN):

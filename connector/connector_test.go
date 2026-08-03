@@ -37,6 +37,9 @@ func TestClassString(t *testing.T) {
 	if connector.ClassCodeCI != "CodeCI" {
 		t.Fatalf("class value = %q", connector.ClassCodeCI)
 	}
+	if connector.ClassTracker != "Tracker" {
+		t.Fatalf("class value = %q", connector.ClassTracker)
+	}
 }
 
 // TestClassesIsTheClosedSetAndEveryConstantIsInIt: Classes() is the one place
@@ -45,7 +48,12 @@ func TestClassString(t *testing.T) {
 // exactly the half-added state that derivation exists to prevent — it would be
 // routable in Go and refused by every manifest.
 func TestClassesIsTheClosedSetAndEveryConstantIsInIt(t *testing.T) {
-	want := []connector.Class{connector.ClassCredentialLoader, connector.ClassRoster, connector.ClassCodeCI}
+	want := []connector.Class{
+		connector.ClassCredentialLoader,
+		connector.ClassRoster,
+		connector.ClassCodeCI,
+		connector.ClassTracker,
+	}
 	got := connector.Classes()
 	if len(got) != len(want) {
 		t.Fatalf("Classes() = %v, want exactly %v — adding one is a deliberate contract change", got, want)
