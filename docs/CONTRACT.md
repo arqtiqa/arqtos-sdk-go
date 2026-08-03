@@ -10,14 +10,15 @@ contract method returns errors in.
 | [`CredentialLoader`](#credentialloader-methods) | a secret store | [`credential`](../credential/credential.go) | [`credconform`](../credconform/) |
 | [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
 | [`CodeCI`](#the-codeci-contract) | a code host's PR/CI surface | [`codeci`](../codeci/codeci.go) | [`codeciconform`](../codeciconform/) |
+| [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
 
 `CredentialLoader` and `Roster` are implemented by **native** (in-process,
 compiled into the host) connectors, and both are also implemented by
 **out-of-process** (Track-B) connectors — see
 [Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract).
-`CodeCI` is native-only today: it carries no `.proto` and no Track-B wire
-binding, the same position `Roster` and `CredentialLoader` each started from
-before their own wire protocol landed as a separate piece of work.
+`CodeCI` and `Tracker` are native-only today: neither carries a `.proto` or a
+Track-B wire binding, the same position `Roster` and `CredentialLoader` each
+started from before their own wire protocol landed as a separate piece of work.
 
 The set of classes is **closed**: `connector.Classes()` is the whole list,
 `Class.Valid()` rejects anything outside it, and the `connector.yml`
@@ -957,6 +958,110 @@ their `.proto`/`plugin`/`transport` wiring as a separate, later piece of work.
 conformance harness that any native Go implementation — GitHub, GitLab, a
 third code host — compiles against today. Out-of-process support is a
 follow-on Story, not a prerequisite for this one.
+
+## The `Tracker` contract
+
+A `Tracker` is one adapter over **one** work tracker — one board on one instance
+of one provider — and its items, their fields, their hierarchy and their
+lifecycle. The method-by-method semantics are the package documentation in
+[`tracker`](../tracker/tracker.go), which is the contract itself rather than a
+description of one; what follows is the shape and the two properties a
+re-statement most often drops.
+
+### Five operations, addressed by name
+
+`Tracker` embeds `connector.Connector` and adds exactly five batch-first
+operations — `Catalogue`, `Scan`, `GetItems`, `Create`, `Apply` — and
+`TestTracker_IsExactlyTheFiveOperations` is the gate that keeps it five. Each
+takes a SET, so the per-operation refetching that turns a fifty-operation board
+update into a four-figure request sweep is removed by construction, and there is
+**one** field-write surface (`Change.Fields`) keyed by field NAME.
+
+No backend identity crosses the boundary: not a field id, not an option id, not
+an item id. The `Catalogue` that resolves names is valid for **one call chain**
+and MUST NOT be stored, because on a real tracker editing one option of a
+single-select field regenerates the identity of *every* option in it — so a
+cached id addresses a dead option and writes silently land nowhere.
+
+Every address is fully qualified (`BoardRef`, `ItemRef`): an estate running two
+boards on one provider plus a tracker on another cannot route on a board number,
+and a parent reference that compared equal across trackers would pass a
+cross-tracker link through the refusal that exists to stop it.
+
+`Apply` is **not** transactional and the type says so. `ApplyReport`'s
+arithmetic is the contract — every change is either applied or attributed in
+`Failed`, and a change listed nowhere was APPLIED — so `CheckApplyReport` takes
+the real demand as a separate argument. A report checked only against itself
+makes the zero report clean, and a connector that swallowed every change would
+render clean.
+
+### Optional operation groups
+
+| Capability | Interface | What it means |
+|---|---|---|
+| `trains` | `TrainAdmin` | the backend's delivery buckets — milestones, cycles, releases — are administrable through this connector |
+| `scoped_trains` | (changes `TrainAdmin`'s contract) | trains are per-`Scope` rather than per-tracker: the same name is a DIFFERENT bucket in each scope |
+| `schema_admin` | `SchemaAdmin` | the board's own field schema can be created and extended |
+
+`native_types`, `native_hierarchy`, `cross_scope` and `item_fields` are
+behavioural rather than structural: each changes what a write is refused for or
+what a `Catalogue` reports. None of the seven is declaration-only.
+
+### Two properties the CONTRACT holds, not each backend
+
+Both are enforced by host-side guards in [`tracker`](../tracker/trains.go), and
+both are checked against a running connector by `trackerconform`. Leaving either
+to each backend is what makes it a property nobody actually has.
+
+**Union with unknown dominating** — `CheckTrainSets`. The train set is a UNION
+over scopes, so the less of it a caller can see the greener a replan looks. A
+scope that could not be read comes back with `ScopeTrains.Err` set, and it comes
+back: a scope silently dropped from the answer computes the same thing as one
+reported empty — "nothing to create here". The guard rejects a missing scope, a
+duplicate scope, a scope nobody asked about, an entry carrying `Err` *and* a
+list, an unclassified `Err`, and a partition shape that contradicts what the
+connector declared with `scoped_trains`.
+
+**Verify by re-reading** — `CheckTrainsCreated`. A create loop that iterated
+once still returns successfully for every name it was given, and the count is
+the only thing that shows it — so the count is checked against the demand and
+then the names are checked against the tracker. A report of
+`Requested=8, Applied=8, Failed={}` closes arithmetically and can be wrong about
+seven scopes; only the re-read sees that. A re-read that itself fails leaves the
+create UNKNOWN rather than done: the guard returns a zeroed report and an error
+wrapping the read failure, so the create is neither reported clean (nothing
+confirmed it) nor failed (it may well have worked).
+
+### Checking your connector: `trackerconform`
+
+```go
+rep, err := trackerconform.Run(ctx, myTracker, trackerconform.Options{ /* fixtures */ })
+if err != nil {
+	// the run could not be carried out at all
+}
+if err := rep.Err(); err != nil {
+	// the connector ran and is not conformant
+}
+```
+
+Fifteen named checks. Every write check is driven through a refusal the contract
+requires — a change set invalid before any network call, a parent on a foreign
+tracker, train specs with the wrong `Scope` polarity — so against a conformant
+connector the run writes nothing and is safe to repeat against a live board.
+`Tracker.Create` is deliberately not exercised: filing an item cannot be undone
+by the harness that filed it.
+
+Every field of `Options` is required, for the same reason every other harness in
+this SDK requires its fixtures: an optional fixture is a check that silently
+skips, and a check that skipped is reported by nothing. `Run` also refuses a
+fixture set that is complete and INCOHERENT — a foreign item that is not
+actually on another tracker, an unscannable board that is the scannable one, an
+`UnreadableScope` that is one of the readable ones.
+
+Every check has a stub built to violate it, and
+`TestRun_EveryCheckHasAViolatingStub` fails if one ever loses its falsifier: a
+harness only ever run against compliant input proves nothing about what it would
+catch.
 
 ## Versioning
 

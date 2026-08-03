@@ -24,7 +24,12 @@ const (
 	// contract, so an org can pair either half with a different backend. See
 	// the codeci package.
 	ClassCodeCI Class = "CodeCI"
-	// ClassRecordStore, ClassTracker, ClassCodeHost, ... land with their designs.
+	// ClassTracker is one work tracker — one board on one instance of one
+	// provider — and its items, their fields, their hierarchy and their
+	// lifecycle. It is batch-first and addresses everything by NAME, because
+	// no backend identity may cross the boundary. See the tracker package.
+	ClassTracker Class = "Tracker"
+	// ClassRecordStore, ClassCodeHost, ... land with their designs.
 )
 
 // classes is the single source of truth for the closed set of connector
@@ -36,6 +41,7 @@ var classes = []Class{
 	ClassCredentialLoader,
 	ClassRoster,
 	ClassCodeCI,
+	ClassTracker,
 }
 
 // Classes returns the closed set of connector classes, sorted, as a copy. A
