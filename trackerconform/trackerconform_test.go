@@ -2360,7 +2360,7 @@ func TestConform_CatchesATrainCreatedWhileReportedAsRefused(t *testing.T) {
 }
 
 // TestConform_CatchesACreateReportedSuccessfulForEveryNameItWasGiven is the
-// other half of the same defect, and the sentence the story uses for it: a
+// other half of the same defect, and the sentence the contract uses for it: a
 // create loop that iterated once still returns successfully for every name it
 // was given, and the count is the only thing that shows it. Here every spec is
 // refusable before any network call, so a report claiming them all applied is

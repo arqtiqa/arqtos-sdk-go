@@ -621,7 +621,7 @@ type Item struct {
 	// no pointer a caller must nil-check (see [Tracker]).
 	//
 	// It is closed by CONFORMANCE instead, and that is the deliberate choice
-	// rather than an omission. S3's harness must assert that every Item a read
+	// rather than an omission. The conformance harness must assert that every Item a read
 	// returns carries a Selected EQUAL to the Selection that read was given —
 	// for the zero Selection as much as for a populated one, because the zero
 	// one is exactly the case a connector that never sets the field would pass
