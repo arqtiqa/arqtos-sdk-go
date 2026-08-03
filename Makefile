@@ -21,15 +21,35 @@ ip-isolation:
 test:
 	$(GO) test -race ./... -count=1
 
-lint: fmt vet
+lint: fmt-check vet
 
-# gofmt -l prints misformatted files and exits 0, so the exit status has to be
-# derived from the output or the check silently passes.
+# ADR-ARQ-J-02 — one meaning per verb across every arqtiqa Go repo:
+#   `fmt`       WRITES (matching `go fmt` / `gofmt`, which write)
+#   `fmt-check` CHECKS (fails on dirty; this is what `lint` and CI depend on)
+#
+# ⚠️ This target CHANGED on 2026-08-04. It used to be the check, and `lint`
+# depended on it. If you have muscle memory from before, `make fmt` now
+# rewrites your tree instead of failing — use `make fmt-check` to verify.
 fmt:
-	@out="$$($(GO)fmt -l .)"; \
+	$(GO)fmt -w .
+
+# ⚠️ The gofmt trap has TWO halves and both are load-bearing (ADR-ARQ-J-02):
+#   1. `gofmt -l` EXITS 0 while listing files, so the exit code alone gates
+#      nothing — the EMPTINESS of the output is the check.
+#   2. `gofmt` exits NON-ZERO when it cannot PARSE a file, and that is not
+#      "formatting is fine". Collapsing the two makes an unparseable tree report
+#      CLEAN — the same defect class as arqtos-cli#1092, where "rule failed"
+#      collapsed into "no match" and a broken scan reported clean.
+fmt-check:
+	@out=$$(gofmt -l . 2>/tmp/gofmt.err); status=$$?; \
+	if [ $$status -ne 0 ]; then \
+	  echo "gofmt could not parse the tree (exit $$status) — this is NOT a passing format check"; \
+	  cat /tmp/gofmt.err >&2; exit 1; \
+	fi; \
 	if [ -n "$$out" ]; then \
-		echo "gofmt: these files need formatting:"; echo "$$out"; exit 1; \
-	fi
+	  echo "not gofmt-clean — run 'make fmt':"; echo "$$out"; exit 1; \
+	fi; \
+	echo "gofmt: clean"
 
 vet:
 	$(GO) vet ./...
