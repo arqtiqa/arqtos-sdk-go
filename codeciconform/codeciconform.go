@@ -46,6 +46,31 @@
 // to break it, and its companion fails if one such connector breaks a
 // NEIGHBOURING check as well — which would let a new check pass on damage
 // another check already reports.
+// # ⚠️ What this harness CANNOT check, and why
+//
+// CreatePR is never driven. A created pull/merge request cannot be undone by the
+// harness that created it, and every write check here is driven through a
+// REFUSAL for exactly that reason — MergePR with an unspecified method, MergePR
+// against a draft. The one create check, [CheckCreateRefusesIncompleteRequest],
+// is a refusal too: it asserts validation happens before anything is sent, and
+// never inspects a returned PR because none is returned.
+//
+// Two contract obligations therefore have NO check here, and a connector author
+// is on their honour for both:
+//
+//   - **CreatePR honours [codeci.CreatePRRequest.Draft].** The read half IS
+//     checked — [CheckDraftIsReported] asserts the draft fixture comes back as a
+//     draft — but nothing proves a connector that can REPORT a draft can also
+//     PRODUCE one.
+//   - **The PR returned by CreatePR carries a URL.** [codeci.PR.URL]'s doc states
+//     the obligation unconditionally; [CheckPRsCarryAURL] enforces it only on the
+//     list path.
+//
+// ⚠️ Do not read a green run as covering these. The alternative would be a
+// harness that opens a real pull request every time it runs, against a
+// repository it cannot clean up — which would cost more than it proves and would
+// end the property that makes this suite safe to repeat against a live fixture.
+
 package codeciconform
 
 import (
@@ -113,6 +138,17 @@ const (
 	// CheckPRsCarryAURL covers every codeci.PR from ListPRs carrying a
 	// non-empty URL, so a caller is not left assembling a vendor URL itself.
 	CheckPRsCarryAURL = "prs/carry-a-url"
+
+	// CheckDraftIsReported covers the READ half of the draft contract: the
+	// fixtures name a pull/merge request that IS a draft, and a list read must
+	// report it as one.
+	//
+	// ⚠️ It exists because Draft is a bool, so a connector that never populates
+	// it reports every draft as NOT a draft — and the contract refuses to MERGE
+	// a draft, so a false negative here does not fail loudly. It merges the
+	// thing the refusal exists to protect. That is the same always-zero hazard
+	// the branch-protection field carries, on the other side of the same struct.
+	CheckDraftIsReported = "prs/draft-is-reported"
 	// CheckIdentity covers WhoAmI answering with an authenticated identity
 	// carrying a non-empty login, or failing with a classified error. An empty
 	// login reported as a success is refused: a host publishes this answer as
@@ -294,6 +330,7 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 	checkCreateRefusesIncompleteRequest(ctx, &rep, c, opts)
 	checkBranchProtectionReported(ctx, &rep, c, opts)
 	checkPRsCarryAURL(ctx, &rep, c, opts)
+	checkDraftIsReported(ctx, &rep, c, opts)
 	checkIdentity(ctx, &rep, c)
 	checkHealth(ctx, &rep, c)
 
@@ -625,6 +662,45 @@ func checkPRsCarryAURL(ctx context.Context, rep *Report, c codeci.CodeCI, opts O
 		}
 	}
 	rep.add(CheckPRsCarryAURL, true, fmt.Sprintf("%d pull/merge request(s), each with a URL", len(items)))
+}
+
+// checkDraftIsReported reads the list and asserts the fixture named as a draft
+// comes back as one.
+//
+// It is a READ, so it is safe to repeat — and it is the ONLY draft assertion
+// this harness can make. See the package doc on what CreatePR's obligations
+// cost to check: producing a draft cannot be undone by the harness that
+// produced it, so the create half is stated rather than driven.
+func checkDraftIsReported(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	res, err := c.ListPRs(ctx, opts.Repo, codeci.PRStateAny)
+	if err != nil {
+		rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+			"ListPRs(%s) failed on a repository the fixtures say it must list: %v", opts.Repo, err))
+		return
+	}
+	items, ierr := res.Items()
+	if ierr != nil {
+		rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+			"ListPRs(%s) reported success with a resolution that carries no list: %v", opts.Repo, ierr))
+		return
+	}
+	for _, pr := range items {
+		if pr.ID != opts.DraftPR {
+			continue
+		}
+		if !pr.Draft {
+			rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+				"pull/merge request %q is named by the fixtures as a draft and came back with Draft=false; the contract "+
+					"REFUSES to merge a draft, so a draft reported as ordinary is not a smaller answer — it is the one "+
+					"reading under which that refusal can never fire", pr.ID))
+			return
+		}
+		rep.add(CheckDraftIsReported, true, fmt.Sprintf("%s reported as a draft", pr.ID))
+		return
+	}
+	rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+		"ListPRs(%s) returned %d pull/merge request(s) and none of them is %q, which the fixtures name as a draft; a "+
+			"list that omits it cannot be checked for the draft it was pointed at", opts.Repo, len(items), opts.DraftPR))
 }
 
 // checkIdentity is the check issue #46 names: an empty login must be a TYPED

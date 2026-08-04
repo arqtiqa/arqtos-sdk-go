@@ -104,7 +104,15 @@ func (s *stub) ListPRs(ctx context.Context, fullName string, state codeci.PRStat
 	if fullName != fixtureRepo {
 		return codeci.Resolution[codeci.PR]{}, cerr.New(cerr.KindNotFound, "ListPRs", nil)
 	}
-	return codeci.Resolved([]codeci.PR{{ID: fixtureOpenPR, FullName: fullName, State: codeci.PRStateOpen, URL: fixturePRURL}}, codeci.Complete)
+	// ⚠️ The draft fixture is listed HERE as well as merged against. Before
+	// prs/draft-is-reported existed, this list carried only the open PR while
+	// MergePR was driven against the draft one — so the stub's own list and its
+	// own merge target disagreed about what is on the repository, and nothing
+	// noticed.
+	return codeci.Resolved([]codeci.PR{
+		{ID: fixtureOpenPR, FullName: fullName, State: codeci.PRStateOpen, URL: fixturePRURL},
+		{ID: fixtureDraftPR, FullName: fullName, State: codeci.PRStateOpen, Draft: true, URL: fixturePRURL},
+	}, codeci.Complete)
 }
 
 func (s *stub) MergePR(ctx context.Context, fullName, prID string, method codeci.MergeMethod) error {
@@ -641,6 +649,25 @@ func TestRun_AcceptsAClassifiedHealthFailure(t *testing.T) {
 // for each violation and cover more than one shape of it. What this table adds
 // is COVERAGE — that no check exists without one.
 var violators = map[string]func() (codeci.CodeCI, manifest.Doc){
+	// Reports the draft fixture as an ordinary PR — the always-false shape.
+	// Everything else about it is compliant, so it breaks prs/draft-is-reported
+	// and nothing else.
+	codeciconform.CheckDraftIsReported: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.listPRs = func(_ context.Context, fullName string, state codeci.PRState) (codeci.Resolution[codeci.PR], error) {
+			if !state.UsableAsFilter() {
+				return codeci.Resolution[codeci.PR]{}, cerr.New(cerr.KindInvalid, "ListPRs", errors.New("state is not usable as a filter"))
+			}
+			if fullName != fixtureRepo {
+				return codeci.Resolution[codeci.PR]{}, cerr.New(cerr.KindNotFound, "ListPRs", nil)
+			}
+			return codeci.Resolved([]codeci.PR{
+				{ID: fixtureOpenPR, FullName: fullName, State: codeci.PRStateOpen, URL: fixturePRURL},
+				{ID: fixtureDraftPR, FullName: fullName, State: codeci.PRStateOpen, Draft: false, URL: fixturePRURL},
+			}, codeci.Complete)
+		}
+		return s, stubManifest()
+	},
 	codeciconform.CheckManifest: func() (codeci.CodeCI, manifest.Doc) {
 		s := newStub()
 		s.caps = connector.Capabilities{"ci-control"} // misspelt: the vocabulary says "ci_control"
@@ -673,7 +700,12 @@ var violators = map[string]func() (codeci.CodeCI, manifest.Doc){
 	codeciconform.CheckListFailClosed: func() (codeci.CodeCI, manifest.Doc) {
 		s := newStub()
 		s.listPRs = func(_ context.Context, fullName string, _ codeci.PRState) (codeci.Resolution[codeci.PR], error) {
-			return codeci.Resolved([]codeci.PR{{ID: fixtureOpenPR, FullName: fullName, State: codeci.PRStateOpen, URL: fixturePRURL}}, codeci.Complete)
+			// Carries the draft fixture so this stub breaks fail-closed and
+			// NOTHING else — prs/draft-is-reported reads the same list.
+			return codeci.Resolved([]codeci.PR{
+				{ID: fixtureOpenPR, FullName: fullName, State: codeci.PRStateOpen, URL: fixturePRURL},
+				{ID: fixtureDraftPR, FullName: fullName, State: codeci.PRStateOpen, Draft: true, URL: fixturePRURL},
+			}, codeci.Complete)
 		}
 		return s, stubManifest()
 	},
@@ -723,7 +755,12 @@ var violators = map[string]func() (codeci.CodeCI, manifest.Doc){
 			if fullName != fixtureRepo {
 				return codeci.Resolution[codeci.PR]{}, cerr.New(cerr.KindNotFound, "ListPRs", nil)
 			}
-			return codeci.Resolved([]codeci.PR{{ID: fixtureOpenPR, FullName: fullName, State: codeci.PRStateOpen}}, codeci.Complete)
+			// The draft carries its Draft flag and, like the open one, no URL —
+			// so the single defect stays "no URL" rather than becoming two.
+			return codeci.Resolved([]codeci.PR{
+				{ID: fixtureOpenPR, FullName: fullName, State: codeci.PRStateOpen},
+				{ID: fixtureDraftPR, FullName: fullName, State: codeci.PRStateOpen, Draft: true},
+			}, codeci.Complete)
 		}
 		return s, stubManifest()
 	},
