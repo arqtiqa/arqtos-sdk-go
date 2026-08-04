@@ -129,11 +129,98 @@ func TestVocabulariesAreSortedAndCopied(t *testing.T) {
 	}
 }
 
+// TestIdentityCoherence pins the invariant WhoAmI's whole point rests on: an
+// authenticated identity carrying no login is not a smaller answer, it is
+// incoherent. A host's identity probe exists to assert "this host authenticated
+// with no token in its environment", and an empty login falsifies exactly that
+// assertion while still looking like a success.
+//
+// The reverse direction is pinned too: a login named while denying
+// authentication says "I am nobody, and nobody is called octocat".
+func TestIdentityCoherence(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity codeci.Identity
+		coherent bool
+	}{
+		{"authenticated with a login", codeci.Identity{Login: "placeholder-login", Authenticated: true}, true},
+		{"authenticated with no login", codeci.Identity{Authenticated: true}, false},
+		{"anonymous with no login", codeci.Identity{}, true},
+		{"anonymous with a login", codeci.Identity{Login: "placeholder-login"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.identity.Coherent(); got != tc.coherent {
+				t.Fatalf("Identity%+v.Coherent() = %v, want %v", tc.identity, got, tc.coherent)
+			}
+		})
+	}
+}
+
+// TestCreatePRRequestValidateNamesEveryMissingField is the guard that makes
+// the request STRUCT safe. Six positional strings force a caller to write ""
+// on purpose; a struct lets one be forgotten silently, so CreatePR validates
+// before it does anything else — the same discipline MergePR applies to
+// MergeMethod, for the same reason.
+func TestCreatePRRequestValidateNamesEveryMissingField(t *testing.T) {
+	complete := codeci.CreatePRRequest{
+		FullName: "placeholder-org/placeholder-repo",
+		Branch:   "topic",
+		Base:     "main",
+		Title:    "a title",
+	}
+	if err := complete.Validate(); err != nil {
+		t.Fatalf("a complete request was refused: %v; Body and Draft are both optional", err)
+	}
+	withBodyAndDraft := complete
+	withBodyAndDraft.Body = "prose"
+	withBodyAndDraft.Draft = true
+	if err := withBodyAndDraft.Validate(); err != nil {
+		t.Fatalf("a complete DRAFT request was refused: %v", err)
+	}
+
+	for _, tc := range []struct {
+		field string
+		blank func(*codeci.CreatePRRequest)
+	}{
+		{"full_name", func(r *codeci.CreatePRRequest) { r.FullName = "" }},
+		{"branch", func(r *codeci.CreatePRRequest) { r.Branch = "" }},
+		{"base", func(r *codeci.CreatePRRequest) { r.Base = "" }},
+		{"title", func(r *codeci.CreatePRRequest) { r.Title = "" }},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			req := complete
+			tc.blank(&req)
+			err := req.Validate()
+			if err == nil {
+				t.Fatalf("a request with %s unset validated; a zero field in a struct is exactly what a positional signature could not hide", tc.field)
+			}
+			if got := cerr.KindOf(err); got != cerr.KindInvalid {
+				t.Fatalf("KindOf = %v, want %v: bad input, not an unreachable backend", got, cerr.KindInvalid)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("the refusal does not name %s, so a caller cannot tell which field it forgot: %v", tc.field, err)
+			}
+		})
+	}
+
+	// Every missing field is named at once, rather than one per round trip.
+	err := codeci.CreatePRRequest{}.Validate()
+	if err == nil {
+		t.Fatalf("the zero request validated")
+	}
+	for _, field := range []string{"full_name", "branch", "base", "title"} {
+		if !strings.Contains(err.Error(), field) {
+			t.Errorf("the zero request's refusal does not name %s: %v", field, err)
+		}
+	}
+}
+
 // fakeCodeCI is a minimal, in-memory CodeCI + CIController implementation —
 // compile-time proof that the ABC is satisfiable by an ordinary struct, and a
 // shared fixture for codeciconform's own tests.
 type fakeCodeCI struct {
-	caps connector.Capabilities
+	caps  connector.Capabilities
+	login string
 
 	prs         map[string]codeci.PR
 	diffs       map[string][]codeci.DiffFile
@@ -151,8 +238,22 @@ func (f *fakeCodeCI) Health(context.Context) (connector.Health, error) {
 }
 func (f *fakeCodeCI) Close() error { return nil }
 
-func (f *fakeCodeCI) CreatePR(_ context.Context, fullName, branch, base, title, body string) (codeci.PR, error) {
-	p := codeci.PR{ID: "new", FullName: fullName, Branch: branch, BaseBranch: base, Title: title, Body: body, State: codeci.PRStateOpen}
+func (f *fakeCodeCI) WhoAmI(context.Context) (codeci.Identity, error) {
+	if f.login == "" {
+		return codeci.Identity{}, cerr.New(cerr.KindUnauthorized, "WhoAmI", errors.New("no credential"))
+	}
+	return codeci.Identity{Login: f.login, Authenticated: true}, nil
+}
+
+func (f *fakeCodeCI) CreatePR(_ context.Context, req codeci.CreatePRRequest) (codeci.PR, error) {
+	if err := req.Validate(); err != nil {
+		return codeci.PR{}, err
+	}
+	p := codeci.PR{
+		ID: "new", FullName: req.FullName, Branch: req.Branch, BaseBranch: req.Base,
+		Title: req.Title, Body: req.Body, State: codeci.PRStateOpen, Draft: req.Draft,
+		URL: "https://code.example/" + req.FullName + "/pull/new",
+	}
 	f.prs[p.ID] = p
 	return p, nil
 }
@@ -232,17 +333,7 @@ var (
 // codeciconform) so a change to fakeCodeCI's behaviour that breaks its own
 // documented contract is caught here first.
 func TestFakeCodeCISatisfiesTheInterface(t *testing.T) {
-	f := &fakeCodeCI{
-		caps: connector.Capabilities{codeci.CapCIControl},
-		prs:  map[string]codeci.PR{"1": {ID: "1", FullName: "o/r", State: codeci.PRStateOpen}},
-		diffs: map[string][]codeci.DiffFile{
-			"1": {{Path: "a.go", Status: codeci.FileStatusModified, Additions: 1}},
-		},
-		branches:    []codeci.Branch{{Name: "main", SHA: "deadbeef"}},
-		checkRuns:   map[string][]codeci.CheckRun{"main": {{ID: "c1", Name: "build", Status: codeci.RunStatusSuccess}}},
-		workflowRun: map[string]codeci.WorkflowRun{"w1": {ID: "w1", Status: codeci.RunStatusSuccess}},
-		merged:      map[string]bool{},
-	}
+	f := newFakeCodeCI()
 	ctx := context.Background()
 
 	if err := f.MergePR(ctx, "o/r", "1", codeci.MergeMethodSquash); err != nil {
@@ -253,5 +344,102 @@ func TestFakeCodeCISatisfiesTheInterface(t *testing.T) {
 	}
 	if err := f.MergePR(ctx, "o/r", "1", codeci.MergeMethodUnspecified); err == nil {
 		t.Fatalf("MergePR must refuse an unspecified method")
+	}
+}
+
+func newFakeCodeCI() *fakeCodeCI {
+	return &fakeCodeCI{
+		caps:  connector.Capabilities{codeci.CapCIControl},
+		login: "placeholder-login",
+		prs:   map[string]codeci.PR{"1": {ID: "1", FullName: "o/r", State: codeci.PRStateOpen, URL: "https://code.example/o/r/pull/1"}},
+		diffs: map[string][]codeci.DiffFile{
+			"1": {{Path: "a.go", Status: codeci.FileStatusModified, Additions: 1}},
+		},
+		branches:    []codeci.Branch{{Name: "main", SHA: "deadbeef", Protected: true}, {Name: "topic", SHA: "cafef00d"}},
+		checkRuns:   map[string][]codeci.CheckRun{"main": {{ID: "c1", Name: "build", Status: codeci.RunStatusSuccess}}},
+		workflowRun: map[string]codeci.WorkflowRun{"w1": {ID: "w1", Status: codeci.RunStatusSuccess}},
+		merged:      map[string]bool{},
+	}
+}
+
+// TestCreatePRCanProduceEveryDraftStateItReads closes issue #46's second gap in
+// one assertion: before this, the contract could READ PR.Draft
+// and REFUSE to merge a draft, but had no way to open one — it observed and
+// gated a state it could not create. Opening a draft and then having MergePR
+// refuse that very pull request is the round trip that proves the gap closed.
+func TestCreatePRCanProduceEveryDraftStateItReads(t *testing.T) {
+	f := newFakeCodeCI()
+	ctx := context.Background()
+
+	pr, err := f.CreatePR(ctx, codeci.CreatePRRequest{
+		FullName: "o/r", Branch: "topic", Base: "main", Title: "a title", Draft: true,
+	})
+	if err != nil {
+		t.Fatalf("CreatePR: %v", err)
+	}
+	if !pr.Draft {
+		t.Fatalf("CreatePR(Draft: true) returned a pull request the host does not hold as a draft: %+v", pr)
+	}
+	if pr.URL == "" {
+		t.Fatalf("the created pull request carries no URL, so a caller must assemble a vendor URL itself: %+v", pr)
+	}
+	if err := f.MergePR(ctx, "o/r", pr.ID, codeci.MergeMethodMerge); err == nil {
+		t.Fatalf("MergePR merged a draft this contract has now opened itself")
+	}
+	if f.merged[pr.ID] {
+		t.Fatalf("MergePR recorded a merge for a draft")
+	}
+
+	notDraft, err := f.CreatePR(ctx, codeci.CreatePRRequest{
+		FullName: "o/r", Branch: "topic2", Base: "main", Title: "a title",
+	})
+	if err != nil {
+		t.Fatalf("CreatePR: %v", err)
+	}
+	if notDraft.Draft {
+		t.Fatalf("CreatePR with Draft unset opened a draft; the zero value must mean ready-for-review: %+v", notDraft)
+	}
+}
+
+// TestCreatePRRefusesAnIncompleteRequestBeforeOpeningAnything: the fake is the
+// reference implementation of the obligation the contract states, so it is
+// asserted here rather than only in codeciconform.
+func TestCreatePRRefusesAnIncompleteRequestBeforeOpeningAnything(t *testing.T) {
+	f := newFakeCodeCI()
+	before := len(f.prs)
+	if _, err := f.CreatePR(context.Background(), codeci.CreatePRRequest{FullName: "o/r", Base: "main"}); err == nil {
+		t.Fatalf("CreatePR opened a pull request from an incomplete request")
+	} else if cerr.KindOf(err) != cerr.KindInvalid {
+		t.Fatalf("KindOf = %v, want %v", cerr.KindOf(err), cerr.KindInvalid)
+	}
+	if len(f.prs) != before {
+		t.Fatalf("CreatePR recorded a pull request while refusing the request")
+	}
+}
+
+// TestBranchProtectionIsReportedNotAssumed: always-false is the one always-zero
+// field in this package that is actively dangerous, because it
+// reads as "this branch is unprotected". A fixture carrying one protected and
+// one unprotected branch is what makes the field falsifiable in both
+// directions.
+func TestBranchProtectionIsReportedNotAssumed(t *testing.T) {
+	f := newFakeCodeCI()
+	res, err := f.ListBranches(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	items, err := res.Items()
+	if err != nil {
+		t.Fatalf("Items: %v", err)
+	}
+	got := map[string]bool{}
+	for _, b := range items {
+		got[b.Name] = b.Protected
+	}
+	if !got["main"] {
+		t.Errorf("the protected branch reports Protected=false, which reads as an unprotected branch")
+	}
+	if got["topic"] {
+		t.Errorf("the unprotected branch reports Protected=true; a constant true is as much a lie as a constant false")
 	}
 }
