@@ -75,9 +75,12 @@ package codeci
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
+	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 )
 
@@ -382,9 +385,146 @@ type PR struct {
 	Body       string
 	State      PRState
 	// Draft reports whether the code host considers this a draft/WIP
-	// pull/merge request — a state [CodeCI.MergePR] MUST refuse to merge.
+	// pull/merge request — a state [CodeCI.MergePR] MUST refuse to merge and
+	// [CodeCI.CreatePR] can open, via [CreatePRRequest.Draft].
+	Draft bool
+	// URL is the pull/merge request's own page on the code host.
+	//
+	// It MUST be non-empty. Every code host this class is written against
+	// gives a change request a web address, and it is derivable from the
+	// vendor's URL layout — but a contract that leaves it to the caller has
+	// pushed vendor knowledge back out to every caller, which is the
+	// duplication this class exists to remove. Unlike [CheckRun.DetailsURL],
+	// which a host may genuinely not provide, this one is always available.
+	URL string
+}
+
+// A CreatePRRequest is the pull/merge request [CodeCI.CreatePR] is asked to
+// open.
+//
+// # Why a struct rather than positional arguments
+//
+// CreatePR previously took five strings after ctx — fullName, branch, base,
+// title, body — all five adjacent and interchangeable to the compiler:
+// transposing base and branch, or title and body, builds cleanly and opens the
+// wrong pull request. A sixth positional argument would have kept that hazard
+// and lengthened it. A struct names every field at the call site, and — the
+// reason that matters more for a PUBLISHED contract — the NEXT field this
+// request needs (reviewers, labels, a maintainer-edit flag) is an additive
+// change that breaks no caller, where a seventh parameter would reopen this
+// signature again.
+//
+// # What a struct costs, and how that cost is paid
+//
+// Positional arguments force a caller to write "" on purpose; a struct lets a
+// field be forgotten silently, which would put a zero value straight back into
+// a contract built to refuse them. That is why [CreatePRRequest.Validate]
+// exists and why [CodeCI.CreatePR] MUST call it before it does anything else —
+// the same guard, in the same place, that MergePR already applies to
+// [MergeMethod].
+type CreatePRRequest struct {
+	// FullName is the `<owner>/<name>` of the repository to open it against.
+	FullName string
+	// Branch is the source (head) branch the change is on.
+	Branch string
+	// Base is the target branch it should merge into.
+	Base string
+	// Title is the pull/merge request's title.
+	Title string
+	// Body is its description. It is OPTIONAL: a change request with no prose
+	// is an ordinary thing to open, so an empty Body is a real value rather
+	// than a forgotten one.
+	Body string
+	// Draft asks the code host to open this as a draft/WIP pull request.
+	//
+	// It is optional and its zero value is ready-for-review, which is the
+	// answer a caller that says nothing means. This is the field
+	// issue #46 adds: before it, the contract could READ draft state
+	// (see [PR.Draft]) and REFUSE to merge one (see [CodeCI.MergePR]) but had
+	// no way to produce one — it observed and gated a state it could not
+	// create.
 	Draft bool
 }
+
+// requiredCreatePRFields is the single source of truth for what a request must
+// carry: [CreatePRRequest.Validate] derives from it, so a field cannot be
+// half-required. The names are the wire names a host reports, not the Go field
+// names, so an operator reading the refusal sees what they typed.
+var requiredCreatePRFields = []struct {
+	name string
+	get  func(CreatePRRequest) string
+}{
+	{"full_name", func(r CreatePRRequest) string { return r.FullName }},
+	{"branch", func(r CreatePRRequest) string { return r.Branch }},
+	{"base", func(r CreatePRRequest) string { return r.Base }},
+	{"title", func(r CreatePRRequest) string { return r.Title }},
+}
+
+// Validate reports whether r carries everything needed to open a pull/merge
+// request, as a cerr.KindInvalid failure naming EVERY missing field rather than
+// the first — a caller fixing a request one round trip per field learns the
+// same thing four times as slowly.
+//
+// Body and Draft are not checked: both have real, meaningful zero values.
+func (r CreatePRRequest) Validate() error {
+	var missing []string
+	for _, f := range requiredCreatePRFields {
+		if f.get(r) == "" {
+			missing = append(missing, f.name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return cerr.New(cerr.KindInvalid, "CreatePR", fmt.Errorf(
+		"pull/merge request is missing required field(s) %s; a struct field left unset is not a smaller request",
+		strings.Join(missing, ", ")))
+}
+
+// An Identity is the account a [CodeCI] connector's own credential
+// authenticates as, as the CODE HOST reports it — never as the connector or a
+// host assumes it to be.
+//
+// # Why this is a contract operation and not a host's own probe
+//
+// A host publishes this answer as the standing proof that it authenticates with
+// no token in its own environment: the credential came through the broker, the
+// code host was asked who is calling, and it named an account. A host that
+// produced that answer itself would be asserting the claim rather than
+// measuring it, and a host that served it from
+// [connector.Connector.Health] — which reports reachability and no login —
+// would publish an empty login beside a success, destroying the assertion it
+// exists to make.
+type Identity struct {
+	// Login is the account name the code host answers with.
+	//
+	// It MUST be non-empty whenever Authenticated is true. An empty login
+	// reported alongside a success is not a smaller answer — it is the
+	// opposite of the answer, wearing a success's shape. A connector that
+	// cannot learn the login returns a typed failure instead
+	// (cerr.KindUnauthorized, cerr.KindUnavailable).
+	Login string
+	// Authenticated reports whether the code host recognised the credential as
+	// some account at all.
+	//
+	// False is a real answer rather than a failure, and it is narrow: the code
+	// host ANSWERED and identified the caller as nobody, which a host serving
+	// anonymous reads does. A credential the code host REJECTED is not this —
+	// that is cerr.KindUnauthorized, because a rejected credential is a failed
+	// read and not a report about an anonymous one. When it is false, Login is
+	// empty: there is no account to name.
+	Authenticated bool
+}
+
+// Coherent reports whether i says one thing rather than two contradictory
+// ones. It is the single source of truth for the invariant [CheckIdentity] and
+// the codeciconform harness both enforce, so neither restates it.
+//
+// Two shapes are incoherent: an authenticated identity carrying no login (the
+// shape that falsifies the assertion an identity probe exists to make), and a
+// login named while denying authentication ("I am nobody, and nobody is called
+// octocat").
+func (i Identity) Coherent() bool { return i.Authenticated == (i.Login != "") }
 
 // A DiffFile is one file's change within a pull/merge request, as returned by
 // [CodeCI.GetDiff].
@@ -404,6 +544,20 @@ type DiffFile struct {
 type Branch struct {
 	Name string
 	SHA  string
+	// Protected reports whether the code host enforces protection rules on
+	// this branch — required reviews, required checks, a push restriction:
+	// whatever the vendor calls the state in which a push or merge is not
+	// simply allowed.
+	//
+	// ⚠️ A connector MUST report what the code host says and MUST NOT leave
+	// this at its zero value because it did not look. false reads as "this
+	// branch is unprotected", which is the one always-zero field in this
+	// package that is actively dangerous: a caller checking whether it may
+	// force-push gets a yes it never computed. A connector that cannot
+	// determine protection state returns a typed failure from
+	// [CodeCI.ListBranches] rather than a list of branches asserting they are
+	// all unprotected.
+	Protected bool
 }
 
 // A CheckRun is one check/status entry reported against a commit ref.
@@ -449,9 +603,34 @@ type WorkflowRun struct {
 type CodeCI interface {
 	connector.Connector
 
-	// CreatePR opens a pull/merge request from branch against base, and
-	// returns it as the host now holds it.
-	CreatePR(ctx context.Context, fullName, branch, base, title, body string) (PR, error)
+	// WhoAmI reports the account this connector's credential authenticates as
+	// on the code host, as the code host itself answers — see [Identity].
+	//
+	// It MUST NOT return an [Identity] that is not [Identity.Coherent]: a
+	// credential whose login cannot be learned is a typed failure
+	// (cerr.KindUnauthorized when the code host rejected it,
+	// cerr.KindUnavailable or cerr.KindTimeout when the read did not complete),
+	// never a success carrying an empty login.
+	//
+	// It is a REQUIRED operation rather than one behind a capability. A host
+	// publishes this answer as a standing assertion about how it authenticates,
+	// and an assertion a host can only make for some connectors is not an
+	// assertion — it is a fallback path, which is the per-host duplication
+	// this class exists to remove. There is also no permission for a capability to
+	// gate: a connector that can reach the code host authenticated at all,
+	// which every operation above requires, can be told which account it
+	// reached it as.
+	WhoAmI(ctx context.Context) (Identity, error)
+
+	// CreatePR opens the pull/merge request described by req, and returns it as
+	// the host now holds it. It opens a DRAFT when req.Draft is set.
+	//
+	// It MUST call [CreatePRRequest.Validate] before doing anything else and
+	// return its error unchanged: a request is a struct, so an unset required
+	// field is silent at the call site, and the alternative to refusing it is
+	// opening a pull/merge request titled "" — an artefact a human then has to
+	// find and close.
+	CreatePR(ctx context.Context, req CreatePRRequest) (PR, error)
 
 	// ListPRs returns the pull/merge requests on a repository in the given
 	// state, paging until the host reports no further page. A state that is

@@ -836,7 +836,8 @@ closed.
 
 | Method | Semantics |
 |---|---|
-| `CreatePR(ctx, fullName, branch, base, title, body) (PR, error)` | Opens a pull/merge request from `branch` against `base`. |
+| `WhoAmI(ctx) (Identity, error)` | The account this connector's credential authenticates as, as the **code host** reports it. `Identity` is `{Login, Authenticated}`, and it MUST be `Coherent()`: an authenticated identity carrying an empty login is a typed failure (`cerr.KindUnauthorized`/`KindUnavailable`), never a success. Required, not capability-gated — see [why](#why-whoami-is-required-and-not-behind-a-capability). |
+| `CreatePR(ctx, req CreatePRRequest) (PR, error)` | Opens the pull/merge request described by `req` — `{FullName, Branch, Base, Title, Body, Draft}` — including a **draft** when `req.Draft` is set. MUST call `req.Validate()` before anything else and return its error unchanged: a struct lets a required field be forgotten where a positional argument forced an explicit `""`. |
 | `ListPRs(ctx, fullName, state) (Resolution[PR], error)` | Every pull/merge request in `state`, paged to completion. `state` must be `PRState.UsableAsFilter()`; `PRStateUnspecified` is `cerr.KindInvalid`. |
 | `MergePR(ctx, fullName, prID, method) error` | Merges `prID`. MUST validate `method.Specified()` **before** doing anything else, and MUST refuse a pull/merge request currently reported as a draft — both `cerr.KindInvalid`, both before any merge is attempted. |
 | `GetDiff(ctx, fullName, prID) (Resolution[DiffFile], error)` | Every changed file in `prID`, paged to completion. A real pull/merge request always has at least one changed file, so `EmptyList` is never a legitimate answer here. |
@@ -847,6 +848,29 @@ closed.
 `RerunWorkflow`/`CancelWorkflow` are the optional `CIController` operation
 behind `CapCIControl` — see [capabilities](#the-codeci-capability-vocabulary)
 below.
+
+#### Why `WhoAmI` is required, and not behind a capability
+
+`CIController` is optional because reading and mutating CI are plausibly
+different permissions. Identity is not that shape. A host publishes `WhoAmI`'s
+answer as its **standing proof** that it authenticates with no token in its own
+environment — and an assertion a host can only make for *some* connectors is not
+an assertion, it is a fallback path: the per-host duplication this class exists
+to remove. There is also no permission for a
+capability to gate: a connector that can reach the code host authenticated at
+all — which every required operation above needs — can be told which account it
+reached it as.
+
+**`Health()` is not a substitute.** It reports reachability and carries no
+login, so serving an identity probe from it publishes an empty login beside a
+success: the opposite of the claim, wearing a success's shape.
+
+#### `PR.URL` and `Branch.Protected`
+
+| Field | Obligation |
+|---|---|
+| `PR.URL` | MUST be non-empty. Derivable from a vendor's URL layout, but a contract that leaves it to callers has pushed vendor knowledge back out to every caller. Unlike `CheckRun.DetailsURL`, which a host may genuinely not provide. |
+| `Branch.Protected` | MUST be what the code host says, and MUST NOT be left at its zero value because the connector did not look. `false` reads as *"this branch is unprotected"* — the one always-zero field in this class that is actively dangerous. A connector that cannot determine protection state fails `ListBranches` rather than returning branches asserting they are all unprotected. |
 
 **The vendor's own transport split is invisible here.** GitHub answers "what
 is the CI status of a ref" over GraphQL and "rerun this workflow" over REST,
@@ -886,10 +910,17 @@ never involved. `codeci`'s own `Fault`/`FaultError`/`CheckResolution` say
 `GetCheckRuns` read as complete masking a failing check) rather than
 directory-shaped ones (an offboarding sweep revoking access).
 
-| `Fault` | Meaning |
-|---|---|
-| `FaultUnresolved` | success carrying no list |
-| `FaultPartial` | success asserting `codeci.Partial` — a truncated read reported instead of a typed failure |
+| `Fault` | Meaning | Host-side guard |
+|---|---|---|
+| `FaultUnresolved` | success carrying no list | `CheckResolution` |
+| `FaultPartial` | success asserting `codeci.Partial` — a truncated read reported instead of a typed failure | `CheckResolution` |
+| `FaultIncoherentIdentity` | `WhoAmI` reporting success with an identity that is not `Coherent()` — an authenticated identity with no login, or a login named while denying authentication | `CheckIdentity` |
+
+⚠️ **`CheckIdentity` is load-bearing in a way `CheckResolution` is not.**
+`Resolution.Items` refuses to read an unresolved resolution whether or not a
+host calls the guard; an `Identity` is a plain struct whose fields read fine, so
+a host that publishes `WhoAmI`'s answer **without** `CheckIdentity` can publish
+an empty login as a success.
 
 ### The `CodeCI` capability vocabulary
 
@@ -915,6 +946,9 @@ rep, err := codeciconform.Run(ctx, myConnector, codeciconform.Options{
 	UnknownPR:   "999999",
 	DraftPR:     "2",                    // IS a draft
 	OpenPR:      "3",                    // open, NOT a draft
+
+	ProtectedBranch:   "main",           // the code host DOES protect it
+	UnprotectedBranch: "topic",          // it does NOT
 })
 if err != nil {
 	return err // the check could not be run at all
@@ -934,16 +968,22 @@ if err := rep.Err(); err != nil {
 | `lists/failure-is-typed-and-fail-closed` | `ListPRs(UnknownRepo)` and `GetDiff(Repo, UnknownPR)` each fail with a classified `cerr.Kind` **and** an unreadable resolution |
 | `merge/refuses-unspecified-method` | `MergePR(Repo, OpenPR, MergeMethodUnspecified)` is refused, **without merging** `OpenPR` |
 | `merge/refuses-draft` | `MergePR(Repo, DraftPR, MergeMethodMerge)` is refused, **without merging** `DraftPR` |
+| `create/refuses-an-incomplete-request` | `CreatePR` with a `CreatePRRequest` carrying no branch, base or title is refused with a classified error, **without opening anything** |
+| `branches/protection-is-reported` | `ListBranches` reports `Protected: true` for `ProtectedBranch` **and** `false` for `UnprotectedBranch` — both directions, so neither constant passes |
+| `prs/carry-a-url` | every `PR` from `ListPRs(Repo)` carries a non-empty `URL` |
+| `identity/answers-with-a-login` | `WhoAmI()` reports an authenticated identity with a non-empty login, or fails with a classified error. An empty login reported as a success is **refused** |
 | `health/answers` | `Health()` reports a status or a classified failure |
 
-**The two merge checks call `MergePR` for real, against a live fixture, and
-are safe to run repeatedly.** A conformant connector validates the method and
+**The two merge checks and the create check call the mutating operations for
+real, against live fixtures, and are safe to run repeatedly.** A conformant connector validates the method and
 checks for draft status **before** attempting any merge — which is exactly
 what makes calling `MergePR(Repo, OpenPR, MergeMethodUnspecified)` and
 `MergePR(Repo, DraftPR, MergeMethodMerge)` non-destructive: neither call ever
-reaches the merge itself. A connector that has NOT implemented one of these
-guards merges the fixture — a loud, legible failure of the check, rather than
-a silent one.
+reaches the merge itself. The same holds for `create`: a conformant connector
+validates the request before it does anything, so the call never reaches the
+code host. A connector that has NOT implemented one of these guards merges the
+fixture, or opens a pull request with no title — a loud, legible failure of the
+check, rather than a silent one.
 
 Every field of `Options` is required, for the same reason `credconform` and
 `rosterconform` require theirs: a check that cannot be driven is not skipped,

@@ -26,6 +26,18 @@ const (
 	// meant to, reported as a success rather than as the typed failure the
 	// contract requires for one.
 	FaultPartial Fault = "partial-read-reported-as-success"
+	// FaultIncoherentIdentity is a connector returning an [Identity] that is
+	// not [Identity.Coherent] from [CodeCI.WhoAmI] — an authenticated identity
+	// carrying no login, or a login named while denying authentication.
+	//
+	// The first shape is why this fault exists. A host publishes WhoAmI's
+	// answer as the standing proof that it authenticates with no token in its
+	// own environment; served from an empty login it publishes the opposite of
+	// that claim, and it does so wearing a success's shape, so nothing
+	// downstream questions it. The contract requires a typed failure there
+	// instead — see [Identity] — and this is the host-side half of that
+	// requirement, so that every host does not write the same guard itself.
+	FaultIncoherentIdentity Fault = "incoherent-identity"
 )
 
 // A FaultError reports a CONNECTOR CONTRACT VIOLATION, attributed by name.
@@ -103,6 +115,44 @@ func CheckResolution[T any](connectorName, op string, r Resolution[T], err error
 		}
 	}
 	return r, nil
+}
+
+// CheckIdentity is the host-side guard on [CodeCI.WhoAmI], and the counterpart
+// of [CheckResolution] for the one operation that returns no list.
+//
+// Pass it whatever a connector returned from WhoAmI, together with the name the
+// host knows that connector by. It returns:
+//
+//   - the connector's own typed failure, unchanged, when err is non-nil and is
+//     not a fault — a connector that failed correctly is not at fault;
+//   - a [FaultError] carrying [FaultIncoherentIdentity] and naming
+//     connectorName, when the identity is not [Identity.Coherent];
+//   - the identity unchanged, when it is coherent — including a genuinely
+//     anonymous one.
+//
+// ⚠️ Unlike [CheckResolution], this guard is the ONLY thing standing between an
+// incoherent identity and a caller: [Resolution.Items] refuses to read an
+// unresolved resolution whether or not a host checks, but an [Identity] is a
+// plain struct whose fields read fine. A host that publishes WhoAmI's answer
+// without this guard can publish an empty login as a success.
+func CheckIdentity(connectorName string, i Identity, err error) (Identity, error) {
+	const op = "WhoAmI"
+	if err != nil {
+		return Identity{}, attribute(connectorName, op, err)
+	}
+	if !i.Coherent() {
+		detail := "reported a login while denying authentication; there is no account to name when nobody was recognised"
+		if i.Authenticated {
+			detail = "reported an authenticated identity carrying an empty login; an identity probe served from this asserts the opposite of what it claims to prove"
+		}
+		return Identity{}, &FaultError{
+			Connector: connectorName,
+			Op:        op,
+			Fault:     FaultIncoherentIdentity,
+			Detail:    detail,
+		}
+	}
+	return i, nil
 }
 
 // attribute names the connector on a fault that was raised without one, and

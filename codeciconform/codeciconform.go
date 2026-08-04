@@ -13,14 +13,16 @@
 // loads it:
 //
 //	rep, err := codeciconform.Run(ctx, myConnector, codeciconform.Options{
-//		Manifest:    myManifest,
-//		Repo:        "org/populated-repo",
-//		UnknownRepo: "org/does-not-exist",
-//		CheckedRef:  "main",
-//		DiffPR:      "1",
-//		UnknownPR:   "999999",
-//		DraftPR:     "2",
-//		OpenPR:      "3",
+//		Manifest:          myManifest,
+//		Repo:              "org/populated-repo",
+//		UnknownRepo:       "org/does-not-exist",
+//		CheckedRef:        "main",
+//		DiffPR:            "1",
+//		UnknownPR:         "999999",
+//		DraftPR:           "2",
+//		OpenPR:            "3",
+//		ProtectedBranch:   "main",
+//		UnprotectedBranch: "topic",
 //	})
 //	if err != nil {
 //		return err // the check could not be run at all
@@ -33,9 +35,42 @@
 //
 // Every check in this package's test suite is driven by a connector
 // deliberately built to violate the property it checks — one that resolves an
-// empty list as a success, one that merges a draft, one whose manifest
-// declares a capability it does not implement. A harness only ever run
-// against compliant input proves nothing about what it would catch.
+// empty list as a success, one that merges a draft, one that reports an
+// authenticated identity with no login, one whose manifest declares a
+// capability it does not implement. A harness only ever run against compliant
+// input proves nothing about what it would catch.
+//
+// That is asserted rather than only stated: TestRun_EveryCheckHasAViolatingStub
+// reads the Check* constants out of this file's source (Go publishes no
+// reflection over constants) and fails if any one of them has no connector built
+// to break it, and its companion fails if one such connector breaks a
+// NEIGHBOURING check as well — which would let a new check pass on damage
+// another check already reports.
+// # ⚠️ What this harness CANNOT check, and why
+//
+// CreatePR is never driven. A created pull/merge request cannot be undone by the
+// harness that created it, and every write check here is driven through a
+// REFUSAL for exactly that reason — MergePR with an unspecified method, MergePR
+// against a draft. The one create check, [CheckCreateRefusesIncompleteRequest],
+// is a refusal too: it asserts validation happens before anything is sent, and
+// never inspects a returned PR because none is returned.
+//
+// Two contract obligations therefore have NO check here, and a connector author
+// is on their honour for both:
+//
+//   - **CreatePR honours [codeci.CreatePRRequest.Draft].** The read half IS
+//     checked — [CheckDraftIsReported] asserts the draft fixture comes back as a
+//     draft — but nothing proves a connector that can REPORT a draft can also
+//     PRODUCE one.
+//   - **The PR returned by CreatePR carries a URL.** [codeci.PR.URL]'s doc states
+//     the obligation unconditionally; [CheckPRsCarryAURL] enforces it only on the
+//     list path.
+//
+// ⚠️ Do not read a green run as covering these. The alternative would be a
+// harness that opens a real pull request every time it runs, against a
+// repository it cannot clean up — which would cost more than it proves and would
+// end the property that makes this suite safe to repeat against a live fixture.
+
 package codeciconform
 
 import (
@@ -86,6 +121,41 @@ const (
 	// CheckMergeRefusesDraft covers MergePR refusing to merge a pull/merge
 	// request currently reported as a draft, with a classified error.
 	CheckMergeRefusesDraft = "merge/refuses-draft"
+	// CheckCreateRefusesIncompleteRequest covers CreatePR refusing a
+	// codeci.CreatePRRequest missing a required field, with a classified
+	// error, without opening anything. It is the guard the request STRUCT
+	// needs: positional arguments forced a caller to write "" on purpose, a
+	// struct lets a field be forgotten silently.
+	CheckCreateRefusesIncompleteRequest = "create/refuses-an-incomplete-request"
+	// CheckBranchProtectionReported covers ListBranches reporting
+	// codeci.Branch.Protected from the code host rather than asserting a
+	// constant, driven by one protected and one unprotected fixture. A
+	// connector answering always-false says every branch is unprotected — the
+	// one always-zero field in this class that is actively dangerous — and one
+	// answering always-true would satisfy a check that only looked at the
+	// protected fixture.
+	CheckBranchProtectionReported = "branches/protection-is-reported"
+	// CheckPRsCarryAURL covers every codeci.PR from ListPRs carrying a
+	// non-empty URL, so a caller is not left assembling a vendor URL itself.
+	CheckPRsCarryAURL = "prs/carry-a-url"
+
+	// CheckDraftIsReported covers the READ half of the draft contract: the
+	// fixtures name a pull/merge request that IS a draft, and a list read must
+	// report it as one.
+	//
+	// ⚠️ It exists because Draft is a bool, so a connector that never populates
+	// it reports every draft as NOT a draft — and the contract refuses to MERGE
+	// a draft, so a false negative here does not fail loudly. It merges the
+	// thing the refusal exists to protect. That is the same always-zero hazard
+	// the branch-protection field carries, on the other side of the same struct.
+	CheckDraftIsReported = "prs/draft-is-reported"
+	// CheckIdentity covers WhoAmI answering with an authenticated identity
+	// carrying a non-empty login, or failing with a classified error. An empty
+	// login reported as a success is refused: a host publishes this answer as
+	// its standing proof that it authenticates with no token in its own
+	// environment, and an empty login asserts the opposite while wearing a
+	// success's shape.
+	CheckIdentity = "identity/answers-with-a-login"
 	// CheckHealth covers Health() answering: a status, or a classified failure.
 	CheckHealth = "health/answers"
 )
@@ -123,6 +193,17 @@ type Options struct {
 	// refused before any merge is attempted — this fixture is never merged by
 	// this run.
 	OpenPR string
+
+	// ProtectedBranch is a branch within Repo the code host DOES protect.
+	ProtectedBranch string
+	// UnprotectedBranch is a branch within Repo the code host does NOT
+	// protect.
+	//
+	// Both branch fixtures are required, and neither alone is enough: with only
+	// the protected one, a connector hard-coding Protected: true passes; with
+	// only the unprotected one, one hard-coding false passes. The pair is what
+	// makes the field a report rather than an assertion.
+	UnprotectedBranch string
 }
 
 // A Result is the outcome of a single named check.
@@ -228,6 +309,8 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 		{"UnknownPR", opts.UnknownPR, "without a PR the connector must fail to find, GetDiff's fail-closed property is never exercised"},
 		{"DraftPR", opts.DraftPR, "without a draft PR, MergePR's draft-refusal obligation is never exercised"},
 		{"OpenPR", opts.OpenPR, "without an open, non-draft PR, MergePR's method-validation obligation is never exercised"},
+		{"ProtectedBranch", opts.ProtectedBranch, "without a branch the code host protects, a connector reporting Protected: false for every branch is never caught — and false reads as \"this branch is unprotected\""},
+		{"UnprotectedBranch", opts.UnprotectedBranch, "without a branch the code host does NOT protect, a connector reporting Protected: true for every branch is never caught"},
 	} {
 		if missing.value == "" {
 			return Report{}, cerr.New(cerr.KindInvalid, "codeciconform.Run", fmt.Errorf("fixture Options.%s is unset: %s", missing.field, missing.why))
@@ -244,6 +327,11 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 	checkListFailClosed(ctx, &rep, c, opts)
 	checkMergeRefusesUnspecifiedMethod(ctx, &rep, c, opts)
 	checkMergeRefusesDraft(ctx, &rep, c, opts)
+	checkCreateRefusesIncompleteRequest(ctx, &rep, c, opts)
+	checkBranchProtectionReported(ctx, &rep, c, opts)
+	checkPRsCarryAURL(ctx, &rep, c, opts)
+	checkDraftIsReported(ctx, &rep, c, opts)
+	checkIdentity(ctx, &rep, c)
 	checkHealth(ctx, &rep, c)
 
 	return rep, nil
@@ -469,6 +557,191 @@ func checkMergeRefusesDraft(ctx context.Context, rep *Report, c codeci.CodeCI, o
 		return
 	}
 	rep.add(CheckMergeRefusesDraft, true, fmt.Sprintf("refused: %s", cerr.KindOf(err)))
+}
+
+// checkCreateRefusesIncompleteRequest calls CreatePR for real, against the live
+// Repo fixture, with a request missing its Branch, Base and Title. A conformant
+// connector validates the request before it does anything else, which is
+// exactly what makes this call non-destructive: it never reaches the code host.
+// A connector that skipped the validation opens a real pull/merge request with
+// no title — a loud, legible failure of this check rather than a silent one, and
+// the reason the contract puts the guard in CreatePR rather than in callers.
+//
+// The request omits three fields rather than one so the failure names the shape
+// (a struct field left unset) rather than one field a connector might special-case.
+func checkCreateRefusesIncompleteRequest(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	incomplete := codeci.CreatePRRequest{FullName: opts.Repo}
+	pr, err := c.CreatePR(ctx, incomplete)
+	if err == nil {
+		rep.add(CheckCreateRefusesIncompleteRequest, false, fmt.Sprintf(
+			"CreatePR(%s) opened %q from a request carrying no branch, base or title; a request is a struct, so an unset field is silent at the call site, and the connector is where the contract puts the guard",
+			opts.Repo, pr.ID))
+		return
+	}
+	if !cerr.Classified(err) {
+		rep.add(CheckCreateRefusesIncompleteRequest, false, fmt.Sprintf(
+			"CreatePR(%s) refused an incomplete request with an unclassified error: %v", opts.Repo, err))
+		return
+	}
+	rep.add(CheckCreateRefusesIncompleteRequest, true, fmt.Sprintf("refused: %s", cerr.KindOf(err)))
+}
+
+// checkBranchProtectionReported drives codeci.Branch.Protected in BOTH
+// directions, because either constant is a lie and only one of them is caught
+// by looking at a protected branch. always-false is the dangerous one — it reads
+// as "this branch is unprotected", so a caller asking whether it may force-push
+// gets a yes nothing computed.
+func checkBranchProtectionReported(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	res, err := c.ListBranches(ctx, opts.Repo)
+	if err != nil {
+		rep.add(CheckBranchProtectionReported, false, fmt.Sprintf(
+			"ListBranches(%s) failed on a repository the fixtures say it must list: %v", opts.Repo, err))
+		return
+	}
+	items, ierr := res.Items()
+	if ierr != nil {
+		rep.add(CheckBranchProtectionReported, false, fmt.Sprintf(
+			"ListBranches(%s) reported success with a resolution that carries no list: %v", opts.Repo, ierr))
+		return
+	}
+
+	protection := make(map[string]bool, len(items))
+	for _, b := range items {
+		protection[b.Name] = b.Protected
+	}
+	for _, want := range []struct {
+		field, branch string
+		protected     bool
+		why           string
+	}{
+		{"ProtectedBranch", opts.ProtectedBranch, true,
+			"a connector reporting false for a branch the code host protects tells a caller it may force-push, which is the one always-zero field in this class that is actively dangerous"},
+		{"UnprotectedBranch", opts.UnprotectedBranch, false,
+			"a connector reporting true for every branch has asserted a constant, not read the code host — and a check that only looked at the protected fixture would accept it"},
+	} {
+		got, listed := protection[want.branch]
+		if !listed {
+			rep.add(CheckBranchProtectionReported, false, fmt.Sprintf(
+				"ListBranches(%s) did not report the branch %q named by Options.%s; the fixture cannot be measured, and an unmeasured field is not a passing one",
+				opts.Repo, want.branch, want.field))
+			return
+		}
+		if got != want.protected {
+			rep.add(CheckBranchProtectionReported, false, fmt.Sprintf(
+				"branch %q (Options.%s) reports Protected=%t, want %t: %s",
+				want.branch, want.field, got, want.protected, want.why))
+			return
+		}
+	}
+	rep.add(CheckBranchProtectionReported, true, fmt.Sprintf(
+		"%s reports protected, %s reports unprotected", opts.ProtectedBranch, opts.UnprotectedBranch))
+}
+
+// checkPRsCarryAURL reads codeci.PR.URL off the same fixture ListPRs must
+// already find entries for. The field exists so a caller never assembles a
+// vendor URL itself; an empty one hands that job straight back.
+func checkPRsCarryAURL(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	res, err := c.ListPRs(ctx, opts.Repo, codeci.PRStateAny)
+	if err != nil {
+		rep.add(CheckPRsCarryAURL, false, fmt.Sprintf(
+			"ListPRs(%s) failed on a repository the fixtures say it must list: %v", opts.Repo, err))
+		return
+	}
+	items, ierr := res.Items()
+	if ierr != nil {
+		rep.add(CheckPRsCarryAURL, false, fmt.Sprintf(
+			"ListPRs(%s) reported success with a resolution that carries no list: %v", opts.Repo, ierr))
+		return
+	}
+	for _, pr := range items {
+		if pr.URL == "" {
+			rep.add(CheckPRsCarryAURL, false, fmt.Sprintf(
+				"pull/merge request %q carries no URL; the field exists so a caller never has to assemble a vendor URL, and an empty one pushes that vendor knowledge back out to every caller",
+				pr.ID))
+			return
+		}
+	}
+	rep.add(CheckPRsCarryAURL, true, fmt.Sprintf("%d pull/merge request(s), each with a URL", len(items)))
+}
+
+// checkDraftIsReported reads the list and asserts the fixture named as a draft
+// comes back as one.
+//
+// It is a READ, so it is safe to repeat — and it is the ONLY draft assertion
+// this harness can make. See the package doc on what CreatePR's obligations
+// cost to check: producing a draft cannot be undone by the harness that
+// produced it, so the create half is stated rather than driven.
+func checkDraftIsReported(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	res, err := c.ListPRs(ctx, opts.Repo, codeci.PRStateAny)
+	if err != nil {
+		rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+			"ListPRs(%s) failed on a repository the fixtures say it must list: %v", opts.Repo, err))
+		return
+	}
+	items, ierr := res.Items()
+	if ierr != nil {
+		rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+			"ListPRs(%s) reported success with a resolution that carries no list: %v", opts.Repo, ierr))
+		return
+	}
+	for _, pr := range items {
+		if pr.ID != opts.DraftPR {
+			continue
+		}
+		if !pr.Draft {
+			rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+				"pull/merge request %q is named by the fixtures as a draft and came back with Draft=false; the contract "+
+					"REFUSES to merge a draft, so a draft reported as ordinary is not a smaller answer — it is the one "+
+					"reading under which that refusal can never fire", pr.ID))
+			return
+		}
+		rep.add(CheckDraftIsReported, true, fmt.Sprintf("%s reported as a draft", pr.ID))
+		return
+	}
+	rep.add(CheckDraftIsReported, false, fmt.Sprintf(
+		"ListPRs(%s) returned %d pull/merge request(s) and none of them is %q, which the fixtures name as a draft; a "+
+			"list that omits it cannot be checked for the draft it was pointed at", opts.Repo, len(items), opts.DraftPR))
+}
+
+// checkIdentity is the check issue #46 names: an empty login must be a TYPED
+// FAILURE, never a smaller answer.
+//
+// A classified failure passes, for the same reason a classified Health failure
+// does — a credential the code host rejected is unauthorised, not
+// non-conformant, and that is precisely the shape the contract requires instead
+// of an empty login. What does not pass is a success that names nobody.
+//
+// This run requires Authenticated to be true. The contract allows a coherent
+// anonymous identity, for a code host that serves anonymous reads, but not here:
+// every other check in this run drives operations against real pull/merge
+// requests with a real credential, so a connector reporting "nobody" has
+// answered wrongly rather than reported an unusual code host.
+func checkIdentity(ctx context.Context, rep *Report, c codeci.CodeCI) {
+	id, err := c.WhoAmI(ctx)
+	if err != nil {
+		if !cerr.Classified(err) {
+			rep.add(CheckIdentity, false, fmt.Sprintf("WhoAmI() failed with an unclassified error: %v", err))
+			return
+		}
+		rep.add(CheckIdentity, true, fmt.Sprintf("classified failure: %s", cerr.KindOf(err)))
+		return
+	}
+	// Coherence is asked of codeci.Identity rather than restated here: the
+	// invariant has one home, so the harness and the host-side
+	// codeci.CheckIdentity guard cannot drift apart from each other.
+	if !id.Coherent() {
+		rep.add(CheckIdentity, false, fmt.Sprintf(
+			"WhoAmI() reported success with an incoherent identity (login=%q authenticated=%t); an authenticated identity carrying no login asserts the opposite of what an identity probe exists to prove, and it does so wearing a success's shape",
+			id.Login, id.Authenticated))
+		return
+	}
+	if !id.Authenticated {
+		rep.add(CheckIdentity, false, fmt.Sprintf(
+			"WhoAmI() reported an anonymous identity with no login, while every other check in this run drove a real pull/merge request with this connector's credential; a rejected credential is a classified failure (%s), not a success naming nobody",
+			cerr.KindUnauthorized))
+		return
+	}
+	rep.add(CheckIdentity, true, fmt.Sprintf("login=%s", id.Login))
 }
 
 func checkHealth(ctx context.Context, rep *Report, c codeci.CodeCI) {
