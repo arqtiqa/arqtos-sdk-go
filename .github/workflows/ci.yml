@@ -54,11 +54,16 @@ jobs:
       - name: IP isolation (no arqtos-cli / arqtiqa dependency)
         run: make ip-isolation
 
-      # ⚠️ MUST be fmt-check, never fmt. ADR-ARQ-J-02 made `fmt` WRITE (matching
-      # `go fmt`), so calling it here would silently format the checkout and
-      # pass — a formatting gate that can never fail.
-      - name: gofmt
-        run: make fmt-check
+      # ⚠️ Invokes THIS repo's `make fmt-check` via the shared action (arqtos#315)
+      # — it must stay `fmt-check`, never `fmt`. ADR-ARQ-J-02 made `fmt` WRITE
+      # (matching `go fmt`), so invoking that here would silently format the
+      # checkout and pass: a formatting gate that can never fail. The action's
+      # `make-target` input defaults to `fmt-check` for exactly this reason.
+      #
+      # Pinned @v1 per arqtos-actions/ci-baseline.yml — moving-tag, with the
+      # firewall as the SHA-pinned exception because its silent failure is
+      # unrecoverable and formatting's is self-correcting.
+      - uses: arqtiqa/arqtos-actions/.github/actions/go-fmt@v1
 
       - name: go vet
         run: make lint
