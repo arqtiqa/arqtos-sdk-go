@@ -41,7 +41,7 @@ fmt:
 #      CLEAN — the same defect class as arqtos-cli#1092, where "rule failed"
 #      collapsed into "no match" and a broken scan reported clean.
 fmt-check:
-	@out=$$(gofmt -l . 2>/tmp/gofmt.err); status=$$?; \
+	@out=$$($(GO)fmt -l . 2>/tmp/gofmt.err); status=$$?; \
 	if [ $$status -ne 0 ]; then \
 	  echo "gofmt could not parse the tree (exit $$status) — this is NOT a passing format check"; \
 	  cat /tmp/gofmt.err >&2; exit 1; \
