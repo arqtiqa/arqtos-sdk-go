@@ -367,6 +367,94 @@ func fieldNames(typ reflect.Type) []string {
 	return out
 }
 
+// TestItem_HasONEIdiomForAFactThatCouldNotBeRead gates the SHAPE of the
+// could-not-read members rather than their presence.
+//
+// [Item.ChildrenErr] distinguishes "read and empty" from "could not read" for
+// the child set, and the parent link needs the same distinction. A second
+// mechanism for one idea — a ParentRead bool, a ParentUnread flag, a sentinel
+// [ItemParent] — would leave one contract with two vocabularies for the same
+// fact, which nobody keeps in step. So the rule is checked rather than
+// described: every member that can fail to arrive as a WHOLE has a sibling
+// named <Member>Err of type error.
+//
+// ⚠️ The scalar pair is deliberately NOT this shape, and the asymmetry is the
+// decision rather than an exception. [Item.Open] and [ItemParent.Open] cannot
+// express "unread" in the value, and an error beside a boolean would say WHY the
+// state is unknown while nothing needs to know why — so those carry a read
+// FLAG, and both of them carry the SAME one. Two shapes, each used for every
+// member of its kind, is one idiom per idea; the failure this gate is against is
+// two shapes for one kind.
+//
+// FALSIFIER: rename ParentErr to ParentUnread and make it a bool; delete it; or
+// rename [ItemParent.OpenRead] to StateKnown, which leaves the two scalar pairs
+// spelled differently.
+func TestItem_HasONEIdiomForAFactThatCouldNotBeRead(t *testing.T) {
+	item := reflect.TypeOf(Item{})
+	errType := reflect.TypeOf((*error)(nil)).Elem()
+
+	// The WHOLE-member pairs: a link or a set that either arrived or did not.
+	for _, member := range []string{"Children", "Parent"} {
+		if _, held := item.FieldByName(member); !held {
+			t.Fatalf("Item has no %s, so this gate has nothing to check the read-failure idiom against", member)
+		}
+		sibling, held := item.FieldByName(member + "Err")
+		if !held {
+			t.Errorf("Item.%s can fail to arrive and Item has no %sErr: %q is how this contract already spells "+
+				"\"could not read\" for a set, and a second spelling for one idea is how one contract grows two "+
+				"vocabularies nobody keeps in step", member, member, "ChildrenErr")
+			continue
+		}
+		if sibling.Type != errType {
+			t.Errorf("Item.%sErr is a %s and not an error: the failure carries WHY, which is what an operator acts "+
+				"on, and a boolean throws it away", member, sibling.Type)
+		}
+	}
+
+	// The SCALAR pairs: a value that cannot express its own absence, so the read
+	// flag is the second member — and it is the SAME member on both types.
+	for _, pair := range []struct {
+		typ  reflect.Type
+		what string
+	}{{item, "Item"}, {reflect.TypeOf(ItemParent{}), "ItemParent"}} {
+		flag, held := pair.typ.FieldByName("OpenRead")
+		if !held {
+			t.Errorf("%s.Open is a two-valued bool with no OpenRead beside it, so a state nobody read is "+
+				"indistinguishable from a closed one — and read as closed it reports live work as finished",
+				pair.what)
+			continue
+		}
+		if flag.Type.Kind() != reflect.Bool {
+			t.Errorf("%s.OpenRead is a %s: it answers whether the state was read and nothing else", pair.what,
+				flag.Type)
+		}
+	}
+}
+
+// TestItemParent_CarriesTheThreeFactsAHierarchyAuditNeeds pins WHAT the parent
+// link carries, because a bare reference is exactly as type-correct and is what
+// this member held before.
+//
+// Each fact answers a rule that cannot run without it: the KIND is what reports
+// a wrong-kind parent, and the STATE plus its read flag are what report live
+// work under a finished aggregator without inventing the parent's lifecycle.
+//
+// FALSIFIER: revert Item.Parent to *ItemRef.
+func TestItemParent_CarriesTheThreeFactsAHierarchyAuditNeeds(t *testing.T) {
+	parent, held := reflect.TypeOf(Item{}).FieldByName("Parent")
+	if !held {
+		t.Fatal("Item has no Parent")
+	}
+	if parent.Type != reflect.PointerTo(reflect.TypeOf(ItemParent{})) {
+		t.Fatalf("Item.Parent is a %s: a bare reference cannot carry the parent's kind or its state, so an audit "+
+			"over it can report neither a wrong-kind parent nor a closed one holding open work", parent.Type)
+	}
+	if got, want := fieldNames(reflect.TypeOf(ItemParent{})),
+		[]string{"Ref", "Type", "Open", "OpenRead"}; !slices.Equal(got, want) {
+		t.Errorf("ItemParent carries %v, want exactly %v", got, want)
+	}
+}
+
 func TestItemRef_Valid(t *testing.T) {
 	board := BoardRef{Provider: "boardprovider", Instance: "example-org", Board: "3"}
 	if !(ItemRef{Board: board, Scope: "example-org/service-api", Number: 54}).Valid() {

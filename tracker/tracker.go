@@ -595,11 +595,46 @@ type Item struct {
 	// [CapNativeTypes] must still answer it — there, from whatever
 	// convention the backend does carry.
 	Type string
-	// Open is whether the tracker considers the item open.
-	Open bool
-	// Parent is the item's parent, addressed in the parent's OWN scope.
-	// Cross-scope hierarchy is ordinary on a board that spans scopes.
-	Parent *ItemRef
+	// Open is whether the tracker considers the item open, and OpenRead is
+	// whether that state was READ at all.
+	//
+	// ⚠️ The pair exists because a two-valued bool cannot say "nobody read
+	// this". Defaulted to open, a rollup counts items nobody read as live work;
+	// defaulted to closed, it reports live work as finished. Neither is a
+	// defensible default, so the flag carries the third state and the zero
+	// Item's state is UNKNOWN rather than closed.
+	//
+	// A read FLAG rather than an <Member>Err sibling is deliberate, and the
+	// asymmetry is the decision rather than an exception: a scalar cannot
+	// express its own absence, and an error beside a boolean would say WHY the
+	// state is unknown while nothing acts on why. A member that can fail to
+	// arrive as a WHOLE takes the sibling instead — see [Item.ChildrenErr] and
+	// [Item.ParentErr]. One shape per KIND of member is what keeps one contract
+	// from growing two vocabularies for a single idea.
+	Open     bool
+	OpenRead bool
+	// Parent is what this read knows about the item ABOVE this one, and
+	// ParentErr is non-nil when the link could not be READ. Three states, and
+	// they have to stay three:
+	//
+	//   - a non-nil ParentErr — the link was not read. Parent is then nil and
+	//     MEANINGLESS, exactly as [Item.Children] is meaningless beside a
+	//     non-nil [Item.ChildrenErr].
+	//   - a nil ParentErr and a nil Parent — read, and the item genuinely has
+	//     no parent. An item at the top of a hierarchy is the ordinary case,
+	//     not a defect.
+	//   - a nil ParentErr and a non-nil Parent — read, and [ItemParent] holds
+	//     its facts.
+	//
+	// ⚠️ Collapsing the first two makes an orphan audit report every item whose
+	// parent link failed to read as an orphan — a finding about the READ
+	// presented as a finding about the BOARD.
+	//
+	// It carries [ItemParent] rather than a bare [ItemRef] because a reference
+	// alone cannot answer either rule such an audit exists FOR: a parent of the
+	// wrong kind, and a closed parent still holding open work.
+	Parent    *ItemParent
+	ParentErr error
 	// Fields carries every field value the [Selection] asked for, from ALL
 	// THREE field classes, merged and keyed by field NAME. A name absent from
 	// this map is unset — unless it is in [Item.Unread], or was not selected.
@@ -642,6 +677,41 @@ type Item struct {
 	// item has a nil ChildrenErr and an empty Children, and the two states
 	// must be observably different for any rollup over them to mean anything.
 	ChildrenErr error
+}
+
+// An ItemParent is what a read knows about the item above another one.
+//
+// It carries three facts rather than a reference, and each one answers a rule
+// that cannot run without it. A bare [ItemRef] is exactly as type-correct and
+// leaves both rules unanswerable, which is why this type exists.
+type ItemParent struct {
+	// Ref is the parent, addressed in the parent's OWN scope. Cross-scope
+	// hierarchy is ordinary on a board that spans scopes.
+	Ref ItemRef
+
+	// Type is the backend's own NAME for the parent's type, in the same
+	// vocabulary [Item.Type] is in. EMPTY means the read carried none, and a
+	// wrong-kind rule cannot resolve what such a parent may hold: it answers
+	// unknown rather than reporting a parent that turned out to be fine.
+	Type string
+
+	// Open is whether the tracker considers the PARENT open, and OpenRead is
+	// whether the parent's state was read at all.
+	//
+	// ⚠️ An unread parent state must NOT read as open, and that is the whole
+	// reason OpenRead exists here. Reading it as open is the assumption under
+	// which "a CLOSED parent holding an OPEN child" can never fire — the
+	// finding is about the parent being closed, so the default silently deletes
+	// the rule while leaving it compiled. Reading it as closed is the mirror,
+	// and reports every parent nobody could read as a finished aggregator.
+	// Neither is a default; unknown is the answer.
+	//
+	// The pair is spelled exactly as [Item.Open] and [Item.OpenRead] are. But
+	// unlike the item's own state, an unread one HERE is ordinary: the parent is
+	// another item, reached through the child's answer, and a backend that
+	// serves the link is not obliged to serve the parent's lifecycle with it.
+	Open     bool
+	OpenRead bool
 }
 
 // A Draft is one item to file.

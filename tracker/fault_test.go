@@ -135,6 +135,7 @@ func TestCheckResolution_ReturnsTheListItWasGiven(t *testing.T) {
 			Title:    "the class contract",
 			Type:     "Story",
 			Open:     true,
+			OpenRead: true,
 			Fields:   map[string]Value{"Priority": {Kind: ValueOption, Option: "P1"}},
 			Selected: Selection{BoardFields: true},
 		},
@@ -142,7 +143,17 @@ func TestCheckResolution_ReturnsTheListItWasGiven(t *testing.T) {
 			Ref:      ItemRef{Board: testBoard, Scope: "example-org/web-app", Number: 284},
 			Title:    "a child in another scope",
 			Type:     "Story",
-			Parent:   &ItemRef{Board: testBoard, Scope: "example-org/service-api", Number: 53},
+			Open:     true,
+			OpenRead: true,
+			// Every member populated, because this is a round-trip assertion: a
+			// guard that dropped one field of the parent would otherwise return a
+			// list that still compared equal.
+			Parent: &ItemParent{
+				Ref:      ItemRef{Board: testBoard, Scope: "example-org/service-api", Number: 53},
+				Type:     "Feature",
+				Open:     true,
+				OpenRead: true,
+			},
 			Unread:   []string{"Effort"},
 			Children: []ItemRef{},
 		},
