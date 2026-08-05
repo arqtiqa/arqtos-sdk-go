@@ -229,6 +229,22 @@ type fakeCodeCI struct {
 	workflowRun map[string]codeci.WorkflowRun
 
 	merged map[string]bool
+
+	issues map[issueKey]codeci.Issue
+	// forbidden marks issues that exist on the host but that this credential
+	// cannot see — the case that must not be indistinguishable from absent, and
+	// must not be answerable at all.
+	forbidden   map[issueKey]bool
+	closeReason map[issueKey]codeci.CloseReason
+}
+
+// issueKey is the whole address of an issue on this class: a repository and a
+// number. The fake keys by both, rather than by number alone the way it keys
+// PRs by id, so that GetIssue's obligation to echo the repository it was asked
+// for is actually exercised instead of being trivially satisfiable.
+type issueKey struct {
+	fullName string
+	number   int
 }
 
 func (f *fakeCodeCI) Implements() connector.Class          { return connector.ClassCodeCI }
@@ -320,6 +336,42 @@ func (f *fakeCodeCI) GetWorkflowRun(_ context.Context, _, runID string) (codeci.
 	return wr, nil
 }
 
+func (f *fakeCodeCI) GetIssue(_ context.Context, fullName string, number int) (codeci.Issue, error) {
+	k := issueKey{fullName, number}
+	if f.forbidden[k] {
+		return codeci.Issue{}, cerr.New(cerr.KindUnauthorized, "GetIssue", errors.New("credential cannot see this issue"))
+	}
+	iss, ok := f.issues[k]
+	if !ok {
+		return codeci.Issue{}, cerr.New(cerr.KindNotFound, "GetIssue", errors.New("no such issue"))
+	}
+	return iss, nil
+}
+
+func (f *fakeCodeCI) CloseIssue(_ context.Context, fullName string, number int, reason codeci.CloseReason) error {
+	if !reason.UsableAsReason() {
+		return cerr.New(cerr.KindInvalid, "CloseIssue", errors.New("reason is not UsableAsReason"))
+	}
+	k := issueKey{fullName, number}
+	if f.forbidden[k] {
+		return cerr.New(cerr.KindUnauthorized, "CloseIssue", errors.New("credential cannot close this issue"))
+	}
+	iss, ok := f.issues[k]
+	if !ok {
+		return cerr.New(cerr.KindNotFound, "CloseIssue", errors.New("no such issue"))
+	}
+	// Already closed is a success: the caller asked for a postcondition, and it
+	// holds. The first reason recorded is kept — a second close does not rewrite
+	// why the work ended.
+	if iss.State == codeci.IssueStateClosed {
+		return nil
+	}
+	iss.State = codeci.IssueStateClosed
+	f.issues[k] = iss
+	f.closeReason[k] = reason
+	return nil
+}
+
 func (f *fakeCodeCI) RerunWorkflow(context.Context, string, string) error  { return nil }
 func (f *fakeCodeCI) CancelWorkflow(context.Context, string, string) error { return nil }
 
@@ -359,6 +411,12 @@ func newFakeCodeCI() *fakeCodeCI {
 		checkRuns:   map[string][]codeci.CheckRun{"main": {{ID: "c1", Name: "build", Status: codeci.RunStatusSuccess}}},
 		workflowRun: map[string]codeci.WorkflowRun{"w1": {ID: "w1", Status: codeci.RunStatusSuccess}},
 		merged:      map[string]bool{},
+		issues: map[issueKey]codeci.Issue{
+			{"o/r", 7}: {FullName: "o/r", Number: 7, State: codeci.IssueStateOpen, Title: "a placeholder title"},
+			{"o/r", 8}: {FullName: "o/r", Number: 8, State: codeci.IssueStateClosed},
+		},
+		forbidden:   map[issueKey]bool{{"o/private", 1}: true},
+		closeReason: map[issueKey]codeci.CloseReason{},
 	}
 }
 
@@ -441,5 +499,273 @@ func TestBranchProtectionIsReportedNotAssumed(t *testing.T) {
 	}
 	if got["topic"] {
 		t.Errorf("the unprotected branch reports Protected=true; a constant true is as much a lie as a constant false")
+	}
+}
+
+// TestIssueStateVocabulary pins the reason IssueState is a three-value
+// vocabulary rather than an Open bool: the zero value must assert NEITHER real
+// answer. With a bool, the zero value asserts "closed" — the direction that
+// gets an operator told to start work that is still blocked.
+func TestIssueStateVocabulary(t *testing.T) {
+	seen := map[string]bool{}
+	for _, s := range codeci.IssueStates() {
+		if !s.Valid() {
+			t.Fatalf("IssueState %v is a vocabulary member but not Valid", s)
+		}
+		if seen[s.String()] {
+			t.Fatalf("IssueState %v renders the same as another state: %q", s, s.String())
+		}
+		seen[s.String()] = true
+	}
+	if got := len(codeci.IssueStates()); got != 3 {
+		t.Fatalf("IssueStates() has %d members, want exactly 3 (unspecified, open, closed)", got)
+	}
+
+	// The zero value is not a state. Determined() is the guard, and it must be
+	// the ONLY member of the vocabulary it rejects.
+	var zero codeci.IssueState
+	if zero != codeci.IssueStateUnspecified {
+		t.Fatalf("the IssueState zero value is %v, want IssueStateUnspecified", zero)
+	}
+	if zero.Determined() {
+		t.Fatalf("IssueStateUnspecified.Determined() = true; an unset state must not read as an answer")
+	}
+	for _, s := range codeci.IssueStates() {
+		want := s != codeci.IssueStateUnspecified
+		if got := s.Determined(); got != want {
+			t.Fatalf("IssueState(%v).Determined() = %v, want %v", s, got, want)
+		}
+	}
+	if codeci.IssueState(99).Determined() {
+		t.Fatalf("a value outside the vocabulary must not be Determined")
+	}
+	if got := codeci.IssueState(99).String(); got != "invalid_issue_state(99)" {
+		t.Fatalf("IssueState(99).String() = %q; rendering an out-of-vocabulary value as a real state hides the bug", got)
+	}
+}
+
+// TestCloseReasonVocabulary pins the same shape MergeMethod.Specified() and
+// PRState.UsableAsFilter() already pin: the zero value is refusable, and the
+// refusal is expressed once, on the type, rather than re-derived at each call
+// site.
+func TestCloseReasonVocabulary(t *testing.T) {
+	for _, r := range codeci.CloseReasons() {
+		if !r.Valid() {
+			t.Fatalf("CloseReason %v is a vocabulary member but not Valid", r)
+		}
+		want := r != codeci.CloseReasonUnspecified
+		if got := r.UsableAsReason(); got != want {
+			t.Fatalf("CloseReason(%v).UsableAsReason() = %v, want %v", r, got, want)
+		}
+	}
+	var zero codeci.CloseReason
+	if zero != codeci.CloseReasonUnspecified || zero.UsableAsReason() {
+		t.Fatalf("the CloseReason zero value must be Unspecified and unusable, got %v", zero)
+	}
+	if codeci.CloseReason(99).UsableAsReason() {
+		t.Fatalf("a value outside the vocabulary must not be UsableAsReason")
+	}
+	if got := codeci.CloseReason(99).String(); got != "invalid_close_reason(99)" {
+		t.Fatalf("CloseReason(99).String() = %q", got)
+	}
+
+	// Completed and Canceled must be distinguishable. An audit trail that cannot
+	// tell "we did this" from "we decided not to" has lost the interesting half.
+	if codeci.CloseReasonCompleted.String() == codeci.CloseReasonCanceled.String() {
+		t.Fatalf("the two real close reasons render identically")
+	}
+}
+
+// TestNewVocabulariesAreSortedAndCopied extends the discipline
+// TestVocabulariesAreSortedAndCopied pins to the two vocabularies added with
+// the issue operations: a caller cannot narrow a closed vocabulary by mutating
+// what it was handed.
+func TestNewVocabulariesAreSortedAndCopied(t *testing.T) {
+	states := codeci.IssueStates()
+	if !slices.IsSorted(states) {
+		t.Fatalf("IssueStates() = %v, want a stable sorted order", states)
+	}
+	states[0] = codeci.IssueState(-1)
+	if slices.Contains(codeci.IssueStates(), codeci.IssueState(-1)) {
+		t.Fatalf("IssueStates() handed out its backing array")
+	}
+
+	reasons := codeci.CloseReasons()
+	if !slices.IsSorted(reasons) {
+		t.Fatalf("CloseReasons() = %v, want a stable sorted order", reasons)
+	}
+	reasons[0] = codeci.CloseReason(-1)
+	if slices.Contains(codeci.CloseReasons(), codeci.CloseReason(-1)) {
+		t.Fatalf("CloseReasons() handed out its backing array")
+	}
+}
+
+// TestGetIssueIsBoardAgnosticAndEchoesItsAddress is the read's positive case.
+// The address is a repository and a number, so there is no board argument to be
+// missing — which is the entire reason this operation lives on this class
+// rather than on Tracker, where a boardless address cannot be constructed.
+func TestGetIssueIsBoardAgnosticAndEchoesItsAddress(t *testing.T) {
+	f := newFakeCodeCI()
+
+	iss, err := f.GetIssue(context.Background(), "o/r", 7)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if iss.FullName != "o/r" || iss.Number != 7 {
+		t.Fatalf("GetIssue returned %s#%d, want o/r#7; a state carries no evidence of what it is the state of", iss.FullName, iss.Number)
+	}
+	if iss.State != codeci.IssueStateOpen {
+		t.Fatalf("GetIssue reported %v for an open issue", iss.State)
+	}
+	if !iss.State.Determined() {
+		t.Fatalf("GetIssue returned a success whose State is not Determined")
+	}
+
+	closed, err := f.GetIssue(context.Background(), "o/r", 8)
+	if err != nil {
+		t.Fatalf("GetIssue on the closed issue: %v", err)
+	}
+	if closed.State != codeci.IssueStateClosed {
+		t.Fatalf("GetIssue reported %v for a closed issue", closed.State)
+	}
+	// Both real states must be reachable from the same fixture. With only the
+	// open one, a connector hard-coding IssueStateOpen would pass — the same
+	// hazard TestBranchProtectionIsReportedNotAssumed drives both ways.
+	if iss.State == closed.State {
+		t.Fatalf("the open and closed fixtures report the same state %v; the field is not falsifiable", iss.State)
+	}
+}
+
+// TestUnresolvableIssueIsAFailureNeverAState is the AC that matters most, in
+// both of its directions. A blocker that cannot be resolved must reach the
+// caller as unknown: silently reading it as closed tells an operator to start
+// work that is still blocked.
+//
+// ⚠️ The assertion is deliberately on the RETURNED VALUE as well as the error.
+// A connector that returns (Issue{}, err) is fine only because the caller
+// checks err first — so the test pins that the value carries no state a caller
+// reading it out of order could act on.
+func TestUnresolvableIssueIsAFailureNeverAState(t *testing.T) {
+	f := newFakeCodeCI()
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name     string
+		fullName string
+		number   int
+		wantKind cerr.Kind
+	}{
+		{"an issue that does not exist", "o/r", 4242, cerr.KindNotFound},
+		{"an issue the credential cannot see", "o/private", 1, cerr.KindUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			iss, err := f.GetIssue(ctx, tc.fullName, tc.number)
+			if err == nil {
+				t.Fatalf("GetIssue succeeded with %+v; an unresolvable issue must be a typed failure", iss)
+			}
+			if got := cerr.KindOf(err); got != tc.wantKind {
+				t.Fatalf("GetIssue error Kind = %v, want %v; a host acts on the classification", got, tc.wantKind)
+			}
+			if iss.State == codeci.IssueStateClosed {
+				t.Fatalf("an unresolvable issue reported IssueStateClosed — the one direction that tells an operator to start blocked work")
+			}
+			if iss.State == codeci.IssueStateOpen {
+				t.Fatalf("an unresolvable issue reported IssueStateOpen; the read did not happen and must not look as though it did")
+			}
+			if iss.State.Determined() {
+				t.Fatalf("an unresolvable issue returned a Determined state %v", iss.State)
+			}
+		})
+	}
+
+	// The two cases must be DISTINGUISHABLE. An unauthorised read collapsed into
+	// NotFound tells an operator the issue was deleted when the real answer is
+	// that the token is wrong — two different actions.
+	_, missing := f.GetIssue(ctx, "o/r", 4242)
+	_, denied := f.GetIssue(ctx, "o/private", 1)
+	if cerr.KindOf(missing) == cerr.KindOf(denied) {
+		t.Fatalf("absent and forbidden both classify as %v; the operator cannot tell a deleted issue from a wrong token", cerr.KindOf(missing))
+	}
+}
+
+// TestCloseIssueRefusesAnUnspecifiedReasonBeforeClosingAnything is MergePR's
+// validate-first guard in another shape, and for the same reason: a close, like
+// a merge, is not conveniently undone. The assertion is that NOTHING was closed,
+// not merely that an error came back.
+func TestCloseIssueRefusesAnUnspecifiedReasonBeforeClosingAnything(t *testing.T) {
+	f := newFakeCodeCI()
+	ctx := context.Background()
+
+	err := f.CloseIssue(ctx, "o/r", 7, codeci.CloseReasonUnspecified)
+	if err == nil {
+		t.Fatalf("CloseIssue accepted CloseReasonUnspecified")
+	}
+	if got := cerr.KindOf(err); got != cerr.KindInvalid {
+		t.Fatalf("CloseIssue error Kind = %v, want %v", got, cerr.KindInvalid)
+	}
+	iss, err := f.GetIssue(ctx, "o/r", 7)
+	if err != nil {
+		t.Fatalf("GetIssue after the refused close: %v", err)
+	}
+	if iss.State != codeci.IssueStateOpen {
+		t.Fatalf("the issue is %v after a refused close; the guard did not run before the write", iss.State)
+	}
+}
+
+// TestCloseIssueClosesExactlyItsTargetAndIsIdempotent covers the two remaining
+// close obligations in one round trip.
+//
+// A second close is a SUCCESS: the caller's intent is "ensure this is closed"
+// and the postcondition holds. A caller cannot avoid a second pass, because it
+// cannot know whether its first one completed — so a failure here would make a
+// tool report errors that describe nothing wrong.
+//
+// ⚠️ And the assertion covers the SIBLING. A test that checks only its target
+// passes against a close that closed every issue in the repository.
+func TestCloseIssueClosesExactlyItsTargetAndIsIdempotent(t *testing.T) {
+	f := newFakeCodeCI()
+	ctx := context.Background()
+	f.issues[issueKey{"o/r", 9}] = codeci.Issue{FullName: "o/r", Number: 9, State: codeci.IssueStateOpen}
+
+	if err := f.CloseIssue(ctx, "o/r", 7, codeci.CloseReasonCompleted); err != nil {
+		t.Fatalf("CloseIssue: %v", err)
+	}
+	if got := f.issues[issueKey{"o/r", 7}].State; got != codeci.IssueStateClosed {
+		t.Fatalf("the target is %v after a successful close", got)
+	}
+	if got := f.closeReason[issueKey{"o/r", 7}]; got != codeci.CloseReasonCompleted {
+		t.Fatalf("recorded close reason = %v, want completed", got)
+	}
+	if got := f.issues[issueKey{"o/r", 9}].State; got != codeci.IssueStateOpen {
+		t.Fatalf("a sibling issue is %v; the close was not addressed to exactly one issue", got)
+	}
+
+	// Idempotent: closing the already-closed one succeeds, and does not rewrite
+	// why the work ended.
+	if err := f.CloseIssue(ctx, "o/r", 7, codeci.CloseReasonCanceled); err != nil {
+		t.Fatalf("a second CloseIssue failed with %v; closing an already-closed issue is a success", err)
+	}
+	if got := f.closeReason[issueKey{"o/r", 7}]; got != codeci.CloseReasonCompleted {
+		t.Fatalf("the second close rewrote the reason to %v", got)
+	}
+	// And an issue that was already closed before this test touched it takes the
+	// same path — the case a real caller's second sweep actually hits.
+	if err := f.CloseIssue(ctx, "o/r", 8, codeci.CloseReasonCompleted); err != nil {
+		t.Fatalf("closing an issue that was already closed failed with %v", err)
+	}
+}
+
+// TestCloseIssueOnAnUnresolvableIssueFails mirrors the read's failure cases on
+// the write. A close that reports success having closed nothing is the same
+// class of harm as a read that reports closed having looked at nothing.
+func TestCloseIssueOnAnUnresolvableIssueFails(t *testing.T) {
+	f := newFakeCodeCI()
+	ctx := context.Background()
+
+	if err := f.CloseIssue(ctx, "o/r", 4242, codeci.CloseReasonCompleted); cerr.KindOf(err) != cerr.KindNotFound {
+		t.Fatalf("CloseIssue on a missing issue: Kind = %v, want %v", cerr.KindOf(err), cerr.KindNotFound)
+	}
+	if err := f.CloseIssue(ctx, "o/private", 1, codeci.CloseReasonCompleted); cerr.KindOf(err) != cerr.KindUnauthorized {
+		t.Fatalf("CloseIssue on a forbidden issue: Kind = %v, want %v", cerr.KindOf(err), cerr.KindUnauthorized)
 	}
 }

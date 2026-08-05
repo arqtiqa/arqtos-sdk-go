@@ -32,6 +32,10 @@ const (
 	fixtureUnprotectedBranch = "topic"
 	fixtureLogin             = "placeholder-login"
 	fixturePRURL             = "https://code.example/placeholder-org/populated-repo/pull/3"
+
+	fixtureOpenIssue    = 10
+	fixtureClosedIssue  = 11
+	fixtureUnknownIssue = 999999
 )
 
 // stub is a codeci.CodeCI that passes every check, with one override hook per
@@ -51,6 +55,8 @@ type stub struct {
 	getCheckRuns func(ctx context.Context, fullName, ref string) (codeci.Resolution[codeci.CheckRun], error)
 	whoAmI       func(ctx context.Context) (codeci.Identity, error)
 	health       func(ctx context.Context) (connector.Health, error)
+	getIssue     func(ctx context.Context, fullName string, number int) (codeci.Issue, error)
+	closeIssue   func(ctx context.Context, fullName string, number int, reason codeci.CloseReason) error
 }
 
 // newStub returns a bare *stub: it implements only the required CodeCI
@@ -183,6 +189,44 @@ func stubManifest(caps ...connector.Capability) manifest.Doc {
 	}
 }
 
+// GetIssue is the compliant read: it answers for the two fixtures the harness
+// names, echoes the address it was asked for, and fails — typed — for anything
+// else. An unresolvable issue is never a state.
+func (s *stub) GetIssue(ctx context.Context, fullName string, number int) (codeci.Issue, error) {
+	if s.getIssue != nil {
+		return s.getIssue(ctx, fullName, number)
+	}
+	if fullName != fixtureRepo {
+		return codeci.Issue{}, cerr.New(cerr.KindNotFound, "GetIssue", errors.New("no such repository"))
+	}
+	switch number {
+	case fixtureOpenIssue:
+		return codeci.Issue{FullName: fullName, Number: number, State: codeci.IssueStateOpen, Title: "a placeholder title"}, nil
+	case fixtureClosedIssue:
+		return codeci.Issue{FullName: fullName, Number: number, State: codeci.IssueStateClosed}, nil
+	}
+	return codeci.Issue{}, cerr.New(cerr.KindNotFound, "GetIssue", errors.New("no such issue"))
+}
+
+// CloseIssue is the compliant write: it validates its reason BEFORE resolving
+// the issue, and closing an already-closed issue is a success.
+func (s *stub) CloseIssue(ctx context.Context, fullName string, number int, reason codeci.CloseReason) error {
+	if s.closeIssue != nil {
+		return s.closeIssue(ctx, fullName, number, reason)
+	}
+	if !reason.UsableAsReason() {
+		return cerr.New(cerr.KindInvalid, "CloseIssue", errors.New("reason is not UsableAsReason"))
+	}
+	if fullName != fixtureRepo {
+		return cerr.New(cerr.KindNotFound, "CloseIssue", errors.New("no such repository"))
+	}
+	switch number {
+	case fixtureOpenIssue, fixtureClosedIssue:
+		return nil
+	}
+	return cerr.New(cerr.KindNotFound, "CloseIssue", errors.New("no such issue"))
+}
+
 func baseOptions(m manifest.Doc) codeciconform.Options {
 	return codeciconform.Options{
 		Manifest:    m,
@@ -196,6 +240,10 @@ func baseOptions(m manifest.Doc) codeciconform.Options {
 
 		ProtectedBranch:   fixtureProtectedBranch,
 		UnprotectedBranch: fixtureUnprotectedBranch,
+
+		OpenIssue:    fixtureOpenIssue,
+		ClosedIssue:  fixtureClosedIssue,
+		UnknownIssue: fixtureUnknownIssue,
 	}
 }
 
@@ -235,13 +283,10 @@ func TestRun_CompliantStub_IsGreenOnEveryCheck(t *testing.T) {
 	if err := rep.Err(); err != nil {
 		t.Fatalf("a compliant stub was reported non-conformant: %v\n%s", err, rep)
 	}
-	want := []string{
-		codeciconform.CheckManifest, codeciconform.CheckClass, codeciconform.CheckCapabilityHonesty,
-		codeciconform.CheckOptionalDeclared, codeciconform.CheckListsNoEmptySuccess, codeciconform.CheckListFailClosed,
-		codeciconform.CheckMergeRefusesUnspecifiedMethod, codeciconform.CheckMergeRefusesDraft,
-		codeciconform.CheckCreateRefusesIncompleteRequest, codeciconform.CheckBranchProtectionReported,
-		codeciconform.CheckPRsCarryAURL, codeciconform.CheckIdentity, codeciconform.CheckHealth,
-	}
+	// Read out of the source rather than restated here. A hand-maintained list
+	// is a list that drifts: this one had already lost CheckDraftIsReported, so
+	// the assertion "every check ran" was quietly not asking about one of them.
+	want := checkConstants(t)
 	for _, name := range want {
 		var present bool
 		for _, res := range rep.Results {
@@ -261,6 +306,7 @@ func TestRun_RefusesToRunWithoutFixtures(t *testing.T) {
 	for _, field := range []string{
 		"Repo", "UnknownRepo", "CheckedRef", "DiffPR", "UnknownPR", "DraftPR", "OpenPR",
 		"ProtectedBranch", "UnprotectedBranch",
+		"OpenIssue", "ClosedIssue", "UnknownIssue",
 	} {
 		t.Run(field, func(t *testing.T) {
 			opts := full
@@ -283,6 +329,12 @@ func TestRun_RefusesToRunWithoutFixtures(t *testing.T) {
 				opts.ProtectedBranch = ""
 			case "UnprotectedBranch":
 				opts.UnprotectedBranch = ""
+			case "OpenIssue":
+				opts.OpenIssue = 0
+			case "ClosedIssue":
+				opts.ClosedIssue = 0
+			case "UnknownIssue":
+				opts.UnknownIssue = 0
 			}
 			if _, err := codeciconform.Run(context.Background(), newStub(), opts); err == nil {
 				t.Fatalf("a run with %s unset was carried out; a check that cannot be driven must not be skipped", field)
@@ -649,6 +701,72 @@ func TestRun_AcceptsAClassifiedHealthFailure(t *testing.T) {
 // for each violation and cover more than one shape of it. What this table adds
 // is COVERAGE — that no check exists without one.
 var violators = map[string]func() (codeci.CodeCI, manifest.Doc){
+	// Reports the OPEN fixture as IssueStateUnspecified — the always-zero shape,
+	// a connector that returned a success without ever looking.
+	//
+	// It leaves the CLOSED fixture correct on purpose: issues/close-is-idempotent
+	// reads that issue as its safety interlock before writing, so breaking both
+	// would take that check down too and make the attribution meaningless.
+	codeciconform.CheckIssueStateReported: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.getIssue = func(_ context.Context, fullName string, number int) (codeci.Issue, error) {
+			switch number {
+			case fixtureOpenIssue:
+				return codeci.Issue{FullName: fullName, Number: number}, nil // State left unset
+			case fixtureClosedIssue:
+				return codeci.Issue{FullName: fullName, Number: number, State: codeci.IssueStateClosed}, nil
+			}
+			return codeci.Issue{}, cerr.New(cerr.KindNotFound, "GetIssue", errors.New("no such issue"))
+		}
+		return s, stubManifest()
+	},
+	// Answers CLOSED for an issue that does not exist: the exact reading that
+	// tells an operator a blocker is resolved and the work can start. Both real
+	// fixtures stay correct, so it breaks the unresolvable check alone.
+	codeciconform.CheckIssueUnresolvableIsAFailure: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.getIssue = func(_ context.Context, fullName string, number int) (codeci.Issue, error) {
+			state := codeci.IssueStateClosed
+			if number == fixtureOpenIssue {
+				state = codeci.IssueStateOpen
+			}
+			return codeci.Issue{FullName: fullName, Number: number, State: state}, nil
+		}
+		return s, stubManifest()
+	},
+	// Resolves the issue BEFORE validating the reason, so the zero reason comes
+	// back as NotFound instead of Invalid — the guard ran second, which is the
+	// ordering this check exists to detect. It still refuses the close, so it
+	// breaks nothing else.
+	codeciconform.CheckCloseRefusesUnspecifiedReason: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.closeIssue = func(_ context.Context, fullName string, number int, reason codeci.CloseReason) error {
+			if fullName != fixtureRepo || (number != fixtureOpenIssue && number != fixtureClosedIssue) {
+				return cerr.New(cerr.KindNotFound, "CloseIssue", errors.New("no such issue"))
+			}
+			if !reason.UsableAsReason() {
+				return cerr.New(cerr.KindInvalid, "CloseIssue", errors.New("reason is not UsableAsReason"))
+			}
+			return nil
+		}
+		return s, stubManifest()
+	},
+	// Fails when asked to close an issue that is already closed. It keeps the
+	// reason guard, and keeps ordering it first, so the refusal check still
+	// passes and this stub breaks idempotency alone.
+	codeciconform.CheckCloseIsIdempotent: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.closeIssue = func(_ context.Context, _ string, number int, reason codeci.CloseReason) error {
+			if !reason.UsableAsReason() {
+				return cerr.New(cerr.KindInvalid, "CloseIssue", errors.New("reason is not UsableAsReason"))
+			}
+			if number == fixtureClosedIssue {
+				return cerr.New(cerr.KindInvalid, "CloseIssue", errors.New("issue is already closed"))
+			}
+			return nil
+		}
+		return s, stubManifest()
+	},
 	// Reports the draft fixture as an ordinary PR — the always-false shape.
 	// Everything else about it is compliant, so it breaks prs/draft-is-reported
 	// and nothing else.
@@ -900,5 +1018,86 @@ func TestReport_Err_IsClassifiedAndNamesEveryFailure(t *testing.T) {
 	}
 	if rep.OK() {
 		t.Error("OK() reported true for a report with failures")
+	}
+}
+
+// TestCloseIsIdempotentWillNotCloseAnIssueThatIsOpen pins the safety interlock
+// [codeciconform.CheckCloseIsIdempotent] documents, rather than trusting the
+// prose that describes it.
+//
+// That check performs the only write in this harness, and it is safe ONLY
+// because the issue it writes to is already closed. A fixture that names an open
+// issue by mistake must therefore fail the check — and, critically, must do so
+// WITHOUT the close being attempted. Asserting the failure alone would pass
+// against a harness that closed the issue and then complained about it.
+func TestCloseIsIdempotentWillNotCloseAnIssueThatIsOpen(t *testing.T) {
+	var closed []int
+	s := newStub()
+	s.closeIssue = func(_ context.Context, _ string, number int, reason codeci.CloseReason) error {
+		if !reason.UsableAsReason() {
+			return cerr.New(cerr.KindInvalid, "CloseIssue", errors.New("reason is not UsableAsReason"))
+		}
+		closed = append(closed, number)
+		return nil
+	}
+
+	// The fixture points ClosedIssue at the issue the stub reports as OPEN.
+	opts := baseOptions(stubManifest())
+	opts.ClosedIssue = fixtureOpenIssue
+	rep, err := codeciconform.Run(context.Background(), s, opts)
+	if err != nil {
+		t.Fatalf("the conformance run could not be carried out: %v", err)
+	}
+
+	requireFailed(t, rep, codeciconform.CheckCloseIsIdempotent)
+	if slices.Contains(closed, fixtureOpenIssue) {
+		t.Fatalf("the harness CLOSED issue %d, which its own fixtures reported as open; the read before the write is a safety interlock and it did not hold", fixtureOpenIssue)
+	}
+}
+
+// TestCloseIsIdempotentDoesCloseTheAlreadyClosedFixture is the other half, and
+// it exists because the test above would also pass against a check that never
+// wrote at all — a check that skipped its write would satisfy the interlock
+// vacuously while proving nothing about idempotency.
+func TestCloseIsIdempotentDoesCloseTheAlreadyClosedFixture(t *testing.T) {
+	var closed []int
+	s := newStub()
+	s.closeIssue = func(_ context.Context, _ string, number int, reason codeci.CloseReason) error {
+		if !reason.UsableAsReason() {
+			return cerr.New(cerr.KindInvalid, "CloseIssue", errors.New("reason is not UsableAsReason"))
+		}
+		closed = append(closed, number)
+		return nil
+	}
+
+	rep := run(t, s, stubManifest())
+	if detail, did := failed(rep, codeciconform.CheckCloseIsIdempotent); did {
+		t.Fatalf("%s failed against a compliant stub: %s", codeciconform.CheckCloseIsIdempotent, detail)
+	}
+	if !slices.Contains(closed, fixtureClosedIssue) {
+		t.Fatalf("the harness never called CloseIssue on the already-closed fixture; the idempotency obligation was reported green without being driven")
+	}
+}
+
+// TestCloseRefusesUnspecifiedReasonIsDrivenAtAnIssueThatCannotBeClosed pins the
+// choice that makes the reason-guard check safe: it is aimed at an issue that
+// does not exist, so even a connector with NO guard cannot close anything real
+// while being measured for it.
+func TestCloseRefusesUnspecifiedReasonIsDrivenAtAnIssueThatCannotBeClosed(t *testing.T) {
+	var closedWithoutReason []int
+	s := newStub()
+	// A connector with no guard at all: it closes whatever it is pointed at,
+	// whatever the reason.
+	s.closeIssue = func(_ context.Context, _ string, number int, reason codeci.CloseReason) error {
+		if !reason.UsableAsReason() {
+			closedWithoutReason = append(closedWithoutReason, number)
+		}
+		return nil
+	}
+
+	rep := run(t, s, stubManifest())
+	requireFailed(t, rep, codeciconform.CheckCloseRefusesUnspecifiedReason)
+	if slices.Contains(closedWithoutReason, fixtureOpenIssue) || slices.Contains(closedWithoutReason, fixtureClosedIssue) {
+		t.Fatalf("the guard check was driven at a real fixture (%v); against a connector with no guard that closes a live issue to discover the guard is missing", closedWithoutReason)
 	}
 }

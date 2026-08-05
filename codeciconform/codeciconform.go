@@ -23,6 +23,9 @@
 //		OpenPR:            "3",
 //		ProtectedBranch:   "main",
 //		UnprotectedBranch: "topic",
+//		OpenIssue:         10,
+//		ClosedIssue:       11, // ⚠️ re-closed by this run; see [Options.ClosedIssue]
+//		UnknownIssue:      999999,
 //	})
 //	if err != nil {
 //		return err // the check could not be run at all
@@ -51,9 +54,17 @@
 // CreatePR is never driven. A created pull/merge request cannot be undone by the
 // harness that created it, and every write check here is driven through a
 // REFUSAL for exactly that reason — MergePR with an unspecified method, MergePR
-// against a draft. The one create check, [CheckCreateRefusesIncompleteRequest],
-// is a refusal too: it asserts validation happens before anything is sent, and
-// never inspects a returned PR because none is returned.
+// against a draft, CloseIssue with an unspecified reason. The one create check,
+// [CheckCreateRefusesIncompleteRequest], is a refusal too: it asserts validation
+// happens before anything is sent, and never inspects a returned PR because none
+// is returned.
+//
+// ⚠️ [CheckCloseIsIdempotent] is the ONE exception, and it is an exception only
+// because its write is a no-op: it closes an issue the fixtures name as already
+// closed, so the postcondition holds before it runs. It confirms that with a
+// read first and refuses to write if the issue is not closed. Nothing else here
+// mutates a connector's backing host, and a check that needed to would belong
+// somewhere other than a suite that must stay safe to repeat.
 //
 // Two contract obligations therefore have NO check here, and a connector author
 // is on their honour for both:
@@ -158,6 +169,48 @@ const (
 	CheckIdentity = "identity/answers-with-a-login"
 	// CheckHealth covers Health() answering: a status, or a classified failure.
 	CheckHealth = "health/answers"
+
+	// CheckIssueStateReported covers GetIssue reporting codeci.IssueState from
+	// the code host rather than asserting a constant, driven by one open and one
+	// closed fixture — the same pair, for the same reason, as
+	// CheckBranchProtectionReported. With only the open fixture, a connector
+	// hard-coding IssueStateOpen passes; with only the closed one, one
+	// hard-coding IssueStateClosed passes.
+	//
+	// It also covers the read echoing the address it was asked for: a bare state
+	// carries no evidence of which issue it is the state of, so a connector
+	// answering about the wrong issue is otherwise indistinguishable from one
+	// answering correctly.
+	CheckIssueStateReported = "issues/state-is-reported"
+	// CheckIssueUnresolvableIsAFailure covers the failure direction that does
+	// damage rather than merely being wrong: an issue that cannot be resolved
+	// MUST be a classified failure and MUST NOT come back as a state. A caller
+	// resolving a blocker reads a wrongly-closed answer as "go ahead" and starts
+	// work that is still blocked.
+	CheckIssueUnresolvableIsAFailure = "issues/unresolvable-is-a-typed-failure"
+
+	// CheckCloseRefusesUnspecifiedReason covers CloseIssue validating its reason
+	// BEFORE it does anything else — MergePR's method guard in another shape, and
+	// for the same reason: a close, like a merge, is not conveniently undone.
+	//
+	// ⚠️ It is driven against the issue Options.UnknownIssue names, which does
+	// NOT exist, and that is what makes the ordering observable from outside: a
+	// connector that validated first refuses with cerr.KindInvalid, and one that
+	// looked the issue up first reports cerr.KindNotFound. It also means this
+	// check cannot close anything even against a connector that ignores the
+	// guard entirely.
+	CheckCloseRefusesUnspecifiedReason = "issues/close-refuses-unspecified-reason"
+	// CheckCloseIsIdempotent covers a close of an ALREADY-CLOSED issue being a
+	// success. A caller cannot know whether its previous pass completed, so it
+	// cannot avoid a second one; a connector that failed here would make an
+	// ordinary second sweep report errors that describe nothing wrong.
+	//
+	// ⚠️ This is the one WRITE this harness performs, and it is safe precisely
+	// because it is a no-op: the fixture is already closed, so the postcondition
+	// already holds. The check confirms that with a read BEFORE it writes, and
+	// refuses to proceed if the fixture is not closed — a mis-specified fixture
+	// must fail this run, never be closed by it.
+	CheckCloseIsIdempotent = "issues/close-is-idempotent"
 )
 
 // Options are the fixtures a conformance run needs. Every field is required:
@@ -204,6 +257,27 @@ type Options struct {
 	// only the unprotected one, one hard-coding false passes. The pair is what
 	// makes the field a report rather than an assertion.
 	UnprotectedBranch string
+
+	// OpenIssue is an issue number within Repo the code host reports as OPEN.
+	OpenIssue int
+	// ClosedIssue is an issue number within Repo the code host reports as
+	// CLOSED.
+	//
+	// ⚠️ This run CLOSES it again, to drive the idempotency obligation. That is
+	// a no-op on an issue that is already closed — and the run confirms it is
+	// closed before writing, so a fixture naming an OPEN issue fails the check
+	// rather than being closed by it.
+	//
+	// Both issue-state fixtures are required, and neither alone is enough: with
+	// only the open one, a connector hard-coding IssueStateOpen passes; with only
+	// the closed one, one hard-coding IssueStateClosed passes.
+	ClosedIssue int
+	// UnknownIssue is an issue number within Repo that does NOT exist.
+	//
+	// It drives the read's unresolvable case, and it is also what the close's
+	// reason-guard is driven against — so that guard can be checked without any
+	// issue being closeable at all.
+	UnknownIssue int
 }
 
 // A Result is the outcome of a single named check.
@@ -316,6 +390,22 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 			return Report{}, cerr.New(cerr.KindInvalid, "codeciconform.Run", fmt.Errorf("fixture Options.%s is unset: %s", missing.field, missing.why))
 		}
 	}
+	// The issue fixtures are numbers, so "unset" is a separate test: both code
+	// hosts number issues from 1, which makes a non-positive number unset rather
+	// than an unusual address.
+	for _, missing := range []struct {
+		field string
+		value int
+		why   string
+	}{
+		{"OpenIssue", opts.OpenIssue, "without an issue the code host reports as open, a connector reporting IssueStateClosed for every issue is never caught — and that reading tells an operator to start work that is still blocked"},
+		{"ClosedIssue", opts.ClosedIssue, "without an issue the code host reports as closed, a connector reporting IssueStateOpen for every issue is never caught, and CloseIssue's idempotency obligation is never exercised"},
+		{"UnknownIssue", opts.UnknownIssue, "without an issue number the connector must fail to find, neither the read's unresolvable-is-a-failure obligation nor CloseIssue's reason guard is ever exercised"},
+	} {
+		if missing.value <= 0 {
+			return Report{}, cerr.New(cerr.KindInvalid, "codeciconform.Run", fmt.Errorf("fixture Options.%s is unset: %s", missing.field, missing.why))
+		}
+	}
 
 	rep := Report{Connector: opts.Manifest.Name}
 
@@ -333,6 +423,10 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 	checkDraftIsReported(ctx, &rep, c, opts)
 	checkIdentity(ctx, &rep, c)
 	checkHealth(ctx, &rep, c)
+	checkIssueStateReported(ctx, &rep, c, opts)
+	checkIssueUnresolvableIsAFailure(ctx, &rep, c, opts)
+	checkCloseRefusesUnspecifiedReason(ctx, &rep, c, opts)
+	checkCloseIsIdempotent(ctx, &rep, c, opts)
 
 	return rep, nil
 }
@@ -760,4 +854,153 @@ func checkHealth(ctx context.Context, rep *Report, c codeci.CodeCI) {
 	default:
 		rep.add(CheckHealth, false, fmt.Sprintf("Health() reported status %d, which is outside the SDK's vocabulary", int(h.Status)))
 	}
+}
+
+// checkIssueStateReported drives the open and closed fixtures and requires each
+// to come back as the state the fixtures name.
+//
+// The pair is the point. A single fixture cannot distinguish a connector that
+// READ the code host from one that returns a constant, and the constant that
+// would slip past an open-only check — always-closed — is the reading that tells
+// an operator to start work that is still blocked.
+func checkIssueStateReported(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	for _, want := range []struct {
+		field  string
+		number int
+		state  codeci.IssueState
+		why    string
+	}{
+		{"OpenIssue", opts.OpenIssue, codeci.IssueStateOpen,
+			"a connector reporting closed for an issue the code host reports as open tells a caller its blocker is resolved, which is the one failure direction here that does damage rather than merely being wrong"},
+		{"ClosedIssue", opts.ClosedIssue, codeci.IssueStateClosed,
+			"a connector reporting open for every issue has asserted a constant, not read the code host — and a check that only looked at the open fixture would accept it"},
+	} {
+		iss, err := c.GetIssue(ctx, opts.Repo, want.number)
+		if err != nil {
+			rep.add(CheckIssueStateReported, false, fmt.Sprintf(
+				"GetIssue(%s, %d) failed on an issue Options.%s says it must resolve: %v",
+				opts.Repo, want.number, want.field, err))
+			return
+		}
+		if !iss.State.Determined() {
+			rep.add(CheckIssueStateReported, false, fmt.Sprintf(
+				"GetIssue(%s, %d) reported success with State=%s; a connector that could not determine the state must fail the read rather than return a success asserting nothing, because a caller asked a yes-or-no question",
+				opts.Repo, want.number, iss.State))
+			return
+		}
+		if iss.State != want.state {
+			rep.add(CheckIssueStateReported, false, fmt.Sprintf(
+				"issue %d (Options.%s) reports State=%s, want %s: %s",
+				want.number, want.field, iss.State, want.state, want.why))
+			return
+		}
+		if iss.FullName != opts.Repo || iss.Number != want.number {
+			rep.add(CheckIssueStateReported, false, fmt.Sprintf(
+				"GetIssue(%s, %d) answered about %s#%d; the read must echo the address it was asked for, because a bare state carries no evidence of which issue it is the state of",
+				opts.Repo, want.number, iss.FullName, iss.Number))
+			return
+		}
+	}
+	rep.add(CheckIssueStateReported, true, fmt.Sprintf(
+		"%d reports open, %d reports closed", opts.OpenIssue, opts.ClosedIssue))
+}
+
+// checkIssueUnresolvableIsAFailure drives the read against an issue that does
+// not exist. The obligation is asymmetric on purpose: any classified failure
+// passes, and ANY success fails.
+//
+// A classified failure passes for the same reason a classified Health failure
+// does — a code host that has no such issue, or a credential that cannot see
+// it, is exactly what the contract asks be reported as a failure. What does not
+// pass is a value: a zero-valued Issue is as wrong as a confidently closed one,
+// because the caller's next move is to read a field off it.
+func checkIssueUnresolvableIsAFailure(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	iss, err := c.GetIssue(ctx, opts.Repo, opts.UnknownIssue)
+	if err == nil {
+		rep.add(CheckIssueUnresolvableIsAFailure, false, fmt.Sprintf(
+			"GetIssue(%s, %d) reported SUCCESS with State=%s for an issue Options.UnknownIssue says does not exist; "+
+				"an unresolvable issue must reach the caller as a typed failure, because a caller deciding whether work is "+
+				"blocked reads %s as permission to start it",
+			opts.Repo, opts.UnknownIssue, iss.State, codeci.IssueStateClosed))
+		return
+	}
+	if !cerr.Classified(err) {
+		rep.add(CheckIssueUnresolvableIsAFailure, false, fmt.Sprintf(
+			"GetIssue(%s, %d) failed with an unclassified error: %v; a host acts on the classification, never on the message",
+			opts.Repo, opts.UnknownIssue, err))
+		return
+	}
+	switch kind := cerr.KindOf(err); kind {
+	case cerr.KindNotFound, cerr.KindUnauthorized:
+		rep.add(CheckIssueUnresolvableIsAFailure, true, fmt.Sprintf("classified failure: %s", kind))
+	default:
+		rep.add(CheckIssueUnresolvableIsAFailure, false, fmt.Sprintf(
+			"GetIssue(%s, %d) failed with %s; an issue that does not exist is %s, and one the credential cannot see is %s — "+
+				"a caller distinguishes a deleted issue from a wrong token by the classification alone",
+			opts.Repo, opts.UnknownIssue, kind, cerr.KindNotFound, cerr.KindUnauthorized))
+	}
+}
+
+// checkCloseRefusesUnspecifiedReason drives CloseIssue with the zero reason.
+//
+// ⚠️ It is aimed at Options.UnknownIssue, which does not exist, and that choice
+// carries the whole check. It makes the ORDER observable — a connector that
+// validated its argument first answers Invalid, and one that resolved the issue
+// first answers NotFound — and it means this check cannot close anything even
+// against a connector with no guard at all. Driving it at a real open issue
+// would test the same obligation while betting a real issue on the answer.
+func checkCloseRefusesUnspecifiedReason(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	err := c.CloseIssue(ctx, opts.Repo, opts.UnknownIssue, codeci.CloseReasonUnspecified)
+	if err == nil {
+		rep.add(CheckCloseRefusesUnspecifiedReason, false, fmt.Sprintf(
+			"CloseIssue(%s, %d, %s) reported success; a close naming no reason is a caller that has not decided, and recording one on its behalf writes a guess into an audit trail",
+			opts.Repo, opts.UnknownIssue, codeci.CloseReasonUnspecified))
+		return
+	}
+	if !cerr.Classified(err) {
+		rep.add(CheckCloseRefusesUnspecifiedReason, false, fmt.Sprintf(
+			"CloseIssue refused with an unclassified error: %v", err))
+		return
+	}
+	if kind := cerr.KindOf(err); kind != cerr.KindInvalid {
+		rep.add(CheckCloseRefusesUnspecifiedReason, false, fmt.Sprintf(
+			"CloseIssue(%s, %d, %s) failed with %s, want %s. The issue named does not exist, so %s is the answer of a connector that "+
+				"resolved the issue BEFORE validating its argument — the guard has to run first, the way MergePR's method guard does, "+
+				"because by the time a close is attempted the cheap refusal is no longer available",
+			opts.Repo, opts.UnknownIssue, codeci.CloseReasonUnspecified, kind, cerr.KindInvalid, cerr.KindNotFound))
+		return
+	}
+	rep.add(CheckCloseRefusesUnspecifiedReason, true, fmt.Sprintf(
+		"refused with %s before resolving the issue", cerr.KindInvalid))
+}
+
+// checkCloseIsIdempotent closes an issue that is already closed.
+//
+// ⚠️ This is the only write this harness performs against a connector's backing
+// host, and it is safe because the postcondition already holds: closing a closed
+// issue changes nothing. The read that precedes it is a SAFETY INTERLOCK, not a
+// convenience — a fixture that names an open issue by mistake must fail this
+// check rather than have this harness close a real issue to find out.
+func checkCloseIsIdempotent(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	before, err := c.GetIssue(ctx, opts.Repo, opts.ClosedIssue)
+	if err != nil {
+		rep.add(CheckCloseIsIdempotent, false, fmt.Sprintf(
+			"GetIssue(%s, %d) failed on the issue Options.ClosedIssue names, so this check cannot confirm the close it is about to perform is a no-op, and it will not perform one blind: %v",
+			opts.Repo, opts.ClosedIssue, err))
+		return
+	}
+	if before.State != codeci.IssueStateClosed {
+		rep.add(CheckCloseIsIdempotent, false, fmt.Sprintf(
+			"Options.ClosedIssue names issue %d, which reports State=%s. This check closes that issue, which is only safe while it is already closed — so a fixture pointing at an issue that is not closed fails here rather than being closed by this run",
+			opts.ClosedIssue, before.State))
+		return
+	}
+
+	if err := c.CloseIssue(ctx, opts.Repo, opts.ClosedIssue, codeci.CloseReasonCompleted); err != nil {
+		rep.add(CheckCloseIsIdempotent, false, fmt.Sprintf(
+			"CloseIssue(%s, %d) failed against an issue that is ALREADY closed: %v. The caller's intent is that the issue end up closed, and it already is — a caller cannot know whether its previous pass completed, so it cannot avoid a second one, and failing here makes an ordinary second sweep report errors that describe nothing wrong",
+			opts.Repo, opts.ClosedIssue, err))
+		return
+	}
+	rep.add(CheckCloseIsIdempotent, true, fmt.Sprintf("re-closing %d succeeded", opts.ClosedIssue))
 }
