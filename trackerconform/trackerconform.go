@@ -150,6 +150,24 @@ const (
 	// classifying identically, which is the closest a caller can get to
 	// observing a stale identity through a contract that carries none.
 	CheckApplyNoCachedIdentity = "apply/no-cached-identity"
+	// CheckPlacementHonoursItsCapability covers [tracker.Change.Place] against
+	// what the connector DECLARED, in both directions.
+	//
+	// Without [tracker.CapBoardMembership] a true Place is
+	// cerr.KindUnsupported, refused before any network call. The failure this
+	// exists to catch is not a wrong classification — it is the connector that
+	// IGNORES the flag: membership is the one part of a change whose outcome a
+	// caller cannot read back, because [tracker.Tracker.GetItems] refuses an
+	// off-board item. So a dropped Place reports a change applied, leaves the
+	// item off the board, and gives a caller nothing to detect it with.
+	//
+	// WITH the capability, what is checked is that placement did not become an
+	// escape hatch: a change carrying Place AND an unroutable field is still
+	// refused whole, before any network call. A connector that short-circuited
+	// to its add-to-board mutation and validated afterwards would place the
+	// item and then fail the change — the surviving half of a change the report
+	// says was rejected, which is worse than either outcome alone.
+	CheckPlacementHonoursItsCapability = "apply/placement-honours-its-capability"
 	// CheckTrainsUnion covers the UNION rule of
 	// [tracker.TrainAdmin.ListTrains]: the answer accounts for every scope it
 	// was asked about, exactly once, in the shape the connector's declared
@@ -444,6 +462,7 @@ var checks = []check{
 	{CheckApplyAttribution, checkApplyAttribution},
 	{CheckApplyCrossTrackerRefused, checkApplyCrossTrackerRefused},
 	{CheckApplyNoCachedIdentity, checkApplyNoCachedIdentity},
+	{CheckPlacementHonoursItsCapability, checkPlacementHonoursItsCapability},
 	{CheckTrainsUnion, checkTrainsUnion},
 	{CheckTrainsCreateVerified, checkTrainsCreateVerified},
 }
@@ -1353,6 +1372,89 @@ func checkApplyCrossTrackerRefused(ctx context.Context, c tracker.Tracker, opts 
 	}
 	return true, fmt.Sprintf("%d foreign parent(s) refused with %s, attributed to the change that carries them, "+
 		"before any network call", len(foreignParents(opts)), cerr.KindInvalid)
+}
+
+// checkPlacementHonoursItsCapability holds [tracker.Change.Place] to what the
+// connector declared. See [CheckPlacementHonoursItsCapability] for the two
+// failures it exists to catch.
+//
+// Both arms drive a REFUSAL the contract requires, so like every other write
+// check here a conformant connector applies nothing and the run stays safe to
+// repeat against a live board. Neither arm can place anything: the undeclared
+// arm must be refused for the flag, and the declared arm carries a field
+// nothing can route, which is refused whole before any network call.
+func checkPlacementHonoursItsCapability(ctx context.Context, c tracker.Tracker, opts Options) (bool, string) {
+	declared := c.Capabilities().Has(tracker.CapBoardMembership)
+
+	// The undeclared arm asks for placement alone, so the ONLY thing that can
+	// refuse it is the flag. Pairing it with another invalid part would let a
+	// connector that ignores Place pass on the other part's refusal.
+	changes := []tracker.Change{{Target: opts.KnownItem, Place: true}}
+	want := cerr.KindUnsupported
+	lead := fmt.Sprintf("a Change.Place against board %s from a connector that does NOT declare %s must be refused "+
+		"with %s, attributed to the change that carries it, before any network call: ",
+		opts.ScannableBoard, tracker.CapBoardMembership, want)
+
+	if declared {
+		// The declared arm: placement must not bypass the pre-network
+		// validation every other change is held to.
+		changes = []tracker.Change{{
+			Target: opts.KnownItem,
+			Place:  true,
+			Fields: map[string]tracker.Value{applyProbeField: {}},
+		}}
+		want = cerr.KindInvalid
+		lead = fmt.Sprintf("a Change carrying Place AND a field no board can route must be refused with %s, "+
+			"attributed to the change, before any network call — placement is not an escape hatch from validation, "+
+			"and an item placed by a change the report calls refused is the surviving half of a rejected write: ",
+			want)
+	}
+
+	rep, err := c.Apply(ctx, opts.ScannableBoard, changes)
+	detail, reason := attributedRefusal(opts, changes, rep, err, 0)
+	if detail != "" {
+		return false, lead + detail
+	}
+	live := cerr.KindOf(reason)
+	if live != want {
+		extra := ""
+		if !declared && live == cerr.KindInvalid {
+			// Worth naming, because it is the plausible wrong answer rather
+			// than a careless one: a host acts on the difference.
+			extra = "; Invalid tells a host its own request was malformed, when the request is well formed and this " +
+				"backend simply cannot administer membership — the host's answer to Unsupported is to write the " +
+				"fields that make the item match instead, and it cannot reach that from Invalid"
+		}
+		return false, lead + fmt.Sprintf("it was refused with %s instead%s", live, extra)
+	}
+
+	// The pre-network half, read the same way CheckApplyCrossTrackerRefused
+	// reads it and for the same reason: it compares against the classification
+	// the connector just gave rather than re-asserting the required one, so the
+	// assertion above stays the only place that can fail for the KIND.
+	dead, cancel := context.WithCancel(ctx)
+	cancel()
+	deadRep, derr := c.Apply(dead, opts.ScannableBoard, changes)
+	refused, deadReason := applyRefusal(deadRep, derr, 0)
+	if !refused {
+		return false, lead + fmt.Sprintf("under a CANCELED context it was refused neither in the report nor by a "+
+			"whole-call error, having been refused with %s under a live one; a change this report does not list as "+
+			"failed was applied, so this connector placed an item — or claimed to — while answering a dead context",
+			live)
+	}
+	if k := cerr.KindOf(deadReason); k != live {
+		return false, lead + fmt.Sprintf("under a CANCELED context it was answered with %s, and with %s under a "+
+			"live one; the refusal is required BEFORE any network call, so the context cannot change the answer — a "+
+			"connector whose answer moves reached the wire first, and a placement decided on the wire is one a "+
+			"caller cannot undo", k, live)
+	}
+
+	if declared {
+		return true, fmt.Sprintf("declares %s, and a Place carrying an unroutable field is refused with %s before "+
+			"any network call", tracker.CapBoardMembership, want)
+	}
+	return true, fmt.Sprintf("does not declare %s, and refuses Change.Place with %s before any network call rather "+
+		"than ignoring it", tracker.CapBoardMembership, want)
 }
 
 // catalogueProbe is written INTO a catalogue a connector handed back. If it

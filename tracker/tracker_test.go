@@ -327,6 +327,52 @@ func TestItemRef_String(t *testing.T) {
 	}
 }
 
+// TestKnownCapabilities_IsTheClosedSet asserts the vocabulary's CONTENTS.
+// TestKnownCapabilities_IsACopy above already covers the copy property, and
+// this deliberately does not restate it: a duplicated assertion is one that
+// cannot be observed to fail on its own.
+//
+// The contents matter because manifest.Doc.Validate closes a connector.yml
+// against exactly this set, so a capability missing here cannot be declared at
+// all — and one present here is declarable by every third party. Adding or
+// removing one is a contract change, and this is what makes it one.
+func TestKnownCapabilities_IsTheClosedSet(t *testing.T) {
+	got := KnownCapabilities()
+	want := connector.Capabilities{
+		CapNativeTypes, CapNativeHierarchy, CapCrossScope, CapItemFields,
+		CapTrains, CapScopedTrains, CapSchemaAdmin, CapBoardMembership,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("KnownCapabilities() = %v, want exactly %v — a capability added or removed here is a contract change", got, want)
+	}
+	for _, c := range want {
+		if !got.Has(c) {
+			t.Fatalf("KnownCapabilities() is missing %q", c)
+		}
+	}
+}
+
+// TestCapabilityWireNamesArePinned: these strings are what an external author
+// writes in a connector.yml and what a host matches on. Renaming one silently
+// unregisters every connector that declared it, and this repo is public for
+// third parties to encode against exactly these spellings.
+func TestCapabilityWireNamesArePinned(t *testing.T) {
+	for declared, want := range map[connector.Capability]string{
+		CapNativeTypes:     "native_types",
+		CapNativeHierarchy: "native_hierarchy",
+		CapCrossScope:      "cross_scope",
+		CapItemFields:      "item_fields",
+		CapTrains:          "trains",
+		CapScopedTrains:    "scoped_trains",
+		CapSchemaAdmin:     "schema_admin",
+		CapBoardMembership: "board_membership",
+	} {
+		if string(declared) != want {
+			t.Errorf("capability wire name is %q, want %q: renaming it unregisters every connector that declared it", declared, want)
+		}
+	}
+}
+
 // TestTypeIsNotASecondFieldWriteSurface is the structural gate on the one-write-surface rule.
 //
 // The contract defines Change as exactly {Target, Fields, Parent, Lifecycle}
@@ -339,9 +385,15 @@ func TestItemRef_String(t *testing.T) {
 //
 // An item's type is written as a [FieldClassAttribute] entry in Fields, by name,
 // like its labels and its assignees.
+//
+// The set is asserted EXACTLY rather than by absence, so that any new field on
+// Change has to be argued for here. Place was added under that rule and is
+// admitted because it writes no field: it changes whether the item is ON the
+// board, which is not a value any Catalogue reports and has no [FieldClass]. A
+// field that could be spelled as a Fields entry does not belong in this list.
 func TestTypeIsNotASecondFieldWriteSurface(t *testing.T) {
 	got := fieldNames(reflect.TypeOf(Change{}))
-	if want := []string{"Target", "Fields", "Parent", "Lifecycle"}; !slices.Equal(got, want) {
+	if want := []string{"Target", "Fields", "Parent", "Lifecycle", "Place"}; !slices.Equal(got, want) {
 		t.Errorf("Change carries %v, want exactly %v", got, want)
 	}
 	for _, typ := range []reflect.Type{reflect.TypeOf(Change{}), reflect.TypeOf(Draft{})} {
