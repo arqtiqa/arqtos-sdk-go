@@ -1,6 +1,72 @@
 // Package codeci defines the CodeCI connector-class contract: pull/merge
-// request lifecycle, diffs, branch listing, and CI check/workflow-run
-// operations against ONE code host's PR/CI surface.
+// request lifecycle, diffs, branch listing, CI check/workflow-run operations,
+// and the two issue operations below, against ONE code host's PR/CI surface.
+//
+// # Why issues are here at all, and where that stops
+//
+// An issue is a repository object, reached the same way every other object in
+// this class is reached: by `<owner>/<name>` plus an id. It lives in a repo on
+// GitHub and on GitLab alike, and it is the thing a pull request closes.
+//
+// It is here because two callers need an issue's state, and its close, WITHOUT
+// a board: "is the issue this work is blocked on still open" and "close the
+// issue whose work has shipped". Neither question mentions a board, and the
+// tracker class cannot express them — [github.com/arqtiqa/arqtos-sdk-go/tracker]
+// addresses an item as {board, scope, number} and refuses an address missing any
+// component rather than guessing the rest from context, so an issue on a
+// repository whose issues are on NO board has no address there at all. A
+// board's view of whether an item is open is a different fact from whether the
+// issue is open, not a smaller one.
+//
+// ⚠️ The boundary, because this is the operation set most likely to grow:
+// **no issue LISTING and no arbitrary issue FIELD WRITES.** Two operations,
+// both by explicit address. What that refuses is a second work tracker growing
+// inside this class — the shape [github.com/arqtiqa/arqtos-sdk-go/tracker]'s own
+// package doc records as the cause of a fifty-operation board update becoming an
+// 1,850-request sweep, when an abstract backend grew one method per vendor API.
+// A caller that wants to search issues, or set a label or an assignee, wants the
+// tracker class, and if the tracker class cannot serve it then that is a finding
+// about the tracker class rather than a reason to widen this one.
+//
+// # Why both issue operations are required, and not behind a capability
+//
+// [CodeCI.GetIssue] and [CodeCI.CloseIssue] are in the required interface.
+//
+// For the READ, the argument [CodeCI.WhoAmI] made transfers, and it lands
+// harder here: an assertion a host can only make for SOME connectors is not an
+// assertion, it is a fallback path. A blocker-resolution path that exists on
+// some code hosts is not a blocker-resolution path — a caller would have to
+// keep a per-host arm for the hosts that lack it, which is precisely the
+// duplication this class exists to remove.
+//
+// For the CLOSE, the decisive fact is that this class ALREADY holds write
+// authority on the same repositories: [CodeCI.MergePR] is a required write, and
+// it is a far larger one. So a close is not new authority to gate, it is
+// authority this class already assumes. Compare [CIController], which IS gated:
+// mutating a CI run is a separately privileged vendor scope, granted apart from
+// the scope that reads it. Closing an issue is not — a credential that can
+// merge into a repository can close an issue in it.
+//
+// The vendors' inability to record a close REASON uniformly is not a reason to
+// gate either. Gating on that would make the close itself conditional, when the
+// close is the postcondition the caller needs and every host supports it. It is
+// documented as a vendor limit on [CodeCI.CloseIssue] instead, the same way
+// [DiffFile.Patch] documents its own.
+//
+// # Out-of-process: this class is native-only, including these two
+//
+// This class has NO wire protocol, and these operations do not add one.
+// [CodeCI] carries no .proto and no out-of-process binding — the same position
+// the roster and credential-loader classes each held before their wire
+// protocols landed as separate, deliberate pieces of work. So a CodeCI
+// connector is in-process and compiled into the host, and an external
+// developer cannot implement this class out-of-process today.
+//
+// That is stated here rather than left to be discovered: publishing a wire
+// binding for two operations while the other ten have none would leave the
+// class half-reachable over RPC, which is worse than not reachable at all. When
+// this class does get a wire protocol it covers the class, and these two travel
+// with it.
 //
 // # Why this is a separate class from code-host administration
 //
@@ -367,6 +433,141 @@ func (s RunStatus) String() string {
 	return "invalid_run_status(" + strconv.Itoa(int(s)) + ")"
 }
 
+// IssueState is whether an issue is open or closed, as the code host reports it.
+//
+// ⚠️ This is deliberately a three-value vocabulary and NOT an `Open bool`,
+// for the reason [Branch.Protected] documents: a bool's zero value asserts one
+// of the two real answers. `Open == false` reads as "this issue is closed",
+// which is the direction that gets an operator told to start work that is
+// still blocked. The zero value here asserts NEITHER answer.
+//
+// Two layers keep an unresolvable issue from reading as closed. An issue that
+// does not exist, or that the credential cannot see, is a typed failure from
+// [CodeCI.GetIssue] and never a value at all — that is the layer that matters.
+// IssueStateUnspecified is the second: a connector that returns a success
+// having never looked has violated the contract, and it renders as
+// "unspecified" rather than as either real state, so the violation is visible
+// instead of being read as an answer.
+type IssueState int
+
+const (
+	// IssueStateUnspecified is the zero value: it asserts nothing. A connector
+	// MUST NOT return it from a successful GetIssue — an issue whose state
+	// cannot be determined fails instead.
+	IssueStateUnspecified IssueState = iota
+	// IssueStateOpen is an issue the code host reports as open.
+	IssueStateOpen
+	// IssueStateClosed is an issue the code host reports as closed, whatever the
+	// reason it was closed for.
+	IssueStateClosed
+)
+
+var issueStateNames = map[IssueState]string{
+	IssueStateUnspecified: "unspecified",
+	IssueStateOpen:        "open",
+	IssueStateClosed:      "closed",
+}
+
+var issueStates = func() []IssueState {
+	out := make([]IssueState, 0, len(issueStateNames))
+	for s := range issueStateNames {
+		out = append(out, s)
+	}
+	slices.Sort(out)
+	return out
+}()
+
+// IssueStates returns the closed IssueState vocabulary, in ascending order, as a copy.
+func IssueStates() []IssueState { return slices.Clone(issueStates) }
+
+// Valid reports whether s is in the closed vocabulary.
+func (s IssueState) Valid() bool {
+	_, ok := issueStateNames[s]
+	return ok
+}
+
+// Determined reports whether s names a real state a code host reported —
+// the check a connector's own GetIssue MUST pass before returning success, and
+// the one a caller reading a blocker's state MUST make before believing it.
+func (s IssueState) Determined() bool { return s.Valid() && s != IssueStateUnspecified }
+
+// String renders s's stable name. A value outside the vocabulary renders as
+// invalid_issue_state(N) rather than as "unspecified".
+func (s IssueState) String() string {
+	if name, ok := issueStateNames[s]; ok {
+		return name
+	}
+	return "invalid_issue_state(" + strconv.Itoa(int(s)) + ")"
+}
+
+// CloseReason is why an issue is being closed: it was completed, or it was
+// abandoned. The distinction is not cosmetic — an audit trail that cannot tell
+// "we did this" from "we decided not to" has lost the more interesting half.
+//
+// ⚠️ This vocabulary is this package's own, and it is NOT
+// [github.com/arqtiqa/arqtos-sdk-go/tracker.CloseReason]. The two packages are
+// deliberately independent — neither imports the other, so either class can be
+// implemented, versioned and reasoned about without the other — and a shared
+// vocabulary would be exactly the edge that ends. They name the same
+// distinction because the distinction is real, not because one is a copy of the
+// other.
+//
+// ⚠️ A caller holding both MUST map between them BY NAME. Both are `int` with
+// coinciding orders today, so `codeci.CloseReason(trackerReason)` compiles and
+// happens to be correct — and would keep compiling, silently mis-mapping, the
+// first time either vocabulary gains a value in a different position. Neither
+// package can stop that conversion; both can refuse to make it look safe.
+type CloseReason int
+
+const (
+	// CloseReasonUnspecified is the zero value. [CodeCI.CloseIssue] MUST refuse
+	// it: a close that names no reason is a caller that has not decided, and
+	// recording "completed" on its behalf is a guess written into an audit
+	// trail.
+	CloseReasonUnspecified CloseReason = iota
+	// CloseReasonCompleted closes an issue whose work was done.
+	CloseReasonCompleted
+	// CloseReasonCanceled closes an issue whose work will not be done.
+	CloseReasonCanceled
+)
+
+var closeReasonNames = map[CloseReason]string{
+	CloseReasonUnspecified: "unspecified",
+	CloseReasonCompleted:   "completed",
+	CloseReasonCanceled:    "canceled",
+}
+
+var closeReasons = func() []CloseReason {
+	out := make([]CloseReason, 0, len(closeReasonNames))
+	for r := range closeReasonNames {
+		out = append(out, r)
+	}
+	slices.Sort(out)
+	return out
+}()
+
+// CloseReasons returns the closed CloseReason vocabulary, in ascending order, as a copy.
+func CloseReasons() []CloseReason { return slices.Clone(closeReasons) }
+
+// Valid reports whether r is in the closed vocabulary.
+func (r CloseReason) Valid() bool {
+	_, ok := closeReasonNames[r]
+	return ok
+}
+
+// UsableAsReason reports whether r can be passed to [CodeCI.CloseIssue] — the
+// check that method MUST make before anything else.
+func (r CloseReason) UsableAsReason() bool { return r.Valid() && r != CloseReasonUnspecified }
+
+// String renders r's stable name. A value outside the vocabulary renders as
+// invalid_close_reason(N) rather than as "unspecified".
+func (r CloseReason) String() string {
+	if name, ok := closeReasonNames[r]; ok {
+		return name
+	}
+	return "invalid_close_reason(" + strconv.Itoa(int(r)) + ")"
+}
+
 // A PR is one pull/merge request as the code host holds it.
 type PR struct {
 	// ID is the host's identifier for this pull/merge request, as a string —
@@ -584,6 +785,40 @@ type WorkflowRun struct {
 	URL string
 }
 
+// An Issue is one repository issue as [CodeCI.GetIssue] reports it — the object
+// a pull/merge request closes, addressed the way everything else in this class
+// is addressed: repository plus id.
+//
+// ⚠️ It carries the state and the address, and almost nothing else, ON PURPOSE.
+// This class holds two issue operations and no issue search; a type that grew
+// labels, assignees and milestones would be advertising a tracker this class has
+// deliberately refused to become — see the package doc for the boundary and what
+// it costs to lose it.
+type Issue struct {
+	// FullName is the "<owner>/<name>" the issue was read from, echoed back.
+	//
+	// It is here so a caller holding several resolved issues cannot mix them up,
+	// and so a connector answering the wrong repository is detectable rather than
+	// plausible. A bare state carries no evidence of what it is the state OF.
+	FullName string
+	// Number is the issue's number within that repository, echoed back — an int,
+	// matching how both code hosts number issues and how a blocker written "#N"
+	// in prose refers to one.
+	Number int
+	// State is what the code host says. It MUST be [IssueState.Determined]: a
+	// success carrying IssueStateUnspecified is a contract violation, because a
+	// caller resolving a blocker would read "unspecified" where it asked a
+	// yes-or-no question. A connector that cannot determine state fails the read.
+	State IssueState
+	// Title is the issue's title. It MAY be empty — a code host that does not
+	// return one on the path a connector used is a vendor limit, not a failure,
+	// the same position [CheckRun.DetailsURL] and [DiffFile.Patch] hold.
+	//
+	// ⚠️ A caller MUST NOT branch on Title. It is here to make a report to a
+	// human legible, and an empty one is legitimate.
+	Title string
+}
+
 // CodeCI is the connector-class contract.
 //
 // Every failure it returns is typed: a *cerr.Error whose Kind comes from
@@ -673,6 +908,58 @@ type CodeCI interface {
 	// GetWorkflowRun returns one CI automation run. One that does not exist
 	// is cerr.KindNotFound.
 	GetWorkflowRun(ctx context.Context, fullName, runID string) (WorkflowRun, error)
+
+	// GetIssue returns the issue numbered number in the named repository.
+	//
+	// ⚠️ It is BOARD-AGNOSTIC BY CONSTRUCTION, and that is the whole reason it
+	// exists here: the address is a repository and a number, so an issue in a
+	// repository whose issues are on NO board resolves exactly like any other.
+	// There is no board argument to be missing and none to be guessed.
+	//
+	// ⚠️ An issue that does not exist is cerr.KindNotFound, and one the
+	// credential cannot see is cerr.KindUnauthorized — a TYPED FAILURE, never a
+	// value. A connector MUST NOT report an unresolvable issue as closed, as
+	// open, or as a zero-valued Issue. The caller this serves is deciding
+	// whether work is blocked, and a read that cannot be resolved must reach it
+	// as unknown: silently reading it as closed tells an operator to start work
+	// that is still blocked, which is the one failure direction here that does
+	// damage rather than merely being wrong.
+	//
+	// A returned Issue MUST carry an [IssueState.Determined] State, and MUST
+	// echo the fullName and number it was asked for.
+	GetIssue(ctx context.Context, fullName string, number int) (Issue, error)
+
+	// CloseIssue closes the issue numbered number in the named repository,
+	// recording reason.
+	//
+	// It MUST validate reason before doing anything else: a reason that is not
+	// [CloseReason.UsableAsReason] is refused with cerr.KindInvalid and nothing
+	// is closed. Same shape as [CodeCI.MergePR]'s method guard, for the same
+	// reason — a close, like a merge, is not conveniently undone.
+	//
+	// ⚠️ It MUST BE IDEMPOTENT. Closing an issue that is already closed is a
+	// SUCCESS, not a failure: the caller's intent is "ensure this is closed",
+	// and the postcondition holds. A connector that failed here would make a
+	// caller's second pass over work it already finished report errors that
+	// describe nothing wrong — and a caller cannot avoid a second pass, because
+	// it cannot know whether its first one completed.
+	//
+	// ⚠️ Recording reason is BEST-EFFORT, and per-host. GitHub carries a native
+	// close reason; GitLab's issue close takes no reason at all, so a GitLab
+	// connector closes the issue and the distinction is not durably recorded on
+	// the host. That is a vendor limit, and it MUST NOT fail the close: the
+	// close is the postcondition the caller needs. A connector whose host cannot
+	// record the reason MUST document that, and SHOULD record it where the host
+	// does allow durable text.
+	//
+	// The reason is required from the CALLER regardless of whether the host can
+	// store it, and this is deliberate: the argument makes the caller decide,
+	// and a contract that accepted no reason on hosts that cannot store one
+	// would let a caller stop deciding on all of them.
+	//
+	// An issue that does not exist is cerr.KindNotFound; one the credential
+	// cannot close is cerr.KindUnauthorized.
+	CloseIssue(ctx context.Context, fullName string, number int, reason CloseReason) error
 }
 
 // CIController is the optional contract operation behind [CapCIControl]:

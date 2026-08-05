@@ -844,6 +844,8 @@ closed.
 | `ListBranches(ctx, fullName) (Resolution[Branch], error)` | Every branch, paged to completion. |
 | `GetCheckRuns(ctx, fullName, ref) (Resolution[CheckRun], error)` | Every check/status entry against `ref`. A ref with no CI configured is a genuine, expressible empty result. |
 | `GetWorkflowRun(ctx, fullName, runID) (WorkflowRun, error)` | One CI automation run (a GitHub Actions workflow run, a GitLab pipeline). One that does not exist is `cerr.KindNotFound`. |
+| `GetIssue(ctx, fullName, number) (Issue, error)` | The issue numbered `number` in `fullName` — **board-agnostic by construction**. ⚠️ An issue that does not exist is `cerr.KindNotFound` and one the credential cannot see is `cerr.KindUnauthorized`: a TYPED FAILURE, never a value. The returned `Issue` MUST carry an `IssueState.Determined()` state and MUST echo the address it was asked for. See [why issues are on this class](#why-issues-are-on-codeci-and-where-that-stops). |
+| `CloseIssue(ctx, fullName, number, reason) error` | Closes that issue, recording `reason`. MUST validate `reason.UsableAsReason()` **before anything else** — `CloseReasonUnspecified` is `cerr.KindInvalid`, and nothing is closed. MUST be **idempotent**: closing an already-closed issue is a success. Recording the reason is best-effort per host (see below). |
 
 `RerunWorkflow`/`CancelWorkflow` are the optional `CIController` operation
 behind `CapCIControl` — see [capabilities](#the-codeci-capability-vocabulary)
@@ -864,6 +866,55 @@ reached it as.
 **`Health()` is not a substitute.** It reports reachability and carries no
 login, so serving an identity probe from it publishes an empty login beside a
 success: the opposite of the claim, wearing a success's shape.
+
+#### Why issues are on `CodeCI`, and where that stops
+
+An issue is a repository object, reached the way everything else in this class
+is reached: `<owner>/<name>` plus an id. Two callers need an issue's state, and
+its close, **without a board** — "is the issue this work is blocked on still
+open" and "close the issue whose work has shipped".
+
+The `Tracker` class cannot express either. `ItemRef.Valid()` requires
+`BoardRef.Valid()`, which requires provider **and** instance **and** board, and
+refuses an address missing one rather than guessing the rest from context — so
+an issue in a repository whose issues are on **no board** has no address there
+at all. `GetItems` returns `cerr.KindNotFound` for an item that exists but is
+not on the board asked about, and `Apply` takes a `BoardRef`. A board's view of
+whether an item is open is a *different fact* from whether the issue is open,
+not a smaller one.
+
+⚠️ **The boundary: no issue listing, and no arbitrary issue field writes.** Two
+operations, both by explicit address. What that refuses is a second work tracker
+growing inside this class — the shape that turned a fifty-operation board update
+into an 1,850-request sweep when an abstract backend grew one method per vendor
+API. A caller that wants to search issues, or set a label or an assignee, wants
+the `Tracker` class.
+
+**Both are required, not capability-gated.** For the read, `WhoAmI`'s argument
+transfers: an assertion a host can only make for *some* connectors is not an
+assertion, it is a fallback path — and a blocker-resolution path that exists on
+only some code hosts leaves every caller keeping a per-host arm. For the close,
+this class **already holds write authority on the same repositories**: `MergePR`
+is a required write, and a far larger one. `CIController` is gated because
+mutating CI is a separately privileged vendor scope; closing an issue is not.
+
+#### `IssueState`, and the vendor limit on close reasons
+
+| Field | Obligation |
+|---|---|
+| `Issue.State` | MUST be `Determined()` — `IssueStateOpen` or `IssueStateClosed`. ⚠️ It is a three-value vocabulary and **not an `Open bool`** for the reason `Branch.Protected` documents: a bool's zero value asserts one of the two real answers, and here that answer is *closed* — which reads as "your blocker is resolved". `IssueStateUnspecified` asserts neither, so a connector that never looked is visible rather than believed. |
+| `Issue.Title` | MAY be empty, like `CheckRun.DetailsURL`. A caller MUST NOT branch on it. |
+| `Issue.FullName` / `Issue.Number` | MUST echo what was asked for. A bare state carries no evidence of which issue it is the state of. |
+
+**The close reason is best-effort, per host.** GitHub carries a native issue
+close reason; **GitLab's issue close takes no reason at all** (`state_event=close`
+and nothing more), so a GitLab connector closes the issue and the distinction is
+not durably recorded. That is a vendor limit — the same shape as `DiffFile.Patch`
+being allowed to be empty — and it MUST NOT fail the close: the close is the
+postcondition the caller needs, and every host supports it. The reason stays
+**required from the caller** regardless, because the argument is what makes the
+caller decide; a contract that accepted no reason on the hosts that cannot store
+one would let callers stop deciding on all of them.
 
 #### `PR.URL` and `Branch.Protected`
 
