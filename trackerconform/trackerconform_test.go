@@ -226,6 +226,30 @@ func stubRefusal(board tracker.BoardRef, ch tracker.Change) error {
 // It is separate so a violating stub can drop the parent rule ALONE and leave
 // the rest of the connector conformant.
 func stubTargetRefusal(board tracker.BoardRef, ch tracker.Change) error {
+	if err := stubPlaceRefusal(ch); err != nil {
+		return err
+	}
+	return stubTargetRefusalIgnoringPlace(board, ch)
+}
+
+// stubPlaceRefusal is the board-membership rule for a stub that does NOT
+// declare tracker.CapBoardMembership, which every stub built by newStub is.
+//
+// It is separate for the same reason stubParentRefusal is: so a violating stub
+// can drop this rule ALONE — the drop being the real-world defect, a connector
+// that takes the flag and silently does nothing with it.
+func stubPlaceRefusal(ch tracker.Change) error {
+	if ch.Place {
+		return cerr.New(cerr.KindUnsupported, "Apply",
+			errors.New("this connector does not administer board membership"))
+	}
+	return nil
+}
+
+// stubTargetRefusalIgnoringPlace is stubTargetRefusal without the membership
+// rule, for the stub that violates it and for the stub that legitimately serves
+// placement.
+func stubTargetRefusalIgnoringPlace(board tracker.BoardRef, ch tracker.Change) error {
 	if !ch.Target.Valid() || ch.Target.Board != board {
 		return cerr.New(cerr.KindInvalid, "Apply", fmt.Errorf("target %s is not an item on %s", ch.Target, board))
 	}
@@ -398,6 +422,18 @@ func failed(rep Report, name string) (string, bool) {
 	return "", false
 }
 
+// passed is failed's counterpart, for a check whose PASS detail is itself the
+// assertion — a check with two arms passes for two different reasons, and a
+// report that does not say which one ran cannot be read.
+func passed(rep Report, name string) (string, bool) {
+	for _, res := range rep.Results {
+		if res.Name == name {
+			return res.Detail, res.Pass
+		}
+	}
+	return "", false
+}
+
 // requireFailed is the assertion every violating-stub test ends in. It checks
 // the Detail as well as the verdict: a failure with no detail tells a reviewer
 // that something is wrong without saying what, which is a report nobody can
@@ -487,16 +523,17 @@ func TestConform_RunsEveryDeclaredCheck(t *testing.T) {
 		CheckListNoEmptySuccess, CheckListFailClosed, CheckHealth,
 		CheckScanPagedToExhaustion, CheckReadUnreadableIsNotEmpty, CheckSelectionEchoed,
 		CheckApplyAttribution, CheckApplyCrossTrackerRefused, CheckApplyNoCachedIdentity,
+		CheckPlacementHonoursItsCapability,
 		CheckTrainsUnion, CheckTrainsCreateVerified,
 	}
 	got := conformChecks()
 	if !slices.Equal(got, declared) {
 		t.Fatalf("Run runs\n  %v\nand the class publishes\n  %v", got, declared)
 	}
-	if len(got) != 15 {
-		t.Errorf("the harness runs %d checks; seven are the ones every class in this estate carries, six are this "+
+	if len(got) != 16 {
+		t.Errorf("the harness runs %d checks; seven are the ones every class in this estate carries, seven are this "+
 			"class's own reads and writes, and two are the TrainAdmin properties the class contract holds rather "+
-			"than leaving to each backend: 15", len(got))
+			"than leaving to each backend: 16", len(got))
 	}
 }
 
@@ -2219,6 +2256,24 @@ func violatingStubs() map[string]func() (tracker.Tracker, manifest.Doc) {
 			}
 			return s, stubManifest(tracker.CapNativeHierarchy)
 		},
+		// A connector that takes Change.Place and silently does nothing with
+		// it, declaring no board membership. It is the realistic defect rather
+		// than a contrived one: the flag is new, ignoring an unknown bool is
+		// what a partial implementation does, and the report comes back saying
+		// the change was applied. Nothing a caller can read afterwards
+		// contradicts it, because GetItems refuses an off-board item.
+		CheckPlacementHonoursItsCapability: func() (tracker.Tracker, manifest.Doc) {
+			s := newStub()
+			s.apply = func(_ context.Context, board tracker.BoardRef, changes []tracker.Change) (tracker.ApplyReport, error) {
+				return stubApplyReport(board, changes, func(b tracker.BoardRef, ch tracker.Change) error {
+					if err := stubTargetRefusalIgnoringPlace(b, ch); err != nil {
+						return err
+					}
+					return stubParentRefusal(b, ch)
+				}), nil
+			}
+			return s, stubManifest(tracker.CapNativeHierarchy)
+		},
 		// A scope it cannot read, reported as a scope with no trains. This is
 		// the shape the union rule forbids and the one a partial read produces
 		// most naturally: the answer is well-formed, complete-looking, and one
@@ -2252,6 +2307,117 @@ func violatingStubs() map[string]func() (tracker.Tracker, manifest.Doc) {
 			return a, trainManifest(false)
 		},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 13a. apply/placement-honours-its-capability
+// ---------------------------------------------------------------------------
+
+// placingStub is a conformant connector that DOES administer board membership:
+// it declares tracker.CapBoardMembership and accepts Change.Place, while
+// keeping every other pre-network refusal. It is what the declared arm of the
+// check runs against.
+func placingStub() (*stub, manifest.Doc) {
+	s := newStub()
+	s.caps = connector.Capabilities{tracker.CapNativeHierarchy, tracker.CapBoardMembership}
+	s.apply = func(ctx context.Context, board tracker.BoardRef, changes []tracker.Change) (tracker.ApplyReport, error) {
+		if !board.Valid() {
+			return tracker.ApplyReport{}, cerr.New(cerr.KindInvalid, "Apply", errors.New("board is not fully qualified"))
+		}
+		// Place is allowed; everything else is still refused, and the field
+		// rules run REGARDLESS of Place — which is the property the declared
+		// arm checks.
+		rep := stubApplyReport(board, changes, func(b tracker.BoardRef, ch tracker.Change) error {
+			if err := stubTargetRefusalIgnoringPlace(b, ch); err != nil {
+				return err
+			}
+			return stubParentRefusal(b, ch)
+		})
+		if rep.Applied > 0 {
+			if err := ctx.Err(); err != nil {
+				return tracker.ApplyReport{}, cerr.New(cerr.KindUnavailable, "Apply", err)
+			}
+		}
+		return rep, nil
+	}
+	return s, stubManifest(tracker.CapNativeHierarchy, tracker.CapBoardMembership)
+}
+
+// TestConform_PlacingConnector_IsGreen is the other direction of the check, and
+// the one the violating-stub table cannot express: a connector that legitimately
+// serves placement must PASS, not merely fail differently. Without this the
+// check could be satisfied by any connector that refuses Place unconditionally,
+// which would make the capability undeclarable in practice.
+func TestConform_PlacingConnector_IsGreen(t *testing.T) {
+	s, m := placingStub()
+	rep := run(t, s, m)
+	requireGreen(t, rep)
+	detail, _ := passed(rep, CheckPlacementHonoursItsCapability)
+	if !strings.Contains(detail, "unroutable field") {
+		t.Errorf("the pass does not say which arm ran, so a connector declaring the capability and one not "+
+			"declaring it are indistinguishable in the report: %q", detail)
+	}
+}
+
+// TestConform_CatchesPlacementThatBypassesValidation is the declared arm's
+// failure. A connector that reaches its add-to-board mutation before validating
+// the rest of the change places the item and then reports the change refused —
+// the surviving half of a rejected write, and the one outcome worse than either
+// a clean success or a clean refusal, because the report actively denies it
+// happened.
+func TestConform_CatchesPlacementThatBypassesValidation(t *testing.T) {
+	s, m := placingStub()
+	s.apply = func(_ context.Context, board tracker.BoardRef, changes []tracker.Change) (tracker.ApplyReport, error) {
+		return stubApplyReport(board, changes, func(b tracker.BoardRef, ch tracker.Change) error {
+			// The bypass: a change asking for placement skips the field rules
+			// entirely, so an unroutable field rides in behind the flag.
+			if ch.Place {
+				return nil
+			}
+			if err := stubTargetRefusalIgnoringPlace(b, ch); err != nil {
+				return err
+			}
+			return stubParentRefusal(b, ch)
+		}), nil
+	}
+	rep := run(t, s, m)
+	requireFailed(t, rep, CheckPlacementHonoursItsCapability)
+	if detail, _ := failed(rep, CheckPlacementHonoursItsCapability); !strings.Contains(detail,
+		"listed neither as applied nor as failed") {
+		t.Errorf("the failure does not say the bypassed change was applied: %q", detail)
+	}
+}
+
+// TestConform_CatchesPlacementRefusedAsInvalidInsteadOfUnsupported pins the
+// classification, because this is the plausible wrong answer rather than a
+// careless one — and a host acts on the difference. Unsupported says
+// "membership is not administrable here, write the fields that make the item
+// match instead"; Invalid says "your request is malformed", and a host cannot
+// reach the fallback from there.
+func TestConform_CatchesPlacementRefusedAsInvalidInsteadOfUnsupported(t *testing.T) {
+	s := newStub()
+	s.apply = func(_ context.Context, board tracker.BoardRef, changes []tracker.Change) (tracker.ApplyReport, error) {
+		return stubApplyReport(board, changes, func(b tracker.BoardRef, ch tracker.Change) error {
+			if ch.Place {
+				return cerr.New(cerr.KindInvalid, "Apply", errors.New("no membership administration here"))
+			}
+			// Every other rule kept, parent included: this stub is wrong about
+			// the KIND and about nothing else.
+			return stubRefusal(b, ch)
+		}), nil
+	}
+	rep := run(t, s, stubManifest(tracker.CapNativeHierarchy))
+	requireFailed(t, rep, CheckPlacementHonoursItsCapability)
+	detail, _ := failed(rep, CheckPlacementHonoursItsCapability)
+	if !strings.Contains(detail, "refused with invalid instead") {
+		t.Errorf("the failure does not name the classification it got: %q", detail)
+	}
+	if !strings.Contains(detail, "write the") {
+		t.Errorf("the failure does not tell the author what a host loses by the wrong kind: %q", detail)
+	}
+	// Aimed at the classification alone: the flag IS refused pre-network, so
+	// nothing else about this connector is wrong.
+	requirePassed(t, rep, CheckApplyAttribution, CheckApplyCrossTrackerRefused)
 }
 
 // ---------------------------------------------------------------------------

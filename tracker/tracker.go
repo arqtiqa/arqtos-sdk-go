@@ -192,6 +192,42 @@ const (
 	// do and the least often wanted: a host that reads and writes items needs
 	// nothing here, and a token scoped for item work will not carry it.
 	CapSchemaAdmin connector.Capability = "schema_admin"
+
+	// CapBoardMembership declares that whether an item is ON this board is
+	// administrable as an act of its own, via [Change.Place] — separately from
+	// the item's own fields.
+	//
+	// It is optional because the backends genuinely differ on whether that act
+	// exists, and the difference is not cosmetic:
+	//
+	//   - On one provider a board is a container an item is added to by a
+	//     dedicated mutation. Membership is a thing you DO.
+	//   - On another a board is a saved QUERY, and membership is a consequence
+	//     of the item's field values. There is no operation that makes an item a
+	//     member; there is only making it match.
+	//   - On a third, a board IS a field on the item, so membership is an
+	//     ordinary field write and already expressible through [Change.Fields].
+	//     A second spelling for it would be two ways to say one thing.
+	//
+	// So a host must know which world it is in BEFORE it plans a repair, and
+	// that is what this declares. Without it a host writes fields; with it a
+	// host can place.
+	//
+	// ⚠️ It is not declaration-only. It changes what [Apply] ACCEPTS: a
+	// [Change.Place] against a connector that has not declared this is
+	// cerr.KindUnsupported, refused before any network call — never ignored. A
+	// connector that quietly dropped the flag would report a change applied
+	// while the item stayed off the board, which is the one outcome a caller
+	// cannot detect and cannot recover from, because the report said it worked.
+	//
+	// The classification is Unsupported rather than Invalid, matching
+	// [CapNativeTypes] and [CapNativeHierarchy] — the other two capabilities
+	// that gate a WRITE. The request is well formed; this backend cannot serve
+	// it. That distinction is what a host acts on: Unsupported says "membership
+	// is not administrable here, write the fields that make it match instead",
+	// while Invalid would say "your request is malformed" and send a host
+	// looking for a bug of its own.
+	CapBoardMembership connector.Capability = "board_membership"
 )
 
 // knownCapabilities is the closed capability vocabulary of this class. A
@@ -200,7 +236,7 @@ const (
 // indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
 	CapNativeTypes, CapNativeHierarchy, CapCrossScope, CapItemFields,
-	CapTrains, CapScopedTrains, CapSchemaAdmin,
+	CapTrains, CapScopedTrains, CapSchemaAdmin, CapBoardMembership,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for this class,
@@ -762,6 +798,48 @@ type Change struct {
 	Parent *ItemRef
 	// Lifecycle closes or reopens the item. nil leaves it alone.
 	Lifecycle *Lifecycle
+	// Place puts the item ON this board when it is not already there. false —
+	// the zero value, and so the default — leaves membership alone, which is
+	// the pre-existing behaviour: a change targeting an item that is not on the
+	// board is cerr.KindNotFound.
+	//
+	// It exists because filing an item and placing it are different acts on
+	// some backends, and only the first is reachable through [Tracker.Create].
+	// An item created outside arqtos, or one whose filing failed after the
+	// issue existed but before it reached the board, can otherwise be READ
+	// (it exists) and never WRITTEN (it is not a member) — and nothing in the
+	// contract could repair it.
+	//
+	// It is deliberately not an operation of its own. This contract is five
+	// operations because the interface it replaced grew one method per backend
+	// API until a fifty-operation board update became an 1,850-request sweep; a
+	// method named after a vendor's add-to-board mutation is that growth
+	// resuming. Placement is a CHANGE, so it batches with every other change
+	// and is attributed per change like any of them.
+	//
+	// ⚠️ Requires [CapBoardMembership]. Against a connector that has not
+	// declared it, a true Place is cerr.KindUnsupported before any network
+	// call — see that capability for why it is refused rather than ignored, and
+	// why the kind is Unsupported rather than Invalid.
+	//
+	// Setting Place does NOT relax any other refusal. A Target on a different
+	// board stays cerr.KindInvalid, and a change carrying an unroutable field
+	// is still refused whole before any network call — so a placement never
+	// lands as the surviving half of a change the connector rejected.
+	//
+	// ⚠️ ORDER, within one change: the placement happens BEFORE the field
+	// writes, for the same reason [Lifecycle.AuditComment] is posted before the
+	// close — a [FieldClassBoard] field belongs to the board's item, so writing
+	// one to a non-member has nowhere to land. A caller can therefore place and
+	// populate in a single change, which is what repairing a half-filed item
+	// takes.
+	//
+	// Placing an item that is ALREADY on the board is a no-op SUCCESS, not a
+	// failure. The flag says "be on this board", not "join it now": a caller
+	// repairing a batch does not know which of its items are already members,
+	// and making that an error would force a read of every item first — an
+	// extra round trip whose answer is stale the moment it arrives.
+	Place bool
 }
 
 // A Lifecycle is a close or a reopen, with the reason and the audit trail that
@@ -1004,6 +1082,18 @@ type Tracker interface {
 	// whole call, never a partial success — folding an unattributable failure
 	// into the report would say "everything else was applied" about changes
 	// nobody can account for.
+	//
+	// A change whose target is not on this board is cerr.KindNotFound, UNLESS
+	// it sets [Change.Place] — the one way the contract admits an off-board
+	// target, and only from a connector declaring [CapBoardMembership]. That
+	// refusal is otherwise unconditional: it is what stops a caller reading a
+	// report as evidence that a write reached an item the board never held.
+	//
+	// [Tracker.GetItems] is deliberately NOT relaxed in the same way: an
+	// off-board item stays unreadable. The asymmetry is the point — a read of
+	// one would answer with an [Item] whose [FieldClassBoard] fields have no
+	// board to have come from, and absent is indistinguishable from unset there.
+	// Placement is a thing a caller does, not a thing it can see first.
 	Apply(ctx context.Context, board BoardRef, changes []Change) (ApplyReport, error)
 }
 
