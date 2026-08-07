@@ -68,13 +68,16 @@ jobs:
       - name: go vet
         run: make lint
 
-      - name: install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-
       # Catches what vet does not. `go vet` alone was this workflow's whole
       # lint bar on first submission; that was below the house standard.
+      #
+      # ⚠️ `go tool`, not `go install …@latest` (arqtos-connectors#231). The
+      # version is pinned in go.mod, so CI and a developer's laptop run the
+      # SAME staticcheck — and a new upstream release can no longer turn this
+      # repo red on a day nobody touched it, which for a shared repo means
+      # mid-release-train with the whole diamond behind it.
       - name: staticcheck
-        run: staticcheck ./...
+        run: go tool staticcheck ./...
 
       # A dependency nothing imports is dropped by the next `go mod tidy`, so
       # this is what proves the MCP SDK dependency is genuinely used rather
