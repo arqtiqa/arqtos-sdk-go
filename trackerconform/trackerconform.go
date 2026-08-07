@@ -168,6 +168,38 @@ const (
 	// item and then fail the change — the surviving half of a change the report
 	// says was rejected, which is worse than either outcome alone.
 	CheckPlacementHonoursItsCapability = "apply/placement-honours-its-capability"
+	// CheckPlaceHonoursBoardScope covers the OTHER half of
+	// [tracker.Change.Place]: a placement names a scope as well as a board, and
+	// a scope the board's instance does not own must be refused with
+	// cerr.KindInvalid before any network call.
+	//
+	// [CheckPlacementHonoursItsCapability] asks whether the connector may place
+	// at all and whether placement bypasses validation. Neither question reaches
+	// WHAT is being placed, so a connector can pass both and still adopt an item
+	// belonging to another organisation.
+	//
+	// ⚠️ The reason this is a contract obligation rather than one connector's
+	// bug: Place is a contract flag, so a host cannot enforce the rule without
+	// reimplementing it per host — and the NEXT tracker connector would arrive
+	// without it. That is what happened in arqtiqa/arqtos-cli#1169: the
+	// pre-connector host guarded scope by reading the project's linked
+	// repositories, the guard went with the old arm when board_add_item moved
+	// onto the connector, and nothing replaced it.
+	//
+	// ⚠️ **What this check cannot see.** It cannot know whether a given backend
+	// legitimately spans organisations — some might, and a board that declares a
+	// span is a different design. So it asserts only that the connector REFUSED
+	// the scope the run named as foreign; it never asserts that a particular
+	// scope set is the correct one. The fixture decides what "foreign" means,
+	// because only the connector knows its own scope grammar — see
+	// [Options.ForeignScope].
+	//
+	// A connector that does not declare [tracker.CapBoardMembership] cannot
+	// place at all and is not held to this: its Place is already refused for the
+	// flag by [CheckPlacementHonoursItsCapability], and the scope is never
+	// reached. Failing it here for a capability it never claimed is the shape
+	// [CheckOptionalDeclared] exists to avoid.
+	CheckPlaceHonoursBoardScope = "apply/place-honours-board-scope"
 	// CheckTrainsUnion covers the UNION rule of
 	// [tracker.TrainAdmin.ListTrains]: the answer accounts for every scope it
 	// was asked about, exactly once, in the shape the connector's declared
@@ -293,6 +325,25 @@ type Options struct {
 	// the reason [Options] states: an optional fixture is a check that silently
 	// skips, and a check that skipped is reported by nothing.
 	UnreadableScope tracker.Scope
+
+	// ForeignScope is a scope that ScannableBoard's instance does NOT own — an
+	// address this connector must refuse to place an item from.
+	//
+	// ⚠️ The FIXTURE decides what foreign means, not the harness, and that is
+	// deliberate. [tracker.Scope] is a connector-defined string: GitHub spells
+	// it `owner/repo`, another backend need not, and a harness that derived a
+	// foreign scope by editing an owner segment would be asserting one
+	// backend's grammar on all of them. Only the connector knows which
+	// addresses its own board cannot own.
+	//
+	// It is read by [CheckPlaceHonoursBoardScope], and it is required only of a
+	// connector declaring [tracker.CapBoardMembership] — one that cannot place
+	// at all never reaches the scope. That is why this is not in
+	// [fixtureRules]: the rules run before any capability is known, and a rule
+	// there would demand the fixture of every connector including those the
+	// check does not apply to. The check itself fails, naming this field, when
+	// a placing connector leaves it empty.
+	ForeignScope tracker.Scope
 }
 
 // A Result is the outcome of a single named check.
@@ -463,6 +514,7 @@ var checks = []check{
 	{CheckApplyCrossTrackerRefused, checkApplyCrossTrackerRefused},
 	{CheckApplyNoCachedIdentity, checkApplyNoCachedIdentity},
 	{CheckPlacementHonoursItsCapability, checkPlacementHonoursItsCapability},
+	{CheckPlaceHonoursBoardScope, checkPlaceHonoursBoardScope},
 	{CheckTrainsUnion, checkTrainsUnion},
 	{CheckTrainsCreateVerified, checkTrainsCreateVerified},
 }
@@ -1455,6 +1507,78 @@ func checkPlacementHonoursItsCapability(ctx context.Context, c tracker.Tracker, 
 	}
 	return true, fmt.Sprintf("does not declare %s, and refuses Change.Place with %s before any network call rather "+
 		"than ignoring it", tracker.CapBoardMembership, want)
+}
+
+// checkPlaceHonoursBoardScope holds a placement to the SCOPE it names, which is
+// the half [checkPlacementHonoursItsCapability] does not reach. See
+// [CheckPlaceHonoursBoardScope] for what it can and cannot see.
+//
+// Like every other write check here it drives a REFUSAL, so a conformant
+// connector places nothing and the run stays safe to repeat against a live
+// board. ⚠️ A connector that is NOT conformant adopts the foreign item — which
+// is exactly the harm, and is why the fixture must name a scope whose adoption
+// the operator can undo.
+func checkPlaceHonoursBoardScope(ctx context.Context, c tracker.Tracker, opts Options) (bool, string) {
+	if !c.Capabilities().Has(tracker.CapBoardMembership) {
+		return true, fmt.Sprintf("does not declare %s, so a Place is already refused for the flag and the scope is "+
+			"never reached; %s covers that", tracker.CapBoardMembership, CheckPlacementHonoursItsCapability)
+	}
+	if opts.ForeignScope == "" {
+		return false, fmt.Sprintf("this connector declares %s and the run named no Options.ForeignScope, so the "+
+			"placement's SCOPE is unchecked: a connector adopting an item from an organisation the board does not "+
+			"own would pass every check in this harness. Only the connector knows which addresses its own board "+
+			"cannot own, which is why the harness cannot supply one", tracker.CapBoardMembership)
+	}
+	if slices.Contains(fixtureScopes(opts), opts.ForeignScope) {
+		return false, fmt.Sprintf("Options.ForeignScope is %q, which is one of the scopes the item fixtures name — "+
+			"those are scopes on ScannableBoard, so the run would demand a refusal of an address the connector is "+
+			"required to ACCEPT", opts.ForeignScope)
+	}
+
+	// The target differs from KnownItem in the SCOPE alone. Everything else is
+	// the address the connector must accept, so the only thing that can refuse
+	// this is the scope — a probe that also moved the board would pass on the
+	// cross-tracker rule instead, and prove nothing about placement.
+	target := opts.KnownItem
+	target.Scope = opts.ForeignScope
+	changes := []tracker.Change{{Target: target, Place: true}}
+	lead := fmt.Sprintf("a Change.Place naming scope %q against board %s, whose instance does not own it, must be "+
+		"refused with %s, attributed to the change that carries it, before any network call: ",
+		opts.ForeignScope, opts.ScannableBoard, cerr.KindInvalid)
+
+	rep, err := c.Apply(ctx, opts.ScannableBoard, changes)
+	detail, reason := attributedRefusal(opts, changes, rep, err, 0)
+	if detail != "" {
+		return false, lead + detail + "; membership is the one part of a change a caller cannot read back — " +
+			"GetItems refuses an off-board item — so an adopted foreign item is invisible from this side"
+	}
+	if live := cerr.KindOf(reason); live != cerr.KindInvalid {
+		return false, lead + fmt.Sprintf("it was refused with %s instead; %s reads as a condition that may change, "+
+			"so a host retries a placement that must never succeed", live, live)
+	}
+
+	// The pre-network half, read the way the two sibling checks read it and for
+	// the same reason: it compares against the classification the connector just
+	// gave rather than re-asserting the required one, so the assertion above
+	// stays the only place that can fail for the KIND.
+	dead, cancel := context.WithCancel(ctx)
+	cancel()
+	deadRep, derr := c.Apply(dead, opts.ScannableBoard, changes)
+	refused, deadReason := applyRefusal(deadRep, derr, 0)
+	if !refused {
+		return false, lead + "under a CANCELED context it was refused neither in the report nor by a whole-call " +
+			"error; a change this report does not list as failed was applied, so this connector adopted an item " +
+			"from a scope the board does not own while answering a dead context"
+	}
+	if k := cerr.KindOf(deadReason); k != cerr.KindInvalid {
+		return false, lead + fmt.Sprintf("under a CANCELED context it was answered with %s, and with %s under a live "+
+			"one; the refusal is required BEFORE any network call, so the context cannot change the answer — and a "+
+			"placement decided on the wire is one a caller cannot undo", k, cerr.KindInvalid)
+	}
+
+	return true, fmt.Sprintf("declares %s, and refuses a Place naming scope %q — which %s's instance does not own — "+
+		"with %s before any network call", tracker.CapBoardMembership, opts.ForeignScope,
+		opts.ScannableBoard, cerr.KindInvalid)
 }
 
 // catalogueProbe is written INTO a catalogue a connector handed back. If it

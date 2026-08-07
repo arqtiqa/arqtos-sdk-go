@@ -41,6 +41,13 @@ var (
 	// it is deliberately NOT one of the item-fixture scopes: those are scopes
 	// the connector must be able to read.
 	fixUnreadableScope tracker.Scope = "gamma"
+
+	// fixForeignScope is a scope fixScannable's instance does NOT own. Like
+	// fixUnreadableScope it is deliberately not an item-fixture scope — those
+	// are addresses the stub must ACCEPT — and it is deliberately not
+	// fixUnreadableScope either: unreadable and un-owned are different faults,
+	// and a fixture serving both would let a refusal for one pass as the other.
+	fixForeignScope tracker.Scope = "other-org-delta"
 )
 
 // stubField is the one field the stub's Catalogue serves. A write to any other
@@ -246,6 +253,26 @@ func stubPlaceRefusal(ch tracker.Change) error {
 	return nil
 }
 
+// stubPlaceScopeRefusal is the rule a stub that DOES administer membership is
+// held to: a placement names a scope, and this board's instance owns only the
+// scopes the item fixtures name.
+//
+// It is separate for the same reason stubParentRefusal and stubPlaceRefusal
+// are: so a violating stub can drop this rule ALONE and stay conformant in
+// every other respect. That is the real-world defect — a connector that
+// validates the board and the fields and never looks at whose repository it is
+// adopting.
+func stubPlaceScopeRefusal(ch tracker.Change) error {
+	if !ch.Place {
+		return nil
+	}
+	if ch.Target.Scope == "alpha" || ch.Target.Scope == "beta" {
+		return nil
+	}
+	return cerr.New(cerr.KindInvalid, "Apply",
+		fmt.Errorf("scope %q is not one this board's instance owns", ch.Target.Scope))
+}
+
 // stubTargetRefusalIgnoringPlace is stubTargetRefusal without the membership
 // rule, for the stub that violates it and for the stub that legitimately serves
 // placement.
@@ -411,6 +438,7 @@ func fixtures(m manifest.Doc) Options {
 		ParentItem:       fixParent,
 		ChildlessItem:    fixChildless,
 		UnreadableScope:  fixUnreadableScope,
+		ForeignScope:     fixForeignScope,
 	}
 }
 
@@ -534,17 +562,17 @@ func TestConform_RunsEveryDeclaredCheck(t *testing.T) {
 		CheckListNoEmptySuccess, CheckListFailClosed, CheckHealth,
 		CheckScanPagedToExhaustion, CheckReadUnreadableIsNotEmpty, CheckSelectionEchoed,
 		CheckApplyAttribution, CheckApplyCrossTrackerRefused, CheckApplyNoCachedIdentity,
-		CheckPlacementHonoursItsCapability,
+		CheckPlacementHonoursItsCapability, CheckPlaceHonoursBoardScope,
 		CheckTrainsUnion, CheckTrainsCreateVerified,
 	}
 	got := conformChecks()
 	if !slices.Equal(got, declared) {
 		t.Fatalf("Run runs\n  %v\nand the class publishes\n  %v", got, declared)
 	}
-	if len(got) != 16 {
-		t.Errorf("the harness runs %d checks; seven are the ones every class in this estate carries, seven are this "+
+	if len(got) != 17 {
+		t.Errorf("the harness runs %d checks; seven are the ones every class in this estate carries, eight are this "+
 			"class's own reads and writes, and two are the TrainAdmin properties the class contract holds rather "+
-			"than leaving to each backend: 16", len(got))
+			"than leaving to each backend: 17", len(got))
 	}
 }
 
@@ -2285,6 +2313,38 @@ func violatingStubs() map[string]func() (tracker.Tracker, manifest.Doc) {
 			}
 			return s, stubManifest(tracker.CapNativeHierarchy)
 		},
+		// A connector that legitimately places — it declares the capability and
+		// honours every OTHER pre-network rule — and never looks at whose scope
+		// it is adopting. That is the shape the real defect took: arqtos-cli's
+		// scope guard went with the pre-connector arm in #1155 and nothing
+		// replaced it, so the board and the fields were validated and the
+		// organisation was not.
+		//
+		// ⚠️ It drops stubPlaceScopeRefusal ALONE. Dropping more would let this
+		// stub fail apply/placement-honours-its-capability instead and report
+		// that as this check biting.
+		CheckPlaceHonoursBoardScope: func() (tracker.Tracker, manifest.Doc) {
+			s, m := placingStub()
+			s.apply = func(ctx context.Context, board tracker.BoardRef, changes []tracker.Change) (tracker.ApplyReport, error) {
+				if !board.Valid() {
+					return tracker.ApplyReport{}, cerr.New(cerr.KindInvalid, "Apply",
+						errors.New("board is not fully qualified"))
+				}
+				rep := stubApplyReport(board, changes, func(b tracker.BoardRef, ch tracker.Change) error {
+					if err := stubTargetRefusalIgnoringPlace(b, ch); err != nil {
+						return err
+					}
+					return stubParentRefusal(b, ch)
+				})
+				if rep.Applied > 0 {
+					if err := ctx.Err(); err != nil {
+						return tracker.ApplyReport{}, cerr.New(cerr.KindUnavailable, "Apply", err)
+					}
+				}
+				return rep, nil
+			}
+			return s, m
+		},
 		// A scope it cannot read, reported as a scope with no trains. This is
 		// the shape the union rule forbids and the one a partial read produces
 		// most naturally: the answer is well-formed, complete-looking, and one
@@ -2339,6 +2399,9 @@ func placingStub() (*stub, manifest.Doc) {
 		// rules run REGARDLESS of Place — which is the property the declared
 		// arm checks.
 		rep := stubApplyReport(board, changes, func(b tracker.BoardRef, ch tracker.Change) error {
+			if err := stubPlaceScopeRefusal(ch); err != nil {
+				return err
+			}
 			if err := stubTargetRefusalIgnoringPlace(b, ch); err != nil {
 				return err
 			}
@@ -2655,5 +2718,116 @@ func TestReport_String_MarksEveryCheck(t *testing.T) {
 func TestReport_String_NamesAnUnnamedConnector(t *testing.T) {
 	if !strings.Contains(Report{Results: []Result{{Name: CheckClass, Pass: true}}}.String(), "<unnamed>") {
 		t.Error("a report from a manifest with no name does not say so")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// apply/place-honours-board-scope — the fixture and capability arms
+//
+// The violating stub in violatingStubs() covers the property itself: a placing
+// connector that ignores the scope goes red. What is below is the three ways
+// the CHECK can be wrong rather than the connector — it can demand the rule of
+// someone who cannot place, it can pass because the run gave it nothing to
+// check, or it can be pointed at a scope the connector must accept.
+// ---------------------------------------------------------------------------
+
+// TestConform_ANonPlacingConnectorIsNotHeldToTheScopeRule guards the direction
+// the violating stub cannot express.
+//
+// ⚠️ A connector without tracker.CapBoardMembership refuses Place for the FLAG,
+// so the scope is never reached and it has no rule to break. Failing it here
+// would make a check about placement bite a connector that does not place —
+// which is the shape optional/declared-is-implemented exists to avoid, and it
+// would push authors toward declaring the capability to silence a check.
+//
+// The stub is driven with NO ForeignScope on purpose: the fixture is required
+// only of a placing connector, so a non-placing one must be green without it.
+// FALSIFIER, verified red: drop the capability guard at the top of
+// checkPlaceHonoursBoardScope — the missing-fixture arm then fires for a
+// connector that cannot place at all.
+func TestConform_ANonPlacingConnectorIsNotHeldToTheScopeRule(t *testing.T) {
+	s := newStub()
+	opts := fixtures(stubManifest(tracker.CapNativeHierarchy))
+	opts.ForeignScope = ""
+
+	rep, err := Run(context.Background(), s, opts)
+	if err != nil {
+		t.Fatalf("the conformance run could not be carried out: %v", err)
+	}
+	requireGreen(t, rep)
+
+	detail, did := failed(rep, CheckPlaceHonoursBoardScope)
+	if did {
+		t.Fatalf("%s failed a connector that does not declare %s: %s",
+			CheckPlaceHonoursBoardScope, tracker.CapBoardMembership, detail)
+	}
+	// The PASS reason is the assertion. A check that passed because it examined
+	// nothing and one that passed for the stated reason read identically from
+	// the verdict alone.
+	got, ok := passed(rep, CheckPlaceHonoursBoardScope)
+	if !ok {
+		t.Fatalf("%s did not run at all, and a check that never ran is reported by nothing",
+			CheckPlaceHonoursBoardScope)
+	}
+	if !strings.Contains(got, CheckPlacementHonoursItsCapability) {
+		t.Errorf("the pass does not say which check DOES cover this connector's Place, so a reader cannot tell an "+
+			"exemption from a gap: %q", got)
+	}
+}
+
+// TestConform_APlacingConnectorWithNoForeignScopeFixtureIsRed is the missing-
+// fixture arm, and it is a FAILURE rather than a skip on purpose.
+//
+// ⚠️ A check that silently skips when its fixture is absent is reported by
+// nothing — Options says exactly this about UnreadableScope, which is required
+// even of a connector declaring no trains. The same reasoning applies one
+// capability over: a placing connector whose run named no foreign scope has an
+// UNCHECKED placement surface, and green would say the opposite.
+//
+// FALSIFIER, verified red: make the empty-fixture branch return true — the run
+// then reports a fully conformant placing connector whose scope handling nobody
+// looked at.
+func TestConform_APlacingConnectorWithNoForeignScopeFixtureIsRed(t *testing.T) {
+	s, m := placingStub()
+	opts := fixtures(m)
+	opts.ForeignScope = ""
+
+	rep, err := Run(context.Background(), s, opts)
+	if err != nil {
+		t.Fatalf("the conformance run could not be carried out: %v", err)
+	}
+	requireFailed(t, rep, CheckPlaceHonoursBoardScope)
+	detail, _ := failed(rep, CheckPlaceHonoursBoardScope)
+	if !strings.Contains(detail, "ForeignScope") {
+		t.Errorf("the failure does not name the fixture that is missing, so the run says the connector is wrong "+
+			"when the RUN is underspecified: %q", detail)
+	}
+}
+
+// TestConform_AForeignScopeThatIsAFixtureScopeIsRed catches the run that points
+// the fixture at a scope the connector must ACCEPT.
+//
+// The item fixtures name scopes on ScannableBoard. A run naming one of them as
+// foreign demands a refusal of an address the contract requires the connector
+// to serve — so a conformant connector would be reported non-conformant, and an
+// author would "fix" it by refusing a legitimate scope. UnreadableScope carries
+// the identical rule in fixtureRules() for the identical reason.
+//
+// FALSIFIER, verified red: delete the fixtureScopes containment branch — the
+// run then reports the connector as failing to refuse its own board's scope.
+func TestConform_AForeignScopeThatIsAFixtureScopeIsRed(t *testing.T) {
+	s, m := placingStub()
+	opts := fixtures(m)
+	opts.ForeignScope = fixKnown.Scope
+
+	rep, err := Run(context.Background(), s, opts)
+	if err != nil {
+		t.Fatalf("the conformance run could not be carried out: %v", err)
+	}
+	requireFailed(t, rep, CheckPlaceHonoursBoardScope)
+	detail, _ := failed(rep, CheckPlaceHonoursBoardScope)
+	if !strings.Contains(detail, "required to ACCEPT") {
+		t.Errorf("the failure blames the connector rather than the fixture, so the reader is sent to fix the "+
+			"wrong thing: %q", detail)
 	}
 }
