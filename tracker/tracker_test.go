@@ -87,13 +87,18 @@ func methodNames(typ reflect.Type) []string {
 // on them.
 func TestOptionalOperations_AreNotInTheContract(t *testing.T) {
 	all := methodNames(reflect.TypeOf((*Tracker)(nil)).Elem())
-	for _, m := range []string{"ListTrains", "CreateTrains", "EnsureFields"} {
+	for _, m := range []string{"ListTrains", "CreateTrains", "CloseTrains", "EnsureFields"} {
 		if slices.Contains(all, m) {
 			t.Errorf("%s is in Tracker: optional operations live behind a capability and an interface of their own", m)
 		}
 	}
-	if got := len(methodNames(reflect.TypeOf((*TrainAdmin)(nil)).Elem())); got != 2 {
-		t.Errorf("TrainAdmin carries %d methods, want 2 (ListTrains, CreateTrains)", got)
+	// ⚠️ 2 → 3 on 2026-08-07, CloseTrains (arqtos-connectors#144). Changed
+	// deliberately: this count exists so growing an optional tier is a
+	// conscious act rather than a drift, and the base Tracker contract is
+	// still FIVE operations — that is the number this file's neighbours guard
+	// and CloseTrains does not touch it.
+	if got := len(methodNames(reflect.TypeOf((*TrainAdmin)(nil)).Elem())); got != 3 {
+		t.Errorf("TrainAdmin carries %d methods, want 3 (ListTrains, CreateTrains, CloseTrains)", got)
 	}
 	if got := len(methodNames(reflect.TypeOf((*SchemaAdmin)(nil)).Elem())); got != 1 {
 		t.Errorf("SchemaAdmin carries %d methods, want 1 (EnsureFields)", got)

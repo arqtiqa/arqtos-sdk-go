@@ -324,3 +324,122 @@ func nameOr(connectorName string) string {
 	}
 	return connectorName
 }
+
+// CheckTrainsClosed is [CheckTrainsCreated]'s sibling for
+// [TrainAdmin.CloseTrains], and it verifies the same way for a sharper reason.
+//
+// It checks two things:
+//
+//  1. the ARITHMETIC, via [CheckApplyReport], exactly as the create guard does;
+//  2. the STATE, by calling [TrainAdmin.ListTrains] and requiring every spec the
+//     report counted as applied to be present AND no longer open.
+//
+// ⚠️ The second check is where it differs from the create guard, and the
+// difference is not cosmetic. A create is verified by a name EXISTING; a close
+// is verified by a train's Open flag being FALSE. A guard that only looked for
+// the name would pass every one of them — the train is still there, it is
+// simply still open — which is the precise failure this exists to catch.
+//
+// # Absent is a failure too, and a different one
+//
+// A spec whose train the re-read cannot find at all is reported alongside the
+// still-open ones rather than treated as vacuously closed. "It is not there so
+// it cannot be open" is the reasoning that would let a close of a MISTYPED name
+// report success: the name was never a train, nothing was retired, and a sweep
+// would record the train as done.
+//
+// # What it does when the re-read itself fails
+//
+// A ZEROED report and an error wrapping the read failure, identically to
+// [CheckTrainsCreated] and for the identical reason — unknown is never clean,
+// and a caller that took an unverifiable close as done would announce a
+// retirement nothing confirmed.
+func CheckTrainsClosed(
+	ctx context.Context,
+	connectorName string,
+	admin TrainAdmin,
+	caps connector.Capabilities,
+	specs []TrainSpec,
+	rep ApplyReport,
+	err error,
+) (ApplyReport, error) {
+	const op = "CloseTrains"
+
+	checked, aerr := CheckApplyReport(connectorName, op, len(specs), rep, err)
+	if aerr != nil {
+		return ApplyReport{}, aerr
+	}
+	if checked.Applied == 0 {
+		return checked, nil
+	}
+	if admin == nil {
+		return ApplyReport{}, cerr.New(cerr.KindInvalid, op, fmt.Errorf(
+			"connector %q reported %d train(s) closed and no TrainAdmin was supplied to re-read them; a close this "+
+				"guard cannot verify is not a close it may report as done", nameOr(connectorName), checked.Applied))
+	}
+
+	applied := make([]TrainSpec, 0, len(specs))
+	for i, spec := range specs {
+		if _, failed := checked.Failed[i]; !failed {
+			applied = append(applied, spec)
+		}
+	}
+	scopes := make([]Scope, 0, len(applied))
+	for _, spec := range applied {
+		if !slices.Contains(scopes, spec.Scope) {
+			scopes = append(scopes, spec.Scope)
+		}
+	}
+
+	res, lerr := admin.ListTrains(ctx, scopes)
+	sets, lerr := CheckTrainSets(connectorName, "ListTrains", caps, scopes, res, lerr)
+	if lerr != nil {
+		return ApplyReport{}, fmt.Errorf(
+			"connector %q reported %d train(s) closed and the re-read that would verify them failed, so the outcome "+
+				"is UNKNOWN rather than done: %w", nameOr(connectorName), checked.Applied, lerr)
+	}
+	entries, ierr := sets.Items()
+	if ierr != nil {
+		return ApplyReport{}, attribute(connectorName, "ListTrains", ierr)
+	}
+
+	// The whole train, not just its name — Open is what this guard reads.
+	have := map[Scope]map[string]bool{}
+	for _, e := range entries {
+		if have[e.Scope] == nil {
+			have[e.Scope] = map[string]bool{}
+		}
+		for _, tr := range e.Trains {
+			have[e.Scope][tr.Name] = tr.Open
+		}
+	}
+	scoped := caps.Has(CapScopedTrains)
+	var unclosed []string
+	for _, spec := range applied {
+		key := spec.Scope
+		if !scoped {
+			key = ""
+		}
+		open, present := have[key][spec.Name]
+		switch {
+		case !present:
+			unclosed = append(unclosed, quoteTrain(spec, scoped)+" (absent)")
+		case open:
+			unclosed = append(unclosed, quoteTrain(spec, scoped)+" (still open)")
+		}
+	}
+	if len(unclosed) > 0 {
+		slices.Sort(unclosed)
+		return ApplyReport{}, &FaultError{
+			Connector: connectorName,
+			Op:        op,
+			Fault:     FaultCloseUnverified,
+			Detail: fmt.Sprintf(
+				"reported %d of %d train(s) closed and a re-read finds %s; a close loop that iterated once returns "+
+					"successfully for every name it was handed, so the report is not evidence — and the caller here "+
+					"is a release sweep, whose entire output is the claim that these are retired",
+				checked.Applied, len(specs), strings.Join(unclosed, ", ")),
+		}
+	}
+	return checked, nil
+}

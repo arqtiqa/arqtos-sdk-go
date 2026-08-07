@@ -301,6 +301,7 @@ type trainAdminStub struct {
 
 	listTrains   func(context.Context, []tracker.Scope) (tracker.Resolution[tracker.ScopeTrains], error)
 	createTrains func(context.Context, []tracker.TrainSpec) (tracker.ApplyReport, error)
+	closeTrains  func(context.Context, []tracker.TrainSpec) (tracker.ApplyReport, error)
 }
 
 // newTrainAdmin is a conformant TrainAdmin, in either partitioning.
@@ -347,6 +348,16 @@ func (a *trainAdminStub) ListTrains(ctx context.Context, scopes []tracker.Scope)
 
 func (a *trainAdminStub) trainsIn(sc tracker.Scope) []tracker.Train {
 	return append([]tracker.Train{{Name: "0.2.0", Open: true}}, a.created[sc]...)
+}
+
+// CloseTrains keeps the stub a complete tracker.TrainAdmin. It mirrors the
+// created-set bookkeeping so a conformance run can exercise the close path
+// without a second stub.
+func (a *trainAdminStub) CloseTrains(ctx context.Context, specs []tracker.TrainSpec) (tracker.ApplyReport, error) {
+	if a.closeTrains != nil {
+		return a.closeTrains(ctx, specs)
+	}
+	return tracker.ApplyReport{Requested: len(specs), Applied: len(specs), Failed: map[int]error{}}, nil
 }
 
 func (a *trainAdminStub) CreateTrains(ctx context.Context, specs []tracker.TrainSpec) (tracker.ApplyReport, error) {
