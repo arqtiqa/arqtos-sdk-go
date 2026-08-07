@@ -250,6 +250,10 @@ func (f *fakeAdmin) CreateTrains(context.Context, []TrainSpec) (ApplyReport, err
 	panic("CreateTrains is the call under test, never made by the guard")
 }
 
+func (f *fakeAdmin) CloseTrains(context.Context, []TrainSpec) (ApplyReport, error) {
+	panic("CloseTrains is the call under test, never made by the guard")
+}
+
 func spec(scope Scope, name string) TrainSpec { return TrainSpec{Scope: scope, Name: name} }
 
 // TestCheckTrainsCreated_TheCountAloneCannotCatchTheLoop is the whole point of
@@ -416,3 +420,127 @@ func TestCheckTrainsCreated_RefusesToVerifyWithoutAnAdmin(t *testing.T) {
 func mustErr[T any](_ T, err error) error { return err }
 
 func mustErrReport(_ ApplyReport, err error) error { return err }
+
+// ---------------------------------------------------------------------------
+// CheckTrainsClosed — the close guard (arqtos-connectors#144)
+// ---------------------------------------------------------------------------
+
+// TestCheckTrainsClosed_APresentButStillOpenTrainIsNotClosed is the whole point
+// of this guard as distinct from its create sibling.
+//
+// ⚠️ Every name IS on the tracker, so the create guard's check — does the name
+// exist — passes on this input. Only reading Open catches it. A guard that
+// reused the create logic would report a release train retired while its
+// buckets are still taking work.
+func TestCheckTrainsClosed_APresentButStillOpenTrainIsNotClosed(t *testing.T) {
+	specs := []TrainSpec{spec("a", "0.3.0"), spec("b", "0.3.0"), spec("c", "0.3.0")}
+	looped := ApplyReport{Requested: 3, Applied: 3}
+
+	if _, err := CheckApplyReport("probe", "CloseTrains", len(specs), looped, nil); err != nil {
+		t.Fatalf("CheckApplyReport rejected the looped report, so this test no longer isolates the re-read: %v", err)
+	}
+
+	// a closed; b and c present and STILL OPEN — the loop-iterated-once shape.
+	admin := &fakeAdmin{have: map[Scope][]Train{
+		"a": {{Name: "0.3.0", Open: false}},
+		"b": {{Name: "0.3.0", Open: true}},
+		"c": {{Name: "0.3.0", Open: true}},
+	}}
+	fe := wantFault(t,
+		mustErrReport(CheckTrainsClosed(context.Background(), "probe", admin, scopedCaps, specs, looped, nil)),
+		FaultCloseUnverified, "CloseTrains")
+
+	for _, want := range []string{`"b"`, `"c"`, "still open"} {
+		if !strings.Contains(fe.Detail, want) {
+			t.Errorf("detail does not name the still-open bucket (%s): %s", want, fe.Detail)
+		}
+	}
+	if strings.Contains(fe.Detail, `"0.3.0" in scope "a"`) {
+		t.Errorf("detail blames the bucket that WAS closed: %s", fe.Detail)
+	}
+	if admin.calls != 1 {
+		t.Errorf("ListTrains called %d time(s), want exactly 1", admin.calls)
+	}
+}
+
+// TestCheckTrainsClosed_AnAbsentTrainIsNotVacuouslyClosed.
+//
+// ⚠️ "It is not there, so it cannot be open" is the reasoning that would let a
+// close of a MISTYPED name report success — the name was never a train, nothing
+// was retired, and a sweep records it as done.
+func TestCheckTrainsClosed_AnAbsentTrainIsNotVacuouslyClosed(t *testing.T) {
+	specs := []TrainSpec{spec("a", "0.3.0")}
+	admin := &fakeAdmin{have: map[Scope][]Train{"a": {{Name: "0.4.0", Open: false}}}}
+
+	fe := wantFault(t,
+		mustErrReport(CheckTrainsClosed(context.Background(), "probe", admin,
+			scopedCaps, specs, ApplyReport{Requested: 1, Applied: 1}, nil)),
+		FaultCloseUnverified, "CloseTrains")
+	if !strings.Contains(fe.Detail, "absent") {
+		t.Errorf("an absent train must be reported as absent, not as closed: %s", fe.Detail)
+	}
+}
+
+// TestCheckTrainsClosed_AVerifiedCloseReturnsTheReportUnchanged.
+func TestCheckTrainsClosed_AVerifiedCloseReturnsTheReportUnchanged(t *testing.T) {
+	specs := []TrainSpec{spec("a", "0.3.0"), spec("b", "0.3.0")}
+	rep := ApplyReport{Requested: 2, Applied: 2}
+	admin := &fakeAdmin{have: map[Scope][]Train{
+		"a": {{Name: "0.3.0", Open: false}},
+		"b": {{Name: "0.3.0", Open: false}},
+	}}
+
+	got, err := CheckTrainsClosed(context.Background(), "probe", admin, scopedCaps, specs, rep, nil)
+	if err != nil {
+		t.Fatalf("a verified close must pass: %v", err)
+	}
+	if got.Applied != 2 || got.Requested != 2 {
+		t.Errorf("report altered by the guard: %+v", got)
+	}
+}
+
+// TestCheckTrainsClosed_AlreadyClosedIsSuccess pins the contract's idempotence
+// ruling: a sweep that retries after a partial failure re-runs the whole set,
+// and a train someone else already closed must not fail it.
+func TestCheckTrainsClosed_AlreadyClosedIsSuccess(t *testing.T) {
+	specs := []TrainSpec{spec("a", "0.3.0")}
+	admin := &fakeAdmin{have: map[Scope][]Train{"a": {{Name: "0.3.0", Open: false}}}}
+
+	if _, err := CheckTrainsClosed(context.Background(), "probe", admin,
+		scopedCaps, specs, ApplyReport{Requested: 1, Applied: 1}, nil); err != nil {
+		t.Errorf("closing an already-closed train must succeed idempotently: %v", err)
+	}
+}
+
+// TestCheckTrainsClosed_AFailedReadIsUNKNOWNNotDone.
+func TestCheckTrainsClosed_AFailedReadIsUNKNOWNNotDone(t *testing.T) {
+	specs := []TrainSpec{spec("a", "0.3.0")}
+	admin := &fakeAdmin{fail: errors.New("502 from the tracker")}
+
+	got, err := CheckTrainsClosed(context.Background(), "probe", admin,
+		scopedCaps, specs, ApplyReport{Requested: 1, Applied: 1}, nil)
+	if err == nil {
+		t.Fatal("an unverifiable close must not be reported as done")
+	}
+	if got.Applied != 0 || got.Requested != 0 {
+		t.Errorf("the report must be ZEROED when nothing confirmed the close; got %+v", got)
+	}
+	if !strings.Contains(err.Error(), "UNKNOWN") {
+		t.Errorf("the error must say UNKNOWN rather than failed: %v", err)
+	}
+}
+
+// TestCheckTrainsClosed_NoAppliedMeansNoReadAtAll — a connector whose specs were
+// all refused pre-network costs no round trip.
+func TestCheckTrainsClosed_NoAppliedMeansNoReadAtAll(t *testing.T) {
+	specs := []TrainSpec{spec("a", "0.3.0")}
+	admin := &fakeAdmin{}
+
+	if _, err := CheckTrainsClosed(context.Background(), "probe", admin, scopedCaps, specs,
+		ApplyReport{Requested: 1, Applied: 0, Failed: map[int]error{0: errors.New("refused")}}, nil); err != nil {
+		t.Fatalf("an all-refused batch is not a fault: %v", err)
+	}
+	if admin.calls != 0 {
+		t.Errorf("ListTrains called %d time(s) with nothing to verify, want 0", admin.calls)
+	}
+}

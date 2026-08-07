@@ -1120,6 +1120,47 @@ type TrainAdmin interface {
 	// once still returns successfully for every name it was given, and the
 	// count is the only thing that shows it.
 	CreateTrains(ctx context.Context, specs []TrainSpec) (ApplyReport, error)
+
+	// CloseTrains retires the named buckets and reports what happened to each
+	// spec, with the same attribution rules as [Tracker.Apply].
+	//
+	// Only Scope and Name are read from each spec; Description and Due are
+	// ignored, because closing a bucket does not redescribe it.
+	//
+	// # Verified by re-reading, for a sharper reason than CreateTrains'
+	//
+	// A close loop that iterated once returns successfully for every name it
+	// was handed, exactly as a create loop does — but the caller here is a
+	// RELEASE SWEEP, so the wrong conclusion is "this train is retired" about
+	// work that is still open. Re-read and compare, and never trust the close
+	// call's own reply.
+	//
+	// # Closing an already-closed train SUCCEEDS
+	//
+	// Idempotent, because a sweep that retries after a partial failure must be
+	// able to re-run the whole set rather than reconstruct which half landed.
+	//
+	// ⚠️ It follows that a caller cannot distinguish "closed by me" from
+	// "already closed", and that is accepted rather than overlooked: the
+	// postcondition a sweep depends on is that the train IS closed, not who
+	// closed it. A backend that wants the distinction should not encode it in
+	// this report — [ApplyReport] has no bucket for it, and adding one would
+	// change a type [Tracker.Apply] and [TrainAdmin.CreateTrains] share.
+	//
+	// # A train with OPEN ITEMS is REFUSED
+	//
+	// ⚠️ Not closed, not warned about — refused, and the open count travels in
+	// the attributed error. Silently closing over open work is the dangerous
+	// default: it tells a release sweep a train is retired while work remains
+	// in it, and the sweep's whole output is that claim.
+	//
+	// No force flag is offered, deliberately. The caller that legitimately
+	// needs to close a train with open work is moving that work somewhere
+	// else first — which is a change to the ITEMS, expressible through
+	// [Tracker.Apply], and belongs there rather than as an override here. A
+	// force flag would make the safe path and the dangerous path the same
+	// call with one bool between them.
+	CloseTrains(ctx context.Context, specs []TrainSpec) (ApplyReport, error)
 }
 
 // ScopeTrains is one scope's delivery buckets, or the reason they are unknown.

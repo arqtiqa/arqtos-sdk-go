@@ -86,6 +86,18 @@ const (
 	// the only thing that shows it and the count alone is not enough. See
 	// [CheckTrainsCreated].
 	FaultCreateUnverified Fault = "create-reported-without-re-reading"
+
+	// FaultCloseUnverified is a [TrainAdmin.CloseTrains] report counting a
+	// bucket as closed that a re-read finds still OPEN, or does not find at
+	// all.
+	//
+	// Sibling of [FaultCreateUnverified] and the same loop-that-iterated-once
+	// shape, but the consequence is worse. A create nobody verified leaves a
+	// bucket missing, which the next write notices. A close nobody verified
+	// tells a RELEASE SWEEP that a train is retired — and the sweep's entire
+	// output is that claim, so nothing downstream ever questions it. See
+	// [CheckTrainsClosed].
+	FaultCloseUnverified Fault = "close-reported-without-re-reading"
 )
 
 // faults is this contract's closed Fault vocabulary and the only thing
@@ -105,6 +117,7 @@ var faults = map[Fault]bool{
 	FaultScopeUnaccounted: true,
 	FaultUnknownAsKnown:   true,
 	FaultCreateUnverified: true,
+	FaultCloseUnverified:  true,
 }
 
 // Valid reports whether f names a fault in this contract's closed vocabulary.
