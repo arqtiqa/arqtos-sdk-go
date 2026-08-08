@@ -74,6 +74,22 @@ const (
 	// because that is the one whose per-item cost tempts an early exit — and a
 	// board audit over the shorter list reports every item it never examined as
 	// compliant.
+	// ⚠️ RECONCILED WITH THE FILTERED READ, arqtos-sdk-go#62, and the answer is
+	// that nothing here changes — which is worth stating because it was the open
+	// question and "no change" is indistinguishable from "not considered".
+	//
+	// This check drives [tracker.Tracker.Scan], which takes no filter. A filtered
+	// read is [tracker.FilteredScanner.ScanWhere], a different operation with its
+	// own check ([CheckFilteredRead]). So "the cheapest and the fullest scan must
+	// report the same items" keeps meaning exactly what it meant, and a
+	// truncating connector is still red.
+	//
+	// ⚠️ That is a PROPERTY OF THE SHAPE rather than luck. Had the filter been a
+	// fourth parameter on Scan — the alternative arqtos-sdk-go#61 weighed — this
+	// check would have had to distinguish "narrowed by a FILTER" from "truncated
+	// by a cheap SELECTION", and the tempting reconciliation is to relax the
+	// comparison, which removes the truncation guard instead of scoping it. The
+	// optional tier avoids that entirely.
 	CheckScanPagedToExhaustion = "scan/paged-to-exhaustion"
 	// CheckReadUnreadableIsNotEmpty covers unknown never being reported as
 	// empty: a child set that could not be read is nil WITH an error, a
@@ -200,6 +216,24 @@ const (
 	// reached. Failing it here for a capability it never claimed is the shape
 	// [CheckOptionalDeclared] exists to avoid.
 	CheckPlaceHonoursBoardScope = "apply/place-honours-board-scope"
+	// CheckFilteredRead covers [tracker.FilteredScanner]: a filtered read
+	// HONOURS its filter or REFUSES it, and never widens it.
+	//
+	// ⚠️ The failure it exists for is a connector that ignores the filter and
+	// answers with a SUPERSET. A caller cannot detect that any more than it can
+	// detect a subset — both are well-formed lists of real items — so unlike a
+	// truncation there is no shape in the answer that gives it away. The
+	// contract is therefore binary, and this is what holds it.
+	//
+	// A refusal is a PASS. A backend whose grammar cannot ask a question this
+	// contract can express must say so, because the host's answer is to Scan and
+	// filter client-side and it can only reach that from a typed refusal.
+	//
+	// ⚠️ A connector that does not declare [tracker.CapServerFilter] is not held
+	// to any of it. It cannot filter and has no obligation; failing it would
+	// push an author to declare the capability in order to silence a check,
+	// which is what [CheckOptionalDeclared] exists to avoid.
+	CheckFilteredRead = "read/filter-honoured-or-refused"
 	// CheckTrainsUnion covers the UNION rule of
 	// [tracker.TrainAdmin.ListTrains]: the answer accounts for every scope it
 	// was asked about, exactly once, in the shape the connector's declared
@@ -515,6 +549,7 @@ var checks = []check{
 	{CheckApplyNoCachedIdentity, checkApplyNoCachedIdentity},
 	{CheckPlacementHonoursItsCapability, checkPlacementHonoursItsCapability},
 	{CheckPlaceHonoursBoardScope, checkPlaceHonoursBoardScope},
+	{CheckFilteredRead, checkFilteredRead},
 	{CheckTrainsUnion, checkTrainsUnion},
 	{CheckTrainsCreateVerified, checkTrainsCreateVerified},
 }
@@ -1579,6 +1614,87 @@ func checkPlaceHonoursBoardScope(ctx context.Context, c tracker.Tracker, opts Op
 	return true, fmt.Sprintf("declares %s, and refuses a Place naming scope %q — which %s's instance does not own — "+
 		"with %s before any network call", tracker.CapBoardMembership, opts.ForeignScope,
 		opts.ScannableBoard, cerr.KindInvalid)
+}
+
+// checkFilteredRead holds [tracker.FilteredScanner] to honour-or-refuse. See
+// [CheckFilteredRead] for the failure it exists for.
+func checkFilteredRead(ctx context.Context, c tracker.Tracker, opts Options) (bool, string) {
+	declared := c.Capabilities().Has(tracker.CapServerFilter)
+	scanner, implemented := c.(tracker.FilteredScanner)
+	if !declared {
+		return true, fmt.Sprintf("does not declare %s, so it has no filter to honour; %s covers the pairing",
+			tracker.CapServerFilter, CheckOptionalDeclared)
+	}
+	if !implemented {
+		return false, fmt.Sprintf("declares %s and does not implement tracker.FilteredScanner, so every "+
+			"filtered read a host attempts is answered by a type assertion that fails", tracker.CapServerFilter)
+	}
+
+	cat, err := c.Catalogue(ctx, opts.ScannableBoard, nil)
+	if err != nil {
+		return false, fmt.Sprintf("the catalogue this check builds its filter from could not be read: %v", err)
+	}
+	// A predicate on a field the board PUBLISHES, so what is being observed is
+	// the filter being honoured rather than a refusal about the field.
+	var field tracker.Field
+	for _, f := range cat.Fields {
+		if len(f.Options) > 1 {
+			field = f
+			break
+		}
+	}
+	if field.Name == "" {
+		return false, "this board publishes no field with more than one option, so no predicate can be built " +
+			"that some items match and others do not — and a filter every item satisfies cannot tell a working " +
+			"filter from one the connector ignored"
+	}
+	admit := tracker.Filter{Predicates: []tracker.Predicate{
+		{Field: field.Name, Match: tracker.MatchIs, Values: []string{field.Options[0]}},
+	}}
+
+	res, err := scanner.ScanWhere(ctx, opts.ScannableBoard, tracker.Selection{BoardFields: true}, admit)
+	if err != nil {
+		// A REFUSAL IS A PASS, and only cerr.KindUnsupported is one: it says this
+		// backend cannot ask. Any other kind is a failure of a question the
+		// contract says it can be asked.
+		if cerr.KindOf(err) == cerr.KindUnsupported {
+			return true, fmt.Sprintf("declares %s and refuses the predicate %s with %s rather than answering a "+
+				"wider set — a host reads that and falls back to Scan plus a client-side filter",
+				tracker.CapServerFilter, admit, cerr.KindUnsupported)
+		}
+		return false, fmt.Sprintf("a filter this contract can express (%s) over a field this board publishes "+
+			"was answered with %s. Only %s says \"this backend cannot ask\", and it is the only answer a host "+
+			"can act on: %v", admit, cerr.KindOf(err), cerr.KindUnsupported, err)
+	}
+	items, err := res.Items()
+	if err != nil {
+		return false, fmt.Sprintf("the resolution a filtered read returned is not readable, so a partial walk "+
+			"came back as a shorter list rather than a typed failure: %v", err)
+	}
+
+	// ⚠️ EVERY returned item satisfies the predicate. This is the superset check
+	// and it is the whole point: a connector that dropped the filter returns
+	// items whose field holds the other value, and nothing else here would say so.
+	for _, it := range items {
+		got, present := it.Fields[field.Name]
+		if !present {
+			return false, fmt.Sprintf("the filtered read returned %s carrying no %q at all under a Selection "+
+				"that asked for board fields, so this check cannot tell whether the filter was honoured",
+				it.Ref, field.Name)
+		}
+		if got.Option != field.Options[0] {
+			return false, fmt.Sprintf("the filtered read asked for %s and returned %s whose %s is %q: a "+
+				"connector that widens a filter answers with a SUPERSET, which a caller cannot detect — both "+
+				"are well-formed lists of real items", admit, it.Ref, field.Name, got.Option)
+		}
+	}
+	if len(items) == 0 {
+		return false, fmt.Sprintf("the filtered read returned NOTHING for %s, and the fixtures place items "+
+			"matching it on this board: an empty answer is what a backend gives for a predicate it did not "+
+			"understand, which is the hazard the catalogue check exists for", admit)
+	}
+	return true, fmt.Sprintf("declares %s and honours %s: %d item(s) returned and every one satisfies it",
+		tracker.CapServerFilter, admit, len(items))
 }
 
 // catalogueProbe is written INTO a catalogue a connector handed back. If it

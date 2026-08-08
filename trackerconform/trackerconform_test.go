@@ -68,6 +68,7 @@ type stub struct {
 
 	catalogue func(context.Context, tracker.BoardRef, []tracker.Scope) (tracker.Catalogue, error)
 	scan      func(context.Context, tracker.BoardRef, tracker.Selection) (tracker.Resolution[tracker.Item], error)
+	scanWhere func(context.Context, tracker.BoardRef, tracker.Selection, tracker.Filter) (tracker.Resolution[tracker.Item], error)
 	getItems  func(context.Context, tracker.BoardRef, []tracker.ItemRef, tracker.Selection) (tracker.Resolution[tracker.Item], error)
 	apply     func(context.Context, tracker.BoardRef, []tracker.Change) (tracker.ApplyReport, error)
 	health    func(context.Context) (connector.Health, error)
@@ -117,11 +118,93 @@ func (s *stub) Catalogue(ctx context.Context, board tracker.BoardRef, scopes []t
 }
 
 // stubItems is the whole of the stub's board, read under sel.
+// stubStatusOf is one item's Status, and the board carries BOTH values on
+// purpose.
+//
+// ⚠️ Every item used to be "Backlog", which made the filter half of this harness
+// untestable: a predicate matching everything and a connector ignoring the filter
+// return the same list, so the check would have passed against a connector that
+// dropped the filter on the floor. arqtiqa/arqtos-connectors#207 is the same
+// finding one repo over — an agreement check whose fixture cannot disagree passes
+// for free.
+// ScanWhere is the stub's filtered read, and it HONOURS the filter — which is
+// what makes it the compliant side of CheckFilteredRead.
+//
+// ⚠️ It filters on the item's own Fields rather than on a shortcut, because a
+// stub that returned a hardcoded subset would satisfy the check without ever
+// reading the predicate, and the check would then be watching the fixture rather
+// than the connector.
+func (s *stub) ScanWhere(ctx context.Context, board tracker.BoardRef, sel tracker.Selection,
+	filter tracker.Filter,
+) (tracker.Resolution[tracker.Item], error) {
+	if s.scanWhere != nil {
+		return s.scanWhere(ctx, board, sel, filter)
+	}
+	if board != fixScannable {
+		return tracker.Resolution[tracker.Item]{}, cerr.New(cerr.KindNotFound, "ScanWhere",
+			fmt.Errorf("no such board %s", board))
+	}
+	// The catalogue obligation, before anything is read.
+	cat, err := s.Catalogue(ctx, board, nil)
+	if err != nil {
+		return tracker.Resolution[tracker.Item]{}, err
+	}
+	if err := filter.CheckAgainst(cat); err != nil {
+		return tracker.Resolution[tracker.Item]{}, cerr.New(cerr.KindInvalid, "ScanWhere", err)
+	}
+	var kept []tracker.Item
+	for _, it := range stubItems(sel, s.caps) {
+		if stubItemMatches(it, filter) {
+			kept = append(kept, it)
+		}
+	}
+	return tracker.Resolved(kept, tracker.Complete)
+}
+
+// stubItemMatches is the conjunction tracker.Filter documents: an item is
+// admitted when EVERY predicate admits it.
+func stubItemMatches(it tracker.Item, filter tracker.Filter) bool {
+	for _, p := range filter.Predicates {
+		v, present := it.Fields[p.Field]
+		switch p.Match {
+		case tracker.MatchIsUnset:
+			if present {
+				return false
+			}
+		case tracker.MatchIs:
+			if !present || !slices.Contains(p.Values, v.Option) {
+				return false
+			}
+		case tracker.MatchIsNot:
+			if present && slices.Contains(p.Values, v.Option) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// filteringStub declares CapServerFilter and honours it.
+func filteringStub() (*stub, manifest.Doc) {
+	s := newStub()
+	s.caps = connector.Capabilities{tracker.CapNativeHierarchy, tracker.CapServerFilter}
+	return s, stubManifest(tracker.CapNativeHierarchy, tracker.CapServerFilter)
+}
+
+func stubStatusOf(ref tracker.ItemRef) string {
+	if ref == fixChildless {
+		return "In Build"
+	}
+	return "Backlog"
+}
+
 func stubItems(sel tracker.Selection, caps connector.Capabilities) []tracker.Item {
 	item := func(ref tracker.ItemRef, children []tracker.ItemRef) tracker.Item {
 		it := tracker.Item{Ref: ref, Title: "item " + ref.String(), Type: "Story", Open: true, Selected: sel}
 		if sel.BoardFields {
-			it.Fields = map[string]tracker.Value{stubField: {Kind: tracker.ValueOption, Option: "Backlog"}}
+			it.Fields = map[string]tracker.Value{stubField: {Kind: tracker.ValueOption, Option: stubStatusOf(ref)}}
 		}
 		// Children are present ONLY when they were asked for, and only where
 		// the backend maintains a traversable link.
@@ -563,16 +646,17 @@ func TestConform_RunsEveryDeclaredCheck(t *testing.T) {
 		CheckScanPagedToExhaustion, CheckReadUnreadableIsNotEmpty, CheckSelectionEchoed,
 		CheckApplyAttribution, CheckApplyCrossTrackerRefused, CheckApplyNoCachedIdentity,
 		CheckPlacementHonoursItsCapability, CheckPlaceHonoursBoardScope,
+		CheckFilteredRead,
 		CheckTrainsUnion, CheckTrainsCreateVerified,
 	}
 	got := conformChecks()
 	if !slices.Equal(got, declared) {
 		t.Fatalf("Run runs\n  %v\nand the class publishes\n  %v", got, declared)
 	}
-	if len(got) != 17 {
+	if len(got) != 18 {
 		t.Errorf("the harness runs %d checks; seven are the ones every class in this estate carries, eight are this "+
 			"class's own reads and writes, and two are the TrainAdmin properties the class contract holds rather "+
-			"than leaving to each backend: 17", len(got))
+			"than leaving to each backend, and one is the filtered read arqtos-sdk-go#61 added: 18", len(got))
 	}
 }
 
@@ -2345,6 +2429,20 @@ func violatingStubs() map[string]func() (tracker.Tracker, manifest.Doc) {
 			}
 			return s, m
 		},
+		// A connector that declares the capability, implements ScanWhere, and
+		// IGNORES the filter — answering with the whole board. That is the
+		// defect CheckFilteredRead exists for, and it is the one a caller
+		// cannot detect for itself: a superset is a well-formed list of real
+		// items, with no shape in the answer that gives it away.
+		CheckFilteredRead: func() (tracker.Tracker, manifest.Doc) {
+			s, m := filteringStub()
+			s.scanWhere = func(ctx context.Context, board tracker.BoardRef, sel tracker.Selection,
+				_ tracker.Filter,
+			) (tracker.Resolution[tracker.Item], error) {
+				return s.Scan(ctx, board, sel)
+			}
+			return s, m
+		},
 		// A scope it cannot read, reported as a scope with no trains. This is
 		// the shape the union rule forbids and the one a partial read produces
 		// most naturally: the answer is well-formed, complete-looking, and one
@@ -2829,5 +2927,42 @@ func TestConform_AForeignScopeThatIsAFixtureScopeIsRed(t *testing.T) {
 	if !strings.Contains(detail, "required to ACCEPT") {
 		t.Errorf("the failure blames the connector rather than the fixture, so the reader is sent to fix the "+
 			"wrong thing: %q", detail)
+	}
+}
+
+// TestConform_ANonDeclaringConnectorIsNotHeldToTheFilterRule guards the
+// exemption in checkFilteredRead, and it exists because the exemption was
+// UNOBSERVABLE without it.
+//
+// ⚠️ Found by falsifying: disabling the `!declared` early return failed nothing,
+// because every stub in this file implements ScanWhere and honours it — so a
+// non-declaring connector passed through the body and satisfied it by accident.
+// An exemption nothing exercises is an exemption that can be deleted silently.
+//
+// The stub here does NOT declare the capability and WIDENS the filter. Held to
+// the rule it would be red; exempt, it is green — which is the contract:
+// tracker.CapServerFilter is what says a backend can filter, and failing a
+// connector that never claimed it would push authors to declare it in order to
+// silence a check. That is what CheckOptionalDeclared exists to avoid.
+//
+// FALSIFIER, verified red: drop the `!declared` early return from
+// checkFilteredRead.
+func TestConform_ANonDeclaringConnectorIsNotHeldToTheFilterRule(t *testing.T) {
+	s := newStub()
+	s.scanWhere = func(ctx context.Context, board tracker.BoardRef, sel tracker.Selection,
+		_ tracker.Filter,
+	) (tracker.Resolution[tracker.Item], error) {
+		return s.Scan(ctx, board, sel) // the filter is ignored outright
+	}
+	rep := run(t, s, stubManifest(tracker.CapNativeHierarchy))
+	requireGreen(t, rep)
+
+	got, ok := passed(rep, CheckFilteredRead)
+	if !ok {
+		t.Fatalf("%s did not run, and a check that never ran is reported by nothing", CheckFilteredRead)
+	}
+	if !strings.Contains(got, CheckOptionalDeclared) {
+		t.Errorf("the pass does not say which check DOES cover the pairing, so a reader cannot tell an "+
+			"exemption from a gap: %q", got)
 	}
 }
