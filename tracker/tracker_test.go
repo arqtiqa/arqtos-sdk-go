@@ -346,6 +346,7 @@ func TestKnownCapabilities_IsTheClosedSet(t *testing.T) {
 	want := connector.Capabilities{
 		CapNativeTypes, CapNativeHierarchy, CapCrossScope, CapItemFields,
 		CapTrains, CapScopedTrains, CapSchemaAdmin, CapBoardMembership,
+		CapServerFilter,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("KnownCapabilities() = %v, want exactly %v — a capability added or removed here is a contract change", got, want)
