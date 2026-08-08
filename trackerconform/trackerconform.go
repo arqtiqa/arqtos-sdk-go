@@ -234,6 +234,30 @@ const (
 	// push an author to declare the capability in order to silence a check,
 	// which is what [CheckOptionalDeclared] exists to avoid.
 	CheckFilteredRead = "read/filter-honoured-or-refused"
+	// CheckFilterState covers [tracker.Filter.State] — the open/closed dimension
+	// arqtiqa/arqtos-sdk-go#65 added behind [tracker.CapServerFilterState].
+	//
+	// ⚠️ It is checked BEHAVIOURALLY and in BOTH arms, and the undeclared arm is the
+	// load-bearing one. Unlike every other optional tier this capability is backed by
+	// no new interface — there is nothing to type-assert — so
+	// [CheckOptionalDeclared] cannot see it at all. What can go wrong is a
+	// [tracker.FilteredScanner] that IGNORES the member and answers a SUPERSET, which
+	// a caller cannot detect: both a superset and the right set are well-formed lists
+	// of real items. So a connector that does not declare the tier must REFUSE the
+	// dimension rather than quietly answer a wider question.
+	//
+	// A connector implementing no FilteredScanner at all is not held to any of it.
+	CheckFilterState = "read/filter-state-honoured-or-refused"
+	// CheckFilterType covers [tracker.Filter.Types] — the item-type dimension behind
+	// [tracker.CapServerFilterType]. Same two arms and the same reasoning as
+	// [CheckFilterState].
+	//
+	// ⚠️ It does NOT require [tracker.CapNativeTypes]. That capability governs the
+	// WRITE — whether a type CHANGE is an attribute update or a label rewrite — and a
+	// backend serving type as a label can answer this read perfectly well, because
+	// [tracker.Item.Type] is populated either way. Requiring it would exclude a
+	// backend that can answer the question.
+	CheckFilterType = "read/filter-type-honoured-or-refused"
 	// CheckTrainsUnion covers the UNION rule of
 	// [tracker.TrainAdmin.ListTrains]: the answer accounts for every scope it
 	// was asked about, exactly once, in the shape the connector's declared
@@ -550,6 +574,8 @@ var checks = []check{
 	{CheckPlacementHonoursItsCapability, checkPlacementHonoursItsCapability},
 	{CheckPlaceHonoursBoardScope, checkPlaceHonoursBoardScope},
 	{CheckFilteredRead, checkFilteredRead},
+	{CheckFilterState, checkFilterState},
+	{CheckFilterType, checkFilterType},
 	{CheckTrainsUnion, checkTrainsUnion},
 	{CheckTrainsCreateVerified, checkTrainsCreateVerified},
 }
@@ -1695,6 +1721,182 @@ func checkFilteredRead(ctx context.Context, c tracker.Tracker, opts Options) (bo
 	}
 	return true, fmt.Sprintf("declares %s and honours %s: %d item(s) returned and every one satisfies it",
 		tracker.CapServerFilter, admit, len(items))
+}
+
+// filterDimensionScanner returns the FilteredScanner to drive, or a pass when the
+// connector implements none. A connector with no filtered read at all has no
+// dimension to honour, and [CheckOptionalDeclared] covers the declared-versus-
+// implemented pairing for [tracker.CapServerFilter] itself.
+func filterDimensionScanner(c tracker.Tracker, cap connector.Capability) (tracker.FilteredScanner, bool, string) {
+	// ⚠️ FIRST the base capability. These tiers REFINE a declared filtered read, so a
+	// connector that does not declare [tracker.CapServerFilter] offers nothing for
+	// them to refine and is held to none of it — the same rule [CheckFilteredRead]
+	// applies to itself, and what [CheckOptionalDeclared] exists to avoid: failing a
+	// connector for a capability it never claimed pushes authors to declare things in
+	// order to silence checks.
+	if !c.Capabilities().Has(tracker.CapServerFilter) {
+		return nil, false, fmt.Sprintf("does not declare %s, so it offers no filtered read for %s to refine; "+
+			"%s covers the pairing", tracker.CapServerFilter, cap, CheckOptionalDeclared)
+	}
+	scanner, implemented := c.(tracker.FilteredScanner)
+	if !implemented {
+		return nil, false, fmt.Sprintf("declares %s and implements no tracker.FilteredScanner, so there is no "+
+			"%s dimension to honour; %s reports that pairing", tracker.CapServerFilter, cap,
+			CheckOptionalDeclared)
+	}
+	return scanner, true, ""
+}
+
+// undeclaredDimensionRefused is the arm that catches a scanner IGNORING a dimension
+// it never declared.
+//
+// ⚠️ This is the whole reason these tiers exist. A connector that answers a filter it
+// did not declare has silently WIDENED the result, and a widened list is
+// indistinguishable from the right one. Only cerr.KindUnsupported is a pass: it is the
+// answer a host can act on by falling back to [tracker.Tracker.Scan] plus a
+// client-side filter.
+func undeclaredDimensionRefused(cap connector.Capability, filter tracker.Filter, err error) (bool, string) {
+	if err == nil {
+		return false, fmt.Sprintf("does NOT declare %s and answered %s anyway rather than refusing it. A "+
+			"connector that honours a dimension it never declared is one a host will never ask — but a "+
+			"connector that IGNORES it answers a SUPERSET, and a caller cannot tell the two apart. Refuse "+
+			"with %s, which a host can act on", cap, filter, cerr.KindUnsupported)
+	}
+	if k := cerr.KindOf(err); k != cerr.KindUnsupported {
+		return false, fmt.Sprintf("does not declare %s and refused %s with %s; only %s says \"this backend "+
+			"cannot ask\", and it is the only answer a host can fall back from: %v", cap, filter, k,
+			cerr.KindUnsupported, err)
+	}
+	return true, fmt.Sprintf("does not declare %s and refuses %s with %s rather than answering a wider set",
+		cap, filter, cerr.KindUnsupported)
+}
+
+// checkFilterState holds [tracker.Filter.State]. See [CheckFilterState].
+func checkFilterState(ctx context.Context, c tracker.Tracker, opts Options) (bool, string) {
+	scanner, ok, detail := filterDimensionScanner(c, tracker.CapServerFilterState)
+	if !ok {
+		return true, detail
+	}
+	filter := tracker.Filter{State: tracker.ItemStateOpen}
+	res, err := scanner.ScanWhere(ctx, opts.ScannableBoard, tracker.Selection{}, filter)
+
+	if !c.Capabilities().Has(tracker.CapServerFilterState) {
+		return undeclaredDimensionRefused(tracker.CapServerFilterState, filter, err)
+	}
+	if err != nil {
+		if cerr.KindOf(err) == cerr.KindUnsupported {
+			return true, fmt.Sprintf("declares %s and refuses %s with %s rather than answering a wider set",
+				tracker.CapServerFilterState, filter, cerr.KindUnsupported)
+		}
+		return false, fmt.Sprintf("declares %s and answered %s with %s; only %s is a refusal a host can act "+
+			"on: %v", tracker.CapServerFilterState, filter, cerr.KindOf(err), cerr.KindUnsupported, err)
+	}
+	items, ierr := res.Items()
+	if ierr != nil {
+		return false, fmt.Sprintf("the resolution a state-filtered read returned is not readable, so a partial "+
+			"walk came back as a shorter list rather than a typed failure: %v", ierr)
+	}
+	// ⚠️ EVERY returned item satisfies it. This is the superset check and it is the
+	// whole point.
+	for _, it := range items {
+		if !it.Open {
+			return false, fmt.Sprintf("asked for %s and returned %s, which reports Open=false: a connector "+
+				"that widens a filter answers with a SUPERSET, which a caller cannot detect because both are "+
+				"well-formed lists of real items", filter, it.Ref)
+		}
+	}
+	// ⚠️ And the fixture must be able to DISAGREE, or the loop above passes for free.
+	// Same rule [checkFilteredRead] applies to its field vocabulary.
+	all, aerr := c.Scan(ctx, opts.ScannableBoard, tracker.Selection{})
+	if aerr != nil {
+		return false, fmt.Sprintf("the unfiltered Scan this check compares against failed: %v", aerr)
+	}
+	total, terr := all.Items()
+	if terr != nil {
+		return false, fmt.Sprintf("the unfiltered Scan resolved no readable list: %v", terr)
+	}
+	if len(items) == 0 {
+		return false, fmt.Sprintf("the state-filtered read returned NOTHING for %s and the fixtures place open "+
+			"items on this board: an empty answer is what a backend gives for a dimension it did not "+
+			"understand", filter)
+	}
+	if len(items) == len(total) {
+		return false, fmt.Sprintf("%s returned all %d item(s) the board holds, so every fixture item is open "+
+			"and this check cannot tell a working filter from one the connector IGNORED. The board's "+
+			"composition is what makes the comparison evidence — place a closed item on it",
+			filter, len(total))
+	}
+	return true, fmt.Sprintf("declares %s and honours %s: %d of %d item(s), every one open",
+		tracker.CapServerFilterState, filter, len(items), len(total))
+}
+
+// checkFilterType holds [tracker.Filter.Types]. See [CheckFilterType].
+func checkFilterType(ctx context.Context, c tracker.Tracker, opts Options) (bool, string) {
+	scanner, ok, detail := filterDimensionScanner(c, tracker.CapServerFilterType)
+	if !ok {
+		return true, detail
+	}
+	// The type asked for is chosen from what the BOARD actually holds, so the check
+	// works against any connector's fixture rather than a set this harness invents.
+	all, aerr := c.Scan(ctx, opts.ScannableBoard, tracker.Selection{})
+	if aerr != nil {
+		return false, fmt.Sprintf("the unfiltered Scan this check builds its type from failed: %v", aerr)
+	}
+	total, terr := all.Items()
+	if terr != nil {
+		return false, fmt.Sprintf("the unfiltered Scan resolved no readable list: %v", terr)
+	}
+	counts := map[string]int{}
+	for _, it := range total {
+		counts[it.Type]++
+	}
+	var want string
+	for t, n := range counts {
+		if t != "" && n < len(total) {
+			want = t
+			break
+		}
+	}
+	if want == "" {
+		return false, fmt.Sprintf("every item on this board reports the same type (%d item(s), %d distinct "+
+			"type(s)), so no type filter can be built that some items match and others do not — and a filter "+
+			"every item satisfies cannot tell a working filter from one the connector ignored",
+			len(total), len(counts))
+	}
+	filter := tracker.Filter{Types: []string{want}}
+	res, err := scanner.ScanWhere(ctx, opts.ScannableBoard, tracker.Selection{}, filter)
+
+	if !c.Capabilities().Has(tracker.CapServerFilterType) {
+		return undeclaredDimensionRefused(tracker.CapServerFilterType, filter, err)
+	}
+	if err != nil {
+		if cerr.KindOf(err) == cerr.KindUnsupported {
+			return true, fmt.Sprintf("declares %s and refuses %s with %s rather than answering a wider set",
+				tracker.CapServerFilterType, filter, cerr.KindUnsupported)
+		}
+		return false, fmt.Sprintf("declares %s and answered %s with %s; only %s is a refusal a host can act "+
+			"on: %v", tracker.CapServerFilterType, filter, cerr.KindOf(err), cerr.KindUnsupported, err)
+	}
+	items, ierr := res.Items()
+	if ierr != nil {
+		return false, fmt.Sprintf("the resolution a type-filtered read returned is not readable: %v", ierr)
+	}
+	for _, it := range items {
+		if it.Type != want {
+			return false, fmt.Sprintf("asked for %s and returned %s whose type is %q: a connector that widens "+
+				"a filter answers with a SUPERSET, which a caller cannot detect. ⚠️ A backend serving type as "+
+				"a LABEL must resolve it the same way on the read and on the filter — labels are "+
+				"multi-valued and Item.Type is not, so an item can carry the label and report another type",
+				filter, it.Ref, it.Type)
+		}
+	}
+	if len(items) != counts[want] {
+		return false, fmt.Sprintf("asked for %s and returned %d item(s) where the board holds %d of that "+
+			"type: a filtered read that DROPS matching items is a truncation wearing a filter",
+			filter, len(items), counts[want])
+	}
+	return true, fmt.Sprintf("declares %s and honours %s: %d of %d item(s), every one %q",
+		tracker.CapServerFilterType, filter, len(items), len(total), want)
 }
 
 // catalogueProbe is written INTO a catalogue a connector handed back. If it
