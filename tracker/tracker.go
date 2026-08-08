@@ -192,6 +192,21 @@ const (
 	// do and the least often wanted: a host that reads and writes items needs
 	// nothing here, and a token scoped for item work will not carry it.
 	CapSchemaAdmin connector.Capability = "schema_admin"
+	// CapServerFilter declares that the backend can narrow a board read by a
+	// FIELD PREDICATE, so a caller asking for "the items whose Status is
+	// Shipped" is answered by the backend rather than by reading the whole
+	// board and discarding most of it.
+	//
+	// It is backed by the optional [FilteredScanner] interface. ⚠️ Declaring it
+	// without implementing that interface — or implementing it without
+	// declaring this — is a conformance failure in both directions, like every
+	// other optional tier.
+	//
+	// ⚠️ What it does NOT say is that the backend can express EVERY filter this
+	// contract can build. A predicate a backend cannot ask is a typed refusal
+	// from ScanWhere, which is the answer a host needs in order to fall back to
+	// [Tracker.Scan] plus a client-side filter. See [FilteredScanner].
+	CapServerFilter connector.Capability = "server_filter"
 
 	// CapBoardMembership declares that whether an item is ON this board is
 	// administrable as an act of its own, via [Change.Place] — separately from
@@ -237,6 +252,7 @@ const (
 var knownCapabilities = connector.Capabilities{
 	CapNativeTypes, CapNativeHierarchy, CapCrossScope, CapItemFields,
 	CapTrains, CapScopedTrains, CapSchemaAdmin, CapBoardMembership,
+	CapServerFilter,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for this class,
