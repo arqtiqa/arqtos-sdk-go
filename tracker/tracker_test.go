@@ -347,6 +347,13 @@ func TestKnownCapabilities_IsTheClosedSet(t *testing.T) {
 		CapNativeTypes, CapNativeHierarchy, CapCrossScope, CapItemFields,
 		CapTrains, CapScopedTrains, CapSchemaAdmin, CapBoardMembership,
 		CapServerFilter,
+		// ⚠️ arqtiqa/arqtos-sdk-go#65. Two SEPARATE tiers rather than widening
+		// server_filter, because a dimension added to Filter breaks an existing
+		// FilteredScanner silently — it answers a SUPERSET, which is
+		// indistinguishable from the right answer.
+		CapServerFilterState,
+		CapServerFilterTime,
+		CapServerFilterType,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("KnownCapabilities() = %v, want exactly %v — a capability added or removed here is a contract change", got, want)

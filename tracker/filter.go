@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // A filtered read — arqtiqa/arqtos-sdk-go#61.
@@ -118,26 +119,179 @@ func (p Predicate) String() string {
 	return fmt.Sprintf("%s %s %s", p.Field, p.Match, strings.Join(p.Values, "|"))
 }
 
-// A Filter is the CONJUNCTION of its predicates: an item is admitted when every
-// one of them admits it.
+// A Lifecycle narrows a read to items that are OPEN or CLOSED, and it is
+// arqtiqa/arqtos-sdk-go#65's first dimension.
+//
+// ⚠️ It is NOT [Lifecycle], and the two are easy to confuse because the words
+// overlap. [Lifecycle] is a WRITE — a close-or-reopen action on a [Change], carrying
+// a [CloseReason] and an audit comment. This is a READ dimension: which items a scan
+// returns. They share a domain and nothing else, which is why this one is named for
+// the item's STATE rather than for its lifecycle.
+//
+// ⚠️ It is BINARY, matching [Item.Open], and that is a decision rather than a
+// simplification. The four trackers publish three different vocabularies — GitHub
+// `is:open`/`is:closed`, GitLab
+// `opened`/`closed`/`locked`/`all`, and Linear and Plane BOTH a five-value grouping
+// (Linear a state type; Plane a state_group of backlog/unstarted/started/completed/
+// cancelled). Binary is what all four express EXACTLY — Plane folds via
+// `state_group in [completed, cancelled]`, a lookup it genuinely has, and GitLab's
+// `locked` folds to OPEN because a locked item is not a closed one. A
+// filter that could ask about a richer lifecycle than [Item] can REPORT would be a
+// predicate whose answer a caller cannot check against what came back, and
+// trackerconform's own agreement check compares [Item.Open] precisely because that
+// is the lifecycle the contract has. A five-state vocabulary is a later question and
+// needs [Item] to carry it first.
+type ItemState int
+
+const (
+	// ItemStateAny is the zero value and narrows NOTHING, so a Filter that says
+	// nothing about lifecycle admits open and closed items alike. Unlike
+	// [MatchUnspecified] this is a legitimate value: "I did not ask" is a
+	// coherent thing to mean about a whole dimension, where it is not a coherent
+	// thing to mean about how one predicate compares.
+	ItemStateAny ItemState = iota
+	// ItemStateOpen admits only items whose [Item.Open] is true.
+	ItemStateOpen
+	// ItemStateClosed admits only items whose [Item.Open] is false.
+	ItemStateClosed
+)
+
+var itemStateNames = map[ItemState]string{
+	ItemStateAny:    "any state",
+	ItemStateOpen:   "open",
+	ItemStateClosed: "closed",
+}
+
+// String renders the lifecycle for a refusal. Value receiver, as [Match.String].
+func (s ItemState) String() string {
+	if name, known := itemStateNames[s]; known {
+		return name
+	}
+	return fmt.Sprintf("item_state(%d)", int(s))
+}
+
+// A Filter is the CONJUNCTION of everything it says: an item is admitted when every
+// predicate admits it AND its lifecycle matches AND it changed within the bound.
 //
 // The zero Filter admits everything, so a [FilteredScanner] handed one answers
 // exactly what [Tracker.Scan] would.
+//
+// # ⚠️ The three dimensions are separately CAPABILITY-GATED, and that is why they
+// are separate members
+//
+// Adding a dimension to this struct is the one change that can break an existing
+// [FilteredScanner] SILENTLY: a scanner that ignores a new member answers with a
+// SUPERSET, and a superset is indistinguishable from the right answer — both are
+// well-formed lists of real items. arqtiqa/arqtos-sdk-go#57 is the same shape in
+// another tier: [TrainAdmin] grew a method, nothing failed to BUILD, and six tests
+// failed hours later at a pin bump.
+//
+// So each dimension has its own capability — [CapServerFilter],
+// [CapServerFilterState], [CapServerFilterTime] — and a host reads the manifest
+// BEFORE it loads a connector. A dimension a connector never declared is never sent
+// to it, and one sent anyway is refused with cerr.KindUnsupported rather than
+// ignored.
+//
+// ⚠️ These two tiers add no new METHOD, so unlike every other optional tier they
+// cannot be checked structurally by optional/declared-is-implemented — there is
+// nothing to type-assert. They are checked BEHAVIOURALLY instead, in both arms:
+// declared means the dimension must be honoured, and NOT declared means it must be
+// refused. The undeclared arm is the one that catches a scanner ignoring a member,
+// and it is stronger here than a structural check would be.
 type Filter struct {
+	// Predicates are conditions on the board's own fields, gated by
+	// [CapServerFilter].
 	Predicates []Predicate
+	// State narrows by open/closed, gated by [CapServerFilterState]. The zero
+	// value narrows nothing.
+	State ItemState
+	// Types are the item types to admit, gated by [CapServerFilterType]. Empty
+	// narrows nothing, and several are a DISJUNCTION — an item is admitted when its
+	// [Item.Type] is any of them, the same way [MatchIs] treats several Values.
+	//
+	// ⚠️ It is a member rather than a [Predicate] because type is not a published
+	// FIELD. [Predicate.Field] resolves against [Catalogue.Fields] and type is not
+	// there: measured 2026-08-08, a GitHub board answers `Kind:Story` with 0 while
+	// `type:Story` answers 789. So a Predicate naming it would be refused by
+	// [Filter.CheckAgainst] as an unresolvable field name, which is the right answer
+	// to the wrong question.
+	//
+	// ⚠️ Both preconditions this contract insists on are met, which is what makes
+	// this the best-grounded of the three dimensions. [Item.Type] REPORTS it, so a
+	// caller can check a returned item against what it asked — the rule that keeps
+	// [ItemState] binary. And [Catalogue.Types] PUBLISHES the vocabulary, so
+	// CheckAgainst can validate a requested type against the board's own set exactly
+	// as it validates a value against a single-select field's Options. No new
+	// validation concept is needed.
+	//
+	// ⚠️ A backend WITHOUT native types can still serve this. [CapNativeTypes]'s own
+	// doc says one tracker serves a type the API can set and filter on while another
+	// "has only labels and leaves Story a string in a label list" — and that
+	// [Item.Type] is populated either way. So a label-based connector renders this as
+	// a label query. CapNativeTypes governs the WRITE and says nothing about this
+	// read.
+	Types []string
+	// ChangedAtOrAfter admits items last changed at or after this instant, gated
+	// by [CapServerFilterTime]. The zero Time narrows nothing.
+	//
+	// ⚠️ The bound is INCLUSIVE, and the name says so because the distinction is
+	// load-bearing rather than pedantic. Measured on a live GitHub board
+	// 2026-08-08: `updated:>2026-08-01` answered 284 items and
+	// `updated:>=2026-08-01` answered 308 — a 24-item difference. GitLab's issues
+	// API offers only `updated_after`, documented as "on or after the given
+	// time", so it CANNOT express the strict form (verified in
+	// app/finders/issuable_finder.rb, not only in the REST reference); a contract
+	// offering strict would force GitLab to refuse it or to approximate it, and an approximated
+	// boundary is a wrong answer wearing a correct one's clothes.
+	//
+	// ⚠️ It is an INSTANT, and one backend cannot express that — operator ruling
+	// 2026-08-08, on the grounds that this SDK is pragmatic and that temporal
+	// queries have been rare. Plane's IssueFilterSet compares `updated_at` by
+	// CALENDAR DATE ("bare calendar date, yyyy-MM-dd, compared via the date
+	// component") with lookups exact and range only, so "at or after 14:30"
+	// renders there as everything from 00:00 that day — a SUPERSET, which this
+	// contract forbids. Plane therefore declines [CapServerFilterTime] rather
+	// than the other three losing precision they have. That is what a
+	// per-dimension tier is FOR: one backend's gap shapes its manifest, not the
+	// contract. A date-granular bound, if it is ever wanted, is a NEW tier beside
+	// this one and changes no existing connector.
+	//
+	// ⚠️ Inclusive is also the CORRECT form for the use this exists for. A
+	// caller reconciling against a watermark wants everything changed at or
+	// since its last read: a strict bound can MISS an item changed in the same
+	// instant as the watermark, while an inclusive one can only re-read a
+	// boundary item, which is idempotent. So this is not the lesser of two
+	// options — the strict form is simply not offered.
+	ChangedAtOrAfter time.Time
 }
 
 // Empty reports whether this filter narrows anything.
-func (f Filter) Empty() bool { return len(f.Predicates) == 0 }
+//
+// ⚠️ It accounts for every dimension. A Filter carrying only a Lifecycle is NOT
+// empty, and a scanner treating it as empty would answer the whole board for a
+// caller who asked for open items.
+func (f Filter) Empty() bool {
+	return len(f.Predicates) == 0 && f.State == ItemStateAny && len(f.Types) == 0 &&
+		f.ChangedAtOrAfter.IsZero()
+}
 
 // String renders the whole filter for a refusal.
 func (f Filter) String() string {
 	if f.Empty() {
 		return "no filter"
 	}
-	out := make([]string, 0, len(f.Predicates))
+	out := make([]string, 0, len(f.Predicates)+2)
 	for _, p := range f.Predicates {
 		out = append(out, p.String())
+	}
+	if f.State != ItemStateAny {
+		out = append(out, "is "+f.State.String())
+	}
+	if len(f.Types) > 0 {
+		out = append(out, "type is "+strings.Join(f.Types, "|"))
+	}
+	if !f.ChangedAtOrAfter.IsZero() {
+		out = append(out, "changed at or after "+f.ChangedAtOrAfter.UTC().Format(time.RFC3339))
 	}
 	return strings.Join(out, " AND ")
 }
@@ -213,6 +367,36 @@ func (f Filter) CheckAgainst(cat Catalogue) error {
 			}
 		}
 	}
+	if _, known := itemStateNames[f.State]; !known {
+		return fmt.Errorf("the filter asks for %s, which is outside the closed set this contract publishes: a "+
+			"state nobody named is not a state a connector can render, and defaulting it would answer a "+
+			"different question from the one asked", f.State)
+	}
+	// The type vocabulary, validated the same way a single-select value is: against
+	// what the BOARD published, not against a set this contract carries. ⚠️ An
+	// unpublished type is refused for #168's measured reason — a backend answers a
+	// type it does not recognise with an EMPTY SET rather than a complaint, which a
+	// caller cannot tell from "no items of that type".
+	for i, t := range f.Types {
+		if t == "" {
+			return fmt.Errorf("type %d in the filter is empty: an unnamed type is not a type, and a filter "+
+				"that quietly dropped it would answer a wider question than the one asked", i)
+		}
+		if !slices.Contains(cat.Types, t) {
+			return fmt.Errorf("the filter asks for the item type %q and this board serves %s: a type the "+
+				"catalogue cannot resolve is REFUSED rather than sent, because a backend that does not "+
+				"recognise it answers with an EMPTY SET and no error", t, quotedOrNone(cat.Types))
+		}
+	}
+	// ⚠️ ChangedAtOrAfter is deliberately NOT validated here, and the absence is
+	// stated rather than left to be noticed. A catalogue publishes fields, types and
+	// vocabularies; it says nothing about time, so there is no board fact this could
+	// be checked against. A zero Time means "no bound" and any non-zero instant is a
+	// coherent question — including one in the future, which correctly admits
+	// nothing. What CAN refuse it is the connector, with cerr.KindUnsupported, when
+	// its backend cannot express a temporal bound at all: Plane's documented
+	// list-work-items endpoint accepts no temporal filter, so that refusal is
+	// reachable rather than theoretical.
 	return nil
 }
 

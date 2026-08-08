@@ -207,6 +207,45 @@ const (
 	// from ScanWhere, which is the answer a host needs in order to fall back to
 	// [Tracker.Scan] plus a client-side filter. See [FilteredScanner].
 	CapServerFilter connector.Capability = "server_filter"
+	// CapServerFilterState declares that the backend can narrow a board read by
+	// the item's OPEN/CLOSED state — [Filter.State].
+	//
+	// ⚠️ It is a SEPARATE tier from [CapServerFilter] because a dimension added to
+	// [Filter] breaks an existing [FilteredScanner] SILENTLY: a scanner that
+	// ignores the member answers with a SUPERSET, and a superset is
+	// indistinguishable from the right answer. A host reads the manifest before it
+	// loads a connector, so an undeclared dimension is never sent — and one sent
+	// anyway is refused with cerr.KindUnsupported rather than ignored.
+	//
+	// ⚠️ Unlike every other optional tier it is backed by NO new interface, so
+	// optional/declared-is-implemented cannot check it structurally — there is
+	// nothing to type-assert. It is checked BEHAVIOURALLY in both arms: declared
+	// means the state must be honoured, and NOT declared means it must be refused.
+	// The undeclared arm is what catches a scanner ignoring the member.
+	CapServerFilterState connector.Capability = "server_filter_state"
+	// CapServerFilterTime declares that the backend can narrow a board read by
+	// when an item last changed — [Filter.ChangedAtOrAfter].
+	//
+	// It is a separate tier for the same reason as [CapServerFilterState], and is
+	// checked the same way. ⚠️ The bound is INCLUSIVE and that is not negotiable
+	// per-backend: GitLab's issues API offers only `updated_after`, documented as
+	// "on or after the given time", so a strict bound is not expressible there —
+	// and measured on GitHub 2026-08-08 the two differ by 24 items on a 1201-item
+	// board. A connector must not approximate one with the other.
+	CapServerFilterTime connector.Capability = "server_filter_time"
+	// CapServerFilterType declares that the backend can narrow a board read by the
+	// item's TYPE — [Filter.Types].
+	//
+	// It is a separate tier for the same reason as [CapServerFilterState]: a
+	// dimension added to [Filter] breaks an existing [FilteredScanner] silently, by
+	// answering a SUPERSET. Checked behaviourally in both arms, declared and not.
+	//
+	// ⚠️ It does NOT imply [CapNativeTypes]. That capability governs the WRITE — it
+	// says whether a type CHANGE is an attribute update or a label rewrite. A backend
+	// with only labels can serve this READ perfectly well, because [Item.Type] is
+	// populated either way; it renders the filter as a label query. Requiring
+	// CapNativeTypes here would exclude a backend that can answer the question.
+	CapServerFilterType connector.Capability = "server_filter_type"
 
 	// CapBoardMembership declares that whether an item is ON this board is
 	// administrable as an act of its own, via [Change.Place] — separately from
@@ -252,7 +291,7 @@ const (
 var knownCapabilities = connector.Capabilities{
 	CapNativeTypes, CapNativeHierarchy, CapCrossScope, CapItemFields,
 	CapTrains, CapScopedTrains, CapSchemaAdmin, CapBoardMembership,
-	CapServerFilter,
+	CapServerFilter, CapServerFilterState, CapServerFilterTime, CapServerFilterType,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for this class,
