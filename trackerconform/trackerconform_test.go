@@ -68,10 +68,14 @@ type stub struct {
 
 	catalogue func(context.Context, tracker.BoardRef, []tracker.Scope) (tracker.Catalogue, error)
 	scan      func(context.Context, tracker.BoardRef, tracker.Selection) (tracker.Resolution[tracker.Item], error)
-	scanWhere func(context.Context, tracker.BoardRef, tracker.Selection, tracker.Filter) (tracker.Resolution[tracker.Item], error)
-	getItems  func(context.Context, tracker.BoardRef, []tracker.ItemRef, tracker.Selection) (tracker.Resolution[tracker.Item], error)
-	apply     func(context.Context, tracker.BoardRef, []tracker.Change) (tracker.ApplyReport, error)
-	health    func(context.Context) (connector.Health, error)
+	// widenUndeclared makes this stub HONOUR a dimension it never declared, which is
+	// the silent widening CheckFilterState and CheckFilterType exist to catch. Only a
+	// violating stub sets it.
+	widenUndeclared bool
+	scanWhere       func(context.Context, tracker.BoardRef, tracker.Selection, tracker.Filter) (tracker.Resolution[tracker.Item], error)
+	getItems        func(context.Context, tracker.BoardRef, []tracker.ItemRef, tracker.Selection) (tracker.Resolution[tracker.Item], error)
+	apply           func(context.Context, tracker.BoardRef, []tracker.Change) (tracker.ApplyReport, error)
+	health          func(context.Context) (connector.Health, error)
 }
 
 func newStub() *stub {
@@ -106,7 +110,7 @@ func (s *stub) Catalogue(ctx context.Context, board tracker.BoardRef, scopes []t
 			Name: stubField, Class: tracker.FieldClassBoard, Accepts: tracker.ValueOption,
 			Options: []string{"Backlog", "In Build"},
 		}},
-		Types:  []string{"Story"},
+		Types:  []string{"Story", "Epic", "Bug"},
 		Labels: map[tracker.Scope][]string{},
 		Trains: map[tracker.Scope][]tracker.Train{},
 	}
@@ -152,6 +156,21 @@ func (s *stub) ScanWhere(ctx context.Context, board tracker.BoardRef, sel tracke
 	if err := filter.CheckAgainst(cat); err != nil {
 		return tracker.Resolution[tracker.Item]{}, cerr.New(cerr.KindInvalid, "ScanWhere", err)
 	}
+	// ⚠️ A dimension this connector never DECLARED is refused, not answered. Honouring
+	// it would be harmless here and catastrophic in general: a host reads the manifest
+	// before it loads a connector, so it never asks for an undeclared dimension — and
+	// a connector that quietly answers one is indistinguishable from one that IGNORES
+	// it and returns a superset. cerr.KindUnsupported is the answer a host can act on.
+	if !s.widenUndeclared {
+		if filter.State != tracker.ItemStateAny && !s.caps.Has(tracker.CapServerFilterState) {
+			return tracker.Resolution[tracker.Item]{}, cerr.New(cerr.KindUnsupported, "ScanWhere",
+				fmt.Errorf("this connector does not declare %s", tracker.CapServerFilterState))
+		}
+		if len(filter.Types) > 0 && !s.caps.Has(tracker.CapServerFilterType) {
+			return tracker.Resolution[tracker.Item]{}, cerr.New(cerr.KindUnsupported, "ScanWhere",
+				fmt.Errorf("this connector does not declare %s", tracker.CapServerFilterType))
+		}
+	}
 	var kept []tracker.Item
 	for _, it := range stubItems(sel, s.caps) {
 		if stubItemMatches(it, filter) {
@@ -164,6 +183,22 @@ func (s *stub) ScanWhere(ctx context.Context, board tracker.BoardRef, sel tracke
 // stubItemMatches is the conjunction tracker.Filter documents: an item is
 // admitted when EVERY predicate admits it.
 func stubItemMatches(it tracker.Item, filter tracker.Filter) bool {
+	// ⚠️ The two dimensions arqtiqa/arqtos-sdk-go#65 added. A stub that honoured only
+	// Predicates would be a connector that WIDENS on the others, which is exactly what
+	// the new checks exist to catch — so the honouring stub has to honour all three.
+	switch filter.State {
+	case tracker.ItemStateOpen:
+		if !it.Open {
+			return false
+		}
+	case tracker.ItemStateClosed:
+		if it.Open {
+			return false
+		}
+	}
+	if len(filter.Types) > 0 && !slices.Contains(filter.Types, it.Type) {
+		return false
+	}
 	for _, p := range filter.Predicates {
 		v, present := it.Fields[p.Field]
 		switch p.Match {
@@ -193,6 +228,33 @@ func filteringStub() (*stub, manifest.Doc) {
 	return s, stubManifest(tracker.CapNativeHierarchy, tracker.CapServerFilter)
 }
 
+// stubTypeOf and stubOpenOf are what make the fixture able to DISAGREE, and they are
+// one function each for [stubStatusOf]'s reason: the board's composition is what makes
+// a filtered read's comparison evidence, so it lives where a gate can read it.
+//
+// ⚠️ Before arqtiqa/arqtos-sdk-go#66 every stub item was Type "Story" and Open true, so
+// a check asserting "every returned item satisfies the filter" would have passed
+// against a connector that IGNORED the filter — every item satisfied it already. That
+// is the fifth instance of this finding in this line (arqtos-connectors#207, #189,
+// #242 and sdk-go#62 are the others), and
+// [TestStubFixture_CanDisagreeOnEveryFilterDimension] is the gate that keeps it.
+func stubTypeOf(ref tracker.ItemRef) string {
+	switch ref {
+	case fixParent:
+		return "Epic"
+	case fixChild:
+		return "Bug"
+	default:
+		return "Story"
+	}
+}
+
+// stubOpenOf reports the item's lifecycle. ⚠️ Exactly one fixture item is CLOSED, which
+// is the minimum that makes both arms of a state filter observable: open admits three
+// of four and closed admits one, so neither answer can be produced by ignoring the
+// filter.
+func stubOpenOf(ref tracker.ItemRef) bool { return ref != fixChildless }
+
 func stubStatusOf(ref tracker.ItemRef) string {
 	if ref == fixChildless {
 		return "In Build"
@@ -202,7 +264,8 @@ func stubStatusOf(ref tracker.ItemRef) string {
 
 func stubItems(sel tracker.Selection, caps connector.Capabilities) []tracker.Item {
 	item := func(ref tracker.ItemRef, children []tracker.ItemRef) tracker.Item {
-		it := tracker.Item{Ref: ref, Title: "item " + ref.String(), Type: "Story", Open: true, Selected: sel}
+		it := tracker.Item{Ref: ref, Title: "item " + ref.String(), Type: stubTypeOf(ref),
+			Open: stubOpenOf(ref), Selected: sel}
 		if sel.BoardFields {
 			it.Fields = map[string]tracker.Value{stubField: {Kind: tracker.ValueOption, Option: stubStatusOf(ref)}}
 		}
@@ -646,17 +709,18 @@ func TestConform_RunsEveryDeclaredCheck(t *testing.T) {
 		CheckScanPagedToExhaustion, CheckReadUnreadableIsNotEmpty, CheckSelectionEchoed,
 		CheckApplyAttribution, CheckApplyCrossTrackerRefused, CheckApplyNoCachedIdentity,
 		CheckPlacementHonoursItsCapability, CheckPlaceHonoursBoardScope,
-		CheckFilteredRead,
+		CheckFilteredRead, CheckFilterState, CheckFilterType,
 		CheckTrainsUnion, CheckTrainsCreateVerified,
 	}
 	got := conformChecks()
 	if !slices.Equal(got, declared) {
 		t.Fatalf("Run runs\n  %v\nand the class publishes\n  %v", got, declared)
 	}
-	if len(got) != 18 {
+	if len(got) != 20 {
 		t.Errorf("the harness runs %d checks; seven are the ones every class in this estate carries, eight are this "+
-			"class's own reads and writes, and two are the TrainAdmin properties the class contract holds rather "+
-			"than leaving to each backend, and one is the filtered read arqtos-sdk-go#61 added: 18", len(got))
+			"class's own reads and writes, two are the TrainAdmin properties the class contract holds rather "+
+			"than leaving to each backend, one is the filtered read arqtos-sdk-go#61 added, and TWO are the "+
+			"state and type dimensions #65 added behind their own tiers — which #66 is what holds: 20", len(got))
 	}
 }
 
@@ -2434,6 +2498,41 @@ func violatingStubs() map[string]func() (tracker.Tracker, manifest.Doc) {
 		// defect CheckFilteredRead exists for, and it is the one a caller
 		// cannot detect for itself: a superset is a well-formed list of real
 		// items, with no shape in the answer that gives it away.
+		// ⚠️ The UNDECLARED arm — the silent widening these tiers exist for. It
+		// declares the base filtered read but not the state tier, and answers a state
+		// filter anyway instead of refusing it.
+		CheckFilterState: func() (tracker.Tracker, manifest.Doc) {
+			s := newStub()
+			s.caps = connector.Capabilities{tracker.CapNativeHierarchy, tracker.CapServerFilter}
+			s.widenUndeclared = true
+			return s, stubManifest(tracker.CapNativeHierarchy, tracker.CapServerFilter)
+		},
+		// ⚠️ The LABEL-BASED violation, and it is deliberately not a copy of the one
+		// above. CapNativeTypes' own doc says a backend may serve type as "a string in
+		// a label list" — and labels are MULTI-VALUED while Item.Type is not. So an
+		// item can carry the requested type as a label while REPORTING another type,
+		// and a connector resolving the filter from labels but the read from
+		// Item.Type answers items that fail the predicate. A native-type stub would
+		// never exercise that, which is why this one models the label path.
+		CheckFilterType: func() (tracker.Tracker, manifest.Doc) {
+			s := newStub()
+			s.caps = connector.Capabilities{
+				tracker.CapNativeHierarchy, tracker.CapServerFilter, tracker.CapServerFilterType,
+			}
+			s.scanWhere = func(ctx context.Context, board tracker.BoardRef, sel tracker.Selection,
+				filter tracker.Filter,
+			) (tracker.Resolution[tracker.Item], error) {
+				items := stubItems(sel, s.caps)
+				if len(filter.Types) == 0 {
+					return tracker.Resolved(items, tracker.Complete)
+				}
+				// Every item carries every type as a LABEL, so the label lookup admits
+				// all of them while Item.Type still reports one.
+				return tracker.Resolved(items, tracker.Complete)
+			}
+			return s, stubManifest(tracker.CapNativeHierarchy, tracker.CapServerFilter,
+				tracker.CapServerFilterType)
+		},
 		CheckFilteredRead: func() (tracker.Tracker, manifest.Doc) {
 			s, m := filteringStub()
 			s.scanWhere = func(ctx context.Context, board tracker.BoardRef, sel tracker.Selection,
@@ -2964,5 +3063,188 @@ func TestConform_ANonDeclaringConnectorIsNotHeldToTheFilterRule(t *testing.T) {
 	if !strings.Contains(got, CheckOptionalDeclared) {
 		t.Errorf("the pass does not say which check DOES cover the pairing, so a reader cannot tell an "+
 			"exemption from a gap: %q", got)
+	}
+}
+
+// dimensionStub declares the base filtered read AND both dimension tiers, and honours
+// all three through [stubItemMatches].
+func dimensionStub() (*stub, manifest.Doc) {
+	s := newStub()
+	caps := []connector.Capability{
+		tracker.CapNativeHierarchy, tracker.CapServerFilter,
+		tracker.CapServerFilterState, tracker.CapServerFilterType,
+	}
+	s.caps = caps
+	return s, stubManifest(caps...)
+}
+
+// TestStubFixture_CanDisagreeOnEveryFilterDimension is arqtiqa/arqtos-sdk-go#66's
+// prerequisite, asserted rather than trusted.
+//
+// ⚠️ Before #66 every stub item was Type "Story" and Open true, so a check asserting
+// "every returned item satisfies the filter" passed against a connector that IGNORED
+// the filter — every item satisfied it already. That is the FIFTH instance of this
+// finding in this line (arqtos-connectors#207, #189, #242 and sdk-go#62). The fixture's
+// composition is what makes the comparison evidence, so it is gated here the way
+// TestConformFixture_TheBoardCarriesBothLifecycles gates it one repo over.
+func TestStubFixture_CanDisagreeOnEveryFilterDimension(t *testing.T) {
+	items := stubItems(tracker.Selection{}, connector.Capabilities{tracker.CapNativeHierarchy})
+	if len(items) < 2 {
+		t.Fatalf("the fixture places %d item(s); a filter cannot be shown to narrow anything", len(items))
+	}
+
+	open, closed := 0, 0
+	types := map[string]int{}
+	for _, it := range items {
+		if it.Open {
+			open++
+		} else {
+			closed++
+		}
+		types[it.Type]++
+	}
+	if open == 0 || closed == 0 {
+		t.Errorf("the fixture holds %d open and %d closed item(s); it must hold BOTH, or a state filter every "+
+			"item satisfies cannot tell a working filter from one the connector ignored", open, closed)
+	}
+	if len(types) < 2 {
+		t.Errorf("every fixture item reports one of %d type(s); it must hold more than one, or a type filter "+
+			"cannot exclude anything", len(types))
+	}
+	// ⚠️ And no single type may cover the whole board, or the type CHECK — which picks
+	// a type present but not universal — has nothing to pick.
+	for typ, n := range types {
+		if n == len(items) {
+			t.Errorf("every fixture item is type %q, so checkFilterType can build no discriminating filter", typ)
+		}
+	}
+}
+
+// TestConform_ADeclaringConnectorHonoursTheFilterDimensions is the DECLARED arm: a
+// connector declaring both tiers and honouring them passes, and the pass names what it
+// measured rather than asserting success.
+func TestConform_ADeclaringConnectorHonoursTheFilterDimensions(t *testing.T) {
+	s, m := dimensionStub()
+	rep := run(t, s, m)
+	requireGreen(t, rep)
+
+	for _, name := range []string{CheckFilterState, CheckFilterType} {
+		got, ok := passed(rep, name)
+		if !ok {
+			t.Fatalf("%s did not pass against a connector that declares and honours it\n%s", name, rep)
+		}
+		// ⚠️ The detail must carry the COUNTS. A pass reading "honoured" tells a
+		// reader nothing about whether the filter narrowed anything at all.
+		if !strings.Contains(got, " of ") {
+			t.Errorf("%s passed without reporting how many of how many it admitted, so a vacuous pass and a "+
+				"real one read identically: %q", name, got)
+		}
+	}
+}
+
+// TestConform_ADeclaredDimensionThatWIDENSIsRed is the other half of the declared arm,
+// and it is the failure the whole tier exists for: a connector that DECLARES a
+// dimension and then ignores it answers a SUPERSET, which a caller cannot detect.
+//
+// ⚠️ The violating stubs registered for these checks exercise the UNDECLARED arm and
+// the label path. Without this test the declared-and-widens arm would have no coverage
+// at all, and a check that dropped its per-item comparison would stay green.
+func TestConform_ADeclaredDimensionThatWIDENSIsRed(t *testing.T) {
+	s, m := dimensionStub()
+	s.scanWhere = func(ctx context.Context, board tracker.BoardRef, sel tracker.Selection,
+		_ tracker.Filter,
+	) (tracker.Resolution[tracker.Item], error) {
+		return s.Scan(ctx, board, sel) // declared, and the filter is ignored outright
+	}
+	rep := run(t, s, m)
+	for _, name := range []string{CheckFilterState, CheckFilterType} {
+		detail, did := failed(rep, name)
+		if !did {
+			t.Errorf("%s passed against a connector that DECLARES the dimension and ignores it — the superset "+
+				"a caller cannot detect\n%s", name, rep)
+			continue
+		}
+		if !strings.Contains(detail, "SUPERSET") {
+			t.Errorf("%s failed without naming the superset, so the message does not say what went wrong: %q",
+				name, detail)
+		}
+	}
+}
+
+// TestConform_AFilterEveryItemSatisfiesIsRed covers the anti-vacuity guards, and they
+// are NOT reachable from the ordinary fixture — which is the point.
+//
+// ⚠️ On this harness's own board one item is closed and the types differ, so a widening
+// connector is caught by the per-item comparison long before the guard is consulted.
+// The guard exists for a connector whose OWN board happens to admit everything: there,
+// every returned item satisfies the filter no matter what the connector did, and the
+// per-item loop passes for free. That is arqtiqa/arqtos-connectors#207's finding
+// arriving from the board rather than from the fixture, and without this test the guard
+// could be deleted with the whole suite staying green.
+func TestConform_AFilterEveryItemSatisfiesIsRed(t *testing.T) {
+	s, m := dimensionStub()
+	allOpen := []tracker.Item{
+		{Ref: fixKnown, Title: "a", Type: "Story", Open: true},
+		{Ref: fixParent, Title: "b", Type: "Story", Open: true},
+	}
+	s.scan = func(context.Context, tracker.BoardRef, tracker.Selection) (tracker.Resolution[tracker.Item], error) {
+		return tracker.Resolved(allOpen, tracker.Complete)
+	}
+	s.scanWhere = func(_ context.Context, _ tracker.BoardRef, _ tracker.Selection,
+		_ tracker.Filter,
+	) (tracker.Resolution[tracker.Item], error) {
+		// Honours the filter perfectly — every item is open and a Story already.
+		return tracker.Resolved(allOpen, tracker.Complete)
+	}
+	rep := run(t, s, m)
+
+	stateDetail, stateFailed := failed(rep, CheckFilterState)
+	if !stateFailed {
+		t.Errorf("%s passed on a board where EVERY item is open, so it cannot tell a working filter from one "+
+			"the connector ignored\n%s", CheckFilterState, rep)
+	} else if !strings.Contains(stateDetail, "every fixture item is open") {
+		t.Errorf("%s failed without naming WHY the board cannot discriminate: %q", CheckFilterState, stateDetail)
+	}
+
+	typeDetail, typeFailed := failed(rep, CheckFilterType)
+	if !typeFailed {
+		t.Errorf("%s passed on a board where every item reports one type, so no discriminating filter can be "+
+			"built\n%s", CheckFilterType, rep)
+	} else if !strings.Contains(typeDetail, "same type") {
+		t.Errorf("%s failed without naming why no type filter could be built: %q", CheckFilterType, typeDetail)
+	}
+}
+
+// TestConform_AnUndeclaredDimensionRefusedWithTheWRONGKindIsRed pins the one thing the
+// undeclared arm insists on beyond "it refused".
+//
+// ⚠️ Only cerr.KindUnsupported is a pass, and the reason is not bookkeeping: it is the
+// only kind a host can ACT on, by falling back to Scan plus a client-side filter. A
+// refusal typed Invalid sends an operator to fix a filter that is fine; one typed
+// Unavailable invites a retry that will never succeed. Without this test a check that
+// accepted any error at all would stay green, because the connector still refused.
+func TestConform_AnUndeclaredDimensionRefusedWithTheWRONGKindIsRed(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{tracker.CapNativeHierarchy, tracker.CapServerFilter}
+	s.scanWhere = func(_ context.Context, _ tracker.BoardRef, _ tracker.Selection,
+		filter tracker.Filter,
+	) (tracker.Resolution[tracker.Item], error) {
+		// Refuses — but with a kind a host cannot fall back from.
+		return tracker.Resolution[tracker.Item]{}, cerr.New(cerr.KindInvalid, "ScanWhere",
+			fmt.Errorf("cannot serve %s", filter))
+	}
+	rep := run(t, s, stubManifest(tracker.CapNativeHierarchy, tracker.CapServerFilter))
+
+	for _, name := range []string{CheckFilterState, CheckFilterType} {
+		detail, did := failed(rep, name)
+		if !did {
+			t.Errorf("%s passed against a connector that refused an undeclared dimension with %s; only %s is "+
+				"an answer a host can act on\n%s", name, cerr.KindInvalid, cerr.KindUnsupported, rep)
+			continue
+		}
+		if !strings.Contains(detail, cerr.KindUnsupported.String()) {
+			t.Errorf("%s failed without naming the kind it required, so a connector author cannot tell what to "+
+				"return instead: %q", name, detail)
+		}
 	}
 }
