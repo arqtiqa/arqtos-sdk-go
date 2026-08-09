@@ -21,6 +21,10 @@ concurrency:
 
 jobs:
   firewall:
+    # Named to match arqtos-connectors and arqtos-cli, so the required
+    # status-check context reads the same across all three repos in the
+    # external-collaboration path. Without this the context is the job id.
+    name: private-content firewall
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
