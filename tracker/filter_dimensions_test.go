@@ -3,12 +3,15 @@ package tracker
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
-// These cover the three dimensions arqtiqa/arqtos-sdk-go#65 adds beside the field
-// predicates #61 shipped: [Filter.State], [Filter.Types] and
-// [Filter.ChangedAtOrAfter].
+// These cover the dimensions arqtiqa/arqtos-sdk-go#65 adds beside the field
+// predicates #61 shipped: [Filter.State] and [Filter.Types].
+//
+// ⚠️ #65 added a THIRD — a temporal bound — and arqtiqa/arqtos-sdk-go#71 retired
+// it. Its cases are gone from here deliberately, not lost: see [Filter]'s
+// retirement note for why, and temporalretired_test.go for the check that keeps
+// it retired.
 //
 // ⚠️ The dimension most worth testing is [Filter.Empty], and the reason is not
 // obvious. Every one of these members can be added to a Filter WITHOUT touching
@@ -56,10 +59,6 @@ func TestFilter_EmptyAccountsForEveryDimension(t *testing.T) {
 		dimension: "Types",
 		filter:    Filter{Types: []string{"Story"}},
 		harm:      "a caller asking for Stories would be answered with Epics and Bugs too",
-	}, {
-		dimension: "ChangedAtOrAfter",
-		filter:    Filter{ChangedAtOrAfter: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
-		harm:      "a caller reconciling against a watermark would re-read the entire board every time",
 	}}
 	for _, c := range cases {
 		t.Run(c.dimension, func(t *testing.T) {
@@ -76,21 +75,20 @@ func TestFilter_StringRendersEveryDimension(t *testing.T) {
 		t.Errorf("the zero Filter renders %q, want %q", got, want)
 	}
 	full := Filter{
-		Predicates:       []Predicate{{Field: "Status", Match: MatchIs, Values: []string{"Shipped"}}},
-		State:            ItemStateOpen,
-		Types:            []string{"Story", "Bug"},
-		ChangedAtOrAfter: time.Date(2026, 8, 1, 12, 30, 0, 0, time.UTC),
+		Predicates: []Predicate{{Field: "Status", Match: MatchIs, Values: []string{"Shipped"}}},
+		State:      ItemStateOpen,
+		Types:      []string{"Story", "Bug"},
 	}
 	got := full.String()
 	// ⚠️ Every dimension must appear. A refusal that named only some of what was
 	// asked would send an operator to fix the wrong half of their filter.
-	for _, want := range []string{"Status is Shipped", "is open", "type is Story|Bug", "2026-08-01T12:30:00Z"} {
+	for _, want := range []string{"Status is Shipped", "is open", "type is Story|Bug"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Filter.String() = %q, missing %q", got, want)
 		}
 	}
-	if n := strings.Count(got, " AND "); n != 3 {
-		t.Errorf("Filter.String() joined %d times with AND, want 3 — the filter is a CONJUNCTION of four things "+
+	if n := strings.Count(got, " AND "); n != 2 {
+		t.Errorf("Filter.String() joined %d times with AND, want 2 — the filter is a CONJUNCTION of three things "+
 			"and rendering it as fewer understates what it asks: %q", n, got)
 	}
 }
@@ -167,21 +165,3 @@ func TestFilter_CheckAgainstRefusesATypeTheBoardDoesNotPublish(t *testing.T) {
 // so there is no board fact a timestamp could be checked against and inventing one
 // would refuse coherent questions. Even a FUTURE instant is coherent: it correctly
 // admits nothing. What refuses a temporal bound is the CONNECTOR, with
-// cerr.KindUnsupported, when its backend cannot express one.
-func TestFilter_CheckAgainstDoesNotRefuseATimestamp(t *testing.T) {
-	cat := dimensionCatalogue()
-	for _, c := range []struct {
-		name string
-		at   time.Time
-	}{
-		{"a past instant", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{"a future instant", time.Now().Add(48 * time.Hour)},
-		{"a non-UTC instant", time.Date(2026, 8, 1, 9, 0, 0, 0, time.FixedZone("CEST", 2*60*60))},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if err := (Filter{ChangedAtOrAfter: c.at}).CheckAgainst(cat); err != nil {
-				t.Errorf("CheckAgainst refused %s, and it has no board fact to refuse it against: %v", c.name, err)
-			}
-		})
-	}
-}
