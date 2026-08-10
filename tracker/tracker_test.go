@@ -352,7 +352,6 @@ func TestKnownCapabilities_IsTheClosedSet(t *testing.T) {
 		// FilteredScanner silently — it answers a SUPERSET, which is
 		// indistinguishable from the right answer.
 		CapServerFilterState,
-		CapServerFilterTime,
 		CapServerFilterType,
 	}
 	if len(got) != len(want) {

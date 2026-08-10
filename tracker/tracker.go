@@ -223,16 +223,6 @@ const (
 	// means the state must be honoured, and NOT declared means it must be refused.
 	// The undeclared arm is what catches a scanner ignoring the member.
 	CapServerFilterState connector.Capability = "server_filter_state"
-	// CapServerFilterTime declares that the backend can narrow a board read by
-	// when an item last changed — [Filter.ChangedAtOrAfter].
-	//
-	// It is a separate tier for the same reason as [CapServerFilterState], and is
-	// checked the same way. ⚠️ The bound is INCLUSIVE and that is not negotiable
-	// per-backend: GitLab's issues API offers only `updated_after`, documented as
-	// "on or after the given time", so a strict bound is not expressible there —
-	// and measured on GitHub 2026-08-08 the two differ by 24 items on a 1201-item
-	// board. A connector must not approximate one with the other.
-	CapServerFilterTime connector.Capability = "server_filter_time"
 	// CapServerFilterType declares that the backend can narrow a board read by the
 	// item's TYPE — [Filter.Types].
 	//
@@ -291,7 +281,7 @@ const (
 var knownCapabilities = connector.Capabilities{
 	CapNativeTypes, CapNativeHierarchy, CapCrossScope, CapItemFields,
 	CapTrains, CapScopedTrains, CapSchemaAdmin, CapBoardMembership,
-	CapServerFilter, CapServerFilterState, CapServerFilterTime, CapServerFilterType,
+	CapServerFilter, CapServerFilterState, CapServerFilterType,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for this class,

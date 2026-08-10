@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 )
 
 // A filtered read — arqtiqa/arqtos-sdk-go#61.
@@ -171,7 +170,7 @@ func (s ItemState) String() string {
 }
 
 // A Filter is the CONJUNCTION of everything it says: an item is admitted when every
-// predicate admits it AND its lifecycle matches AND it changed within the bound.
+// predicate admits it AND its lifecycle matches AND its type is one of those named.
 //
 // The zero Filter admits everything, so a [FilteredScanner] handed one answers
 // exactly what [Tracker.Scan] would.
@@ -187,7 +186,7 @@ func (s ItemState) String() string {
 // failed hours later at a pin bump.
 //
 // So each dimension has its own capability — [CapServerFilter],
-// [CapServerFilterState], [CapServerFilterTime] — and a host reads the manifest
+// [CapServerFilterState], [CapServerFilterType] — and a host reads the manifest
 // BEFORE it loads a connector. A dimension a connector never declared is never sent
 // to it, and one sent anyway is refused with cerr.KindUnsupported rather than
 // ignored.
@@ -231,38 +230,72 @@ type Filter struct {
 	// a label query. CapNativeTypes governs the WRITE and says nothing about this
 	// read.
 	Types []string
-	// ChangedAtOrAfter admits items last changed at or after this instant, gated
-	// by [CapServerFilterTime]. The zero Time narrows nothing.
+	// ---------------------------------------------------------------------------
+	// ⚠️ THERE IS NO TEMPORAL DIMENSION — retired, arqtiqa/arqtos-sdk-go#71
+	// ---------------------------------------------------------------------------
 	//
-	// ⚠️ The bound is INCLUSIVE, and the name says so because the distinction is
-	// load-bearing rather than pedantic. Measured on a live GitHub board
-	// 2026-08-08: `updated:>2026-08-01` answered 284 items and
-	// `updated:>=2026-08-01` answered 308 — a 24-item difference. GitLab's issues
-	// API offers only `updated_after`, documented as "on or after the given
-	// time", so it CANNOT express the strict form (verified in
-	// app/finders/issuable_finder.rb, not only in the REST reference); a contract
-	// offering strict would force GitLab to refuse it or to approximate it, and an approximated
-	// boundary is a wrong answer wearing a correct one's clothes.
+	// A "changed at or after" bound (`ChangedAtOrAfter time.Time`, gated by
+	// `CapServerFilterTime`) shipped in v0.3.2 and is GONE. Its absence is
+	// deliberate rather than pending, and the condition for its return is stated
+	// below so the next person to want it finds the argument instead of
+	// re-deriving it.
 	//
-	// ⚠️ It is an INSTANT, and one backend cannot express that — operator ruling
-	// 2026-08-08, on the grounds that this SDK is pragmatic and that temporal
-	// queries have been rare. Plane's IssueFilterSet compares `updated_at` by
-	// CALENDAR DATE ("bare calendar date, yyyy-MM-dd, compared via the date
-	// component") with lookups exact and range only, so "at or after 14:30"
-	// renders there as everything from 00:00 that day — a SUPERSET, which this
-	// contract forbids. Plane therefore declines [CapServerFilterTime] rather
-	// than the other three losing precision they have. That is what a
-	// per-dimension tier is FOR: one backend's gap shapes its manifest, not the
-	// contract. A date-granular bound, if it is ever wanted, is a NEW tier beside
-	// this one and changes no existing connector.
+	// # Why it went
 	//
-	// ⚠️ Inclusive is also the CORRECT form for the use this exists for. A
-	// caller reconciling against a watermark wants everything changed at or
-	// since its last read: a strict bound can MISS an item changed in the same
-	// instant as the watermark, while an inclusive one can only re-read a
-	// boundary item, which is idempotent. So this is not the lesser of two
-	// options — the strict form is simply not offered.
-	ChangedAtOrAfter time.Time
+	// ⚠️ [Item] carries NO TIMESTAMP, so a temporal filtered read cannot be
+	// checked against what came back. A scanner that ignored the bound would
+	// answer with a SUPERSET — and per the reasoning that gives every dimension
+	// its own tier, a superset is INDISTINGUISHABLE from the right answer. State
+	// and Types are checkable because [Item.Open] and [Item.Type] are reported;
+	// this one was not, and trackerconform held it in neither arm. Measured on
+	// main 2026-08-10: trackerconform carried 10 references to the State tier, 8
+	// to Type, and ZERO to time, while `CapServerFilterTime`'s own doc claimed it
+	// was "checked the same way". A published contract asserting a check that does
+	// not exist is worse than an absent capability.
+	//
+	// This is the same rule that keeps [ItemState] binary: A FILTER MUST NOT ASK
+	// WHAT AN ITEM CANNOT REPORT. It applies to time exactly as it applies to
+	// lifecycle.
+	//
+	// # The condition for its return
+	//
+	// [Item] gains a reported last-changed timestamp. Then the bound is checkable
+	// against the response, trackerconform can hold both arms, and the tier means
+	// something. Until then, re-adding it re-publishes an unverifiable capability
+	// and TestKnownCapabilities_HasNoTemporalTier will refuse it.
+	//
+	// # The measurements, kept because they cost real work and outlive the field
+	//
+	// ⚠️ Whoever revives this inherits these rather than repeating them — and the
+	// first is why the bound must be INCLUSIVE, not strict:
+	//
+	//   - GitHub, live board 2026-08-08: `updated:>2026-08-01` answered 284 items,
+	//     `updated:>=2026-08-01` answered 308. A 24-item difference, so the two
+	//     forms are not interchangeable.
+	//   - GitLab's issues API offers only `updated_after`, documented as "on or
+	//     after the given time" (verified in app/finders/issuable_finder.rb, not
+	//     only the REST reference). It CANNOT express the strict form, so a
+	//     contract offering strict would force it to refuse or approximate — and an
+	//     approximated boundary is a wrong answer wearing a correct one's clothes.
+	//   - Plane's IssueFilterSet compares `updated_at` by CALENDAR DATE
+	//     (yyyy-MM-dd, date component, lookups exact and range only), so "at or
+	//     after 14:30" renders as everything from 00:00 that day — a superset this
+	//     contract forbids. A date-granular bound, if ever wanted, is a NEW tier
+	//     beside a reported-timestamp one, not a loosening of it.
+	//   - Inclusive is also correct for the use it existed for: a caller
+	//     reconciling against a watermark wants everything changed at or since its
+	//     last read. A strict bound can MISS an item changed in the watermark's own
+	//     instant; an inclusive one can only re-read a boundary item, which is
+	//     idempotent.
+	//
+	// ⚠️ SUPERSEDED OPERATOR RULING, recorded rather than erased: on 2026-08-08 the
+	// operator ruled the bound an INSTANT — that Plane declines the tier rather than
+	// the other three backends losing precision they have. That ruling was about
+	// GRANULARITY and stands on its own terms; it is superseded by the 2026-08-10
+	// ruling to retire the dimension outright, which answers a different question
+	// (whether the tier can be VERIFIED at all). A revival re-opens the 08-08
+	// question and should start from its answer.
+	// ---------------------------------------------------------------------------
 }
 
 // Empty reports whether this filter narrows anything.
@@ -271,8 +304,7 @@ type Filter struct {
 // empty, and a scanner treating it as empty would answer the whole board for a
 // caller who asked for open items.
 func (f Filter) Empty() bool {
-	return len(f.Predicates) == 0 && f.State == ItemStateAny && len(f.Types) == 0 &&
-		f.ChangedAtOrAfter.IsZero()
+	return len(f.Predicates) == 0 && f.State == ItemStateAny && len(f.Types) == 0
 }
 
 // String renders the whole filter for a refusal.
@@ -289,9 +321,6 @@ func (f Filter) String() string {
 	}
 	if len(f.Types) > 0 {
 		out = append(out, "type is "+strings.Join(f.Types, "|"))
-	}
-	if !f.ChangedAtOrAfter.IsZero() {
-		out = append(out, "changed at or after "+f.ChangedAtOrAfter.UTC().Format(time.RFC3339))
 	}
 	return strings.Join(out, " AND ")
 }
@@ -388,15 +417,12 @@ func (f Filter) CheckAgainst(cat Catalogue) error {
 				"recognise it answers with an EMPTY SET and no error", t, quotedOrNone(cat.Types))
 		}
 	}
-	// ⚠️ ChangedAtOrAfter is deliberately NOT validated here, and the absence is
-	// stated rather than left to be noticed. A catalogue publishes fields, types and
-	// vocabularies; it says nothing about time, so there is no board fact this could
-	// be checked against. A zero Time means "no bound" and any non-zero instant is a
-	// coherent question — including one in the future, which correctly admits
-	// nothing. What CAN refuse it is the connector, with cerr.KindUnsupported, when
-	// its backend cannot express a temporal bound at all: Plane's documented
-	// list-work-items endpoint accepts no temporal filter, so that refusal is
-	// reachable rather than theoretical.
+	// ⚠️ There is nothing here for a temporal bound, and that is not an omission:
+	// the dimension was RETIRED (arqtiqa/arqtos-sdk-go#71). A catalogue publishes
+	// fields, types and vocabularies and says nothing about time, so there was no
+	// board fact to validate against — which is the shallower half of why the tier
+	// went. The load-bearing half is that [Item] cannot REPORT a timestamp, so the
+	// RESPONSE could not be checked either. See [Filter]'s retirement note.
 	return nil
 }
 
