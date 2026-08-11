@@ -87,35 +87,45 @@ func TestClassContractMapCoversEveryClass(t *testing.T) {
 func interfaceMethods(t *testing.T, dir, iface string) []string {
 	t.Helper()
 
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	// Files are enumerated and parsed one at a time rather than with
+	// parser.ParseDir, which is deprecated: it does not consider build tags when
+	// associating files with packages. The documented replacement pulls in
+	// golang.org/x/tools/go/packages, and this repository gates its dependency
+	// boundary — so for a task this small, reading the directory is the cheaper
+	// correct answer than taking a dependency to find one interface.
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("parse %s: %v", dir, err)
+		t.Fatalf("read %s: %v", dir, err)
 	}
 
+	fset := token.NewFileSet()
 	var methods []string
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				ts, ok := n.(*ast.TypeSpec)
-				if !ok || ts.Name.Name != iface {
-					return true
-				}
-				it, ok := ts.Type.(*ast.InterfaceType)
-				if !ok {
-					return true
-				}
-				for _, field := range it.Methods.List {
-					// A field with no name is an embedded interface.
-					for _, name := range field.Names {
-						methods = append(methods, name.Name)
-					}
-				}
-				return false
-			})
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
 		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", filepath.Join(dir, name), err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != iface {
+				return true
+			}
+			it, ok := ts.Type.(*ast.InterfaceType)
+			if !ok {
+				return true
+			}
+			for _, field := range it.Methods.List {
+				// A field with no name is an embedded interface.
+				for _, fieldName := range field.Names {
+					methods = append(methods, fieldName.Name)
+				}
+			}
+			return false
+		})
 	}
 
 	if len(methods) == 0 {
