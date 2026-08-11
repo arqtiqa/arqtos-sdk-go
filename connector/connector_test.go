@@ -40,6 +40,9 @@ func TestClassString(t *testing.T) {
 	if connector.ClassTracker != "Tracker" {
 		t.Fatalf("class value = %q", connector.ClassTracker)
 	}
+	if connector.ClassAuthenticator != "Authenticator" {
+		t.Fatalf("class value = %q", connector.ClassAuthenticator)
+	}
 }
 
 // TestClassesIsTheClosedSetAndEveryConstantIsInIt: Classes() is the one place
@@ -53,6 +56,7 @@ func TestClassesIsTheClosedSetAndEveryConstantIsInIt(t *testing.T) {
 		connector.ClassRoster,
 		connector.ClassCodeCI,
 		connector.ClassTracker,
+		connector.ClassAuthenticator,
 	}
 	got := connector.Classes()
 	if len(got) != len(want) {

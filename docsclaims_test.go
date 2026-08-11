@@ -51,14 +51,27 @@ const contractDoc = "docs/CONTRACT.md"
 // claim about which classes lack a Track-B wire binding.
 const nativeOnlyMarker = "are native-only today"
 
-// classTableRow matches a row of CONTRACT.md's class table:
+// The class table is read by TWO checks that ask different questions, so it is
+// matched by two patterns rather than one.
 //
-//	| [`Class`](#anchor) | what it adapts | [`pkg`](../pkg/x.go) | [`harness`](../harness/) |
+// Conflating them was a real defect, found the first time a class was added
+// after this file shipped. A single full-row pattern made "this class is
+// documented" and "this class has both a contract package and a harness on
+// disk" the SAME assertion — so a class could not be published until its
+// harness existed, while the harness could not compile until the class was
+// published. The circularity was created here, not by the SDK.
 //
-// The three captured groups are the class name, the contract package and the
-// conformance harness package.
-var classTableRow = regexp.MustCompile(
-	"(?m)^\\|\\s*\\[`([A-Za-z]+)`\\]\\([^)]*\\)\\s*\\|[^|]*\\|\\s*\\[`([a-z]+)`\\]\\([^)]*\\)\\s*\\|\\s*\\[`([a-z]+)`\\]\\([^)]*\\)\\s*\\|")
+// classTableClassCell matches the FIRST cell only: a backticked class name
+// linked to an in-document anchor. It answers "is this class documented at
+// all", and it matches a row whose later columns are still prose.
+var classTableClassCell = regexp.MustCompile("(?m)^\\|\\s*\\[`([A-Za-z]+)`\\]\\(#[^)]*\\)\\s*\\|.*$")
+
+// packageLink matches a backticked package name linked to a relative path,
+// wherever one appears in a class-table row. It answers the narrower question:
+// of the packages a row actually NAMES, does each exist? A row that names none
+// is not checked, because a column reading "lands with the harness" points a
+// reader at the truth rather than at a missing directory.
+var packageLink = regexp.MustCompile("\\[`([a-z]+)`\\]\\((\\.\\./[^)]*)\\)")
 
 var backtickedName = regexp.MustCompile("`([A-Za-z]+)`")
 
@@ -77,7 +90,7 @@ func readContractDoc(t *testing.T) string {
 // the document names but the SDK does not publish is a manifest that will be
 // refused before a host loads anything.
 func TestContractDocClassTableMatchesTheClassSet(t *testing.T) {
-	rows := classTableRow.FindAllStringSubmatch(readContractDoc(t), -1)
+	rows := classTableClassCell.FindAllStringSubmatch(readContractDoc(t), -1)
 	if len(rows) == 0 {
 		t.Fatalf("%s: found no class-table rows — either the table was removed or its shape "+
 			"changed and this gate silently stopped checking anything. Fix the pattern, do not "+
@@ -105,20 +118,33 @@ func TestContractDocClassTableMatchesTheClassSet(t *testing.T) {
 // conformance harness the table names is a real directory. A row pointing at a
 // package that does not exist reads as authoritative and sends a reader nowhere.
 func TestContractDocClassTablePackagesExist(t *testing.T) {
-	rows := classTableRow.FindAllStringSubmatch(readContractDoc(t), -1)
+	rows := classTableClassCell.FindAllStringSubmatch(readContractDoc(t), -1)
 	if len(rows) == 0 {
 		t.Fatalf("%s: found no class-table rows; see the sibling test", contractDoc)
 	}
 
+	var checked int
 	for _, r := range rows {
-		class, contractPkg, harnessPkg := r[1], r[2], r[3]
-		for _, pkg := range []string{contractPkg, harnessPkg} {
+		class, line := r[1], r[0]
+		for _, link := range packageLink.FindAllStringSubmatch(line, -1) {
+			pkg := link[1]
+			checked++
 			info, err := os.Stat(pkg)
 			if err != nil || !info.IsDir() {
 				t.Errorf("%s: class %s names package %q, which is not a directory in this repo",
 					contractDoc, class, pkg)
 			}
 		}
+	}
+
+	// A class whose row names no package at all is legitimate while its
+	// contract or harness is still landing. A table where NOTHING names a
+	// package is not — it means the link shape changed and this check went
+	// quiet.
+	if checked == 0 {
+		t.Fatalf("%s: no class row names a package at all, so this check verified nothing. "+
+			"The link shape probably changed; fix the pattern rather than deleting the test.",
+			contractDoc)
 	}
 }
 
