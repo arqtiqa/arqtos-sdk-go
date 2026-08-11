@@ -11,20 +11,43 @@ contract method returns errors in.
 | [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
 | [`CodeCI`](#the-codeci-contract) | a code host's PR/CI surface | [`codeci`](../codeci/codeci.go) | [`codeciconform`](../codeciconform/) |
 | [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
+| [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | ⏳ landing with the contract package | ⏳ landing with `authconform` |
 
 `CredentialLoader` and `Roster` are implemented by **native** (in-process,
 compiled into the host) connectors, and both are also implemented by
 **out-of-process** (Track-B) connectors — see
 [Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract).
-`CodeCI` and `Tracker` are native-only today: neither carries a `.proto` or a
-Track-B wire binding, the same position `Roster` and `CredentialLoader` each
-started from before their own wire protocol landed as a separate piece of work.
+`CodeCI`, `Tracker` and `Authenticator` are native-only today: none carries a
+`.proto` or a Track-B wire binding, the same position `Roster` and
+`CredentialLoader` each started from before their own wire protocol landed as a
+separate piece of work.
 
 The set of classes is **closed**: `connector.Classes()` is the whole list,
 `Class.Valid()` rejects anything outside it, and the `connector.yml`
 `implements` enum is *derived* from that same list rather than restating it — so
 a class the SDK knows is always declarable in a manifest, and a class it does
 not know is refused before a host loads anything.
+
+## The `Authenticator` contract
+
+⚠️ **The class is declarable; its contract package is not published yet.** This
+section is the placeholder the class table links to, and it will be replaced by
+the method-by-method contract when the `authenticator` package lands.
+
+What is settled and will not change when it does:
+
+- The class establishes **who is driving this session**, interactively and
+  verifiably. It is deliberately distinct from `Roster`, which reads a directory
+  with a service credential and answers *who exists*. A failed directory read is
+  a stale roster; a failed authentication is **a session that must not start**.
+- A verification failure is a **typed error, never `Authenticated: false`**. An
+  unverified assertion is not a smaller answer — it is an attacker-supplied one.
+- The capability vocabulary is **empty at v1**, deliberately. A device-code
+  path, a machine-principal path, a refresh path and a step-up path were each
+  identified and not added, because a capability nothing gates on is the
+  speculative feature flag this SDK's capability documentation argues against.
+  The manifest closes the vocabulary against that empty set today, so a
+  capability declared for this class is refused.
 
 ## The base contract
 

@@ -49,6 +49,17 @@ import (
 // the exact defect this file exists to catch. TestClassContractMapCoversEveryClass
 // below is the guard: it fails if the map and connector.Classes() disagree, so a
 // new class cannot be silently skipped by every check here.
+// An entry with an empty dir declares the class PENDING: published in the
+// closed set, with its contract package still landing. That state is real —
+// the manifest's implements enum derives from the class set, so a class must
+// be published before a harness can compile a check against it — and the
+// alternative was a circular dependency in which neither could land first.
+//
+// ⚠️ Pending is not a hiding place. TestClassContractMapCoversEveryClass still
+// requires an explicit entry, so a new class cannot be skipped silently, and
+// TestPendingClassesHaveNoContractPackageYet fails if a "pending" class turns
+// out to have a package on disk — which would be a landed contract quietly
+// exempted from every operation check.
 var classContracts = map[connector.Class]struct {
 	dir   string
 	iface string
@@ -57,6 +68,26 @@ var classContracts = map[connector.Class]struct {
 	connector.ClassRoster:           {"roster", "Roster"},
 	connector.ClassCodeCI:           {"codeci", "CodeCI"},
 	connector.ClassTracker:          {"tracker", "Tracker"},
+	connector.ClassAuthenticator:    {"", ""}, // pending — the contract package lands next
+}
+
+// TestPendingClassesHaveNoContractPackageYet is the anti-abuse guard on the
+// pending marker above: the moment a pending class's package exists, the marker
+// is stale and its operations are going unchecked.
+func TestPendingClassesHaveNoContractPackageYet(t *testing.T) {
+	for class, c := range classContracts {
+		if c.dir != "" {
+			continue
+		}
+		for _, candidate := range []string{strings.ToLower(string(class)), string(class)} {
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				t.Errorf("class %s is marked pending in classContracts, but %q exists. "+
+					"Its contract has landed and its operations are checked by nothing — "+
+					"replace the pending marker with the package and interface names.",
+					class, candidate)
+			}
+		}
+	}
 }
 
 // TestClassContractMapCoversEveryClass keeps the map above honest. Without it,
@@ -147,6 +178,11 @@ func TestContractDocDocumentsEveryClassOperation(t *testing.T) {
 	text := string(doc)
 
 	for class, c := range classContracts {
+		if c.dir == "" {
+			// Pending: no contract package to read operations from yet. The
+			// marker's honesty is enforced by TestPendingClassesHaveNoContractPackageYet.
+			continue
+		}
 		for _, method := range interfaceMethods(t, c.dir, c.iface) {
 			// Two documentation styles are both accepted, because the document
 			// genuinely uses both:

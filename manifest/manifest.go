@@ -93,6 +93,22 @@ var classCapabilities = map[connector.Class]connector.Capabilities{
 	connector.ClassRoster:           roster.KnownCapabilities(),
 	connector.ClassCodeCI:           codeci.KnownCapabilities(),
 	connector.ClassTracker:          tracker.KnownCapabilities(),
+
+	// Authenticator's vocabulary is EMPTY at v1, deliberately: the flow is
+	// operator-interactive only, and a device-code path, a machine-principal
+	// path, a refresh path and a step-up path were each identified and NOT
+	// added, because a capability nothing gates on is the speculative feature
+	// flag this SDK's capability documentation argues against.
+	//
+	// An empty registration is not the same as no registration. Registered-and-
+	// empty CLOSES the vocabulary — every capability is refused — whereas an
+	// absent entry passes them through unchecked. Empty is the correct value
+	// here, not a placeholder.
+	//
+	// ⚠️ It is spelled inline rather than as authenticator.KnownCapabilities()
+	// only because the contract package does not exist yet. When it lands, this
+	// entry becomes that call like its four siblings, and the literal goes.
+	connector.ClassAuthenticator: connector.Capabilities{},
 }
 
 // envNameRE matches a bare environment-variable NAME (e.g. INFISICAL_TOKEN):

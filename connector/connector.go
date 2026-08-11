@@ -29,6 +29,14 @@ const (
 	// lifecycle. It is batch-first and addresses everything by NAME, because
 	// no backend identity may cross the boundary. See the tracker package.
 	ClassTracker Class = "Tracker"
+	// ClassAuthenticator establishes WHO IS DRIVING THIS SESSION, interactively
+	// and verifiably, against an identity provider. It is deliberately distinct
+	// from ClassRoster: a Roster reads a directory with a service credential and
+	// answers "who exists"; this class asks "who is here right now, and did they
+	// prove it". They differ in credential, in lifetime and in failure mode — a
+	// failed directory read is a stale roster, whereas a failed authentication
+	// is a session that must not start. See the authenticator package.
+	ClassAuthenticator Class = "Authenticator"
 	// ClassRecordStore, ClassCodeHost, ... land with their designs.
 )
 
@@ -42,6 +50,7 @@ var classes = []Class{
 	ClassRoster,
 	ClassCodeCI,
 	ClassTracker,
+	ClassAuthenticator,
 }
 
 // Classes returns the closed set of connector classes, sorted, as a copy. A
