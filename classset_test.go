@@ -254,3 +254,65 @@ func TestConnectorClassSetCannotBeHalfAdded(t *testing.T) {
 		}
 	})
 }
+
+// TestConnectorClassSetIsExactlyTheRegistry pins Classes() to an exact list, so
+// that adding or removing a class cannot happen without a deliberate edit here.
+//
+// # Why an exact list and not a property
+//
+// The sibling test above proves the set is internally COHERENT — every published
+// class validates, and a handful of near-miss names are refused. It cannot prove
+// the set is CORRECT, because nothing in this repository knows which classes are
+// supposed to exist. That list is maintained as a registry outside this module,
+// alongside each class's design and the ones whose names are reserved but not yet
+// landed.
+//
+// ⚠️ So this is a TRIPWIRE, not a derivation, and the distinction is worth being
+// honest about: it cannot read the registry, so it cannot detect the registry
+// drifting away from the code. What it does guarantee is that the code cannot
+// drift away silently — a class added or removed turns this red, and the person
+// holding the red test is the one who knows whether the registry needs updating.
+//
+// That asymmetry is deliberate. The failure this guards against is real and has
+// happened: three separate places once named connector classes and no two agreed,
+// with no test comparing them, so nothing could report the drift.
+//
+// ⚠️ And it happened again on this test's FIRST run. The registry being written at
+// the time listed four live classes; Classes() returned five. ClassAuthenticator
+// was live, with its own package and conformance harness, and the registry omitted
+// it — because that list had been derived from the provider backlog, and this class
+// exists to serve a host requirement rather than because a vendor arrived. An
+// enumeration derived from wanted providers is incomplete by construction. This
+// test is the thing that said so.
+//
+// # When this test goes red
+//
+// Update the list AND the registry entry for the class, in the same change. Do not
+// update only the list — that converts this test from a tripwire into a rubber
+// stamp, and the next reader will believe a check happened that did not.
+func TestConnectorClassSetIsExactlyTheRegistry(t *testing.T) {
+	// Sorted, because Classes() sorts and an unsorted literal would make this test
+	// fail for a reason that has nothing to do with the set's contents.
+	want := []connector.Class{
+		connector.ClassAuthenticator,
+		connector.ClassCodeCI,
+		connector.ClassCredentialLoader,
+		connector.ClassRoster,
+		connector.ClassTracker,
+	}
+	got := connector.Classes()
+
+	if !slices.Equal(got, want) {
+		t.Errorf("connector.Classes() = %v, want %v\n"+
+			"A class was added or removed. Update the registry entry for it in the same change as this "+
+			"list — including its design and, if it is not yet implemented, the fact that it is reserved "+
+			"rather than live. Updating only this list makes the check vacuous.", got, want)
+	}
+
+	// The count is asserted separately so a swap — one class removed and another
+	// added — cannot pass by keeping the length the same while slices.Equal is
+	// somehow satisfied by a future change to either side's ordering rule.
+	if len(got) != len(want) {
+		t.Errorf("connector.Classes() has %d classes, want %d", len(got), len(want))
+	}
+}
