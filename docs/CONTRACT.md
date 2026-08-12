@@ -11,7 +11,7 @@ contract method returns errors in.
 | [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
 | [`CodeCI`](#the-codeci-contract) | a code host's PR/CI surface | [`codeci`](../codeci/codeci.go) | [`codeciconform`](../codeciconform/) |
 | [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
-| [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | [`authenticator`](../authenticator/authenticator.go) | ⏳ landing with `authconform` |
+| [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | [`authenticator`](../authenticator/authenticator.go) | [`authconform`](../authconform/) |
 
 `CredentialLoader` and `Roster` are implemented by **native** (in-process,
 compiled into the host) connectors, and both are also implemented by
