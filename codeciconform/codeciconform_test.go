@@ -50,6 +50,8 @@ type stub struct {
 	createPR     func(ctx context.Context, req codeci.CreatePRRequest) (codeci.PR, error)
 	listPRs      func(ctx context.Context, fullName string, state codeci.PRState) (codeci.Resolution[codeci.PR], error)
 	mergePR      func(ctx context.Context, fullName, prID string, method codeci.MergeMethod) error
+	getPR        func(ctx context.Context, fullName, prID string) (codeci.PR, error)
+	commentPR    func(ctx context.Context, fullName, prID, body string) (string, error)
 	getDiff      func(ctx context.Context, fullName, prID string) (codeci.Resolution[codeci.DiffFile], error)
 	listBranches func(ctx context.Context, fullName string) (codeci.Resolution[codeci.Branch], error)
 	getCheckRuns func(ctx context.Context, fullName, ref string) (codeci.Resolution[codeci.CheckRun], error)
@@ -132,6 +134,27 @@ func (s *stub) MergePR(ctx context.Context, fullName, prID string, method codeci
 		return cerr.New(cerr.KindInvalid, "MergePR", errors.New("refusing to merge a draft"))
 	}
 	return nil
+}
+
+func (s *stub) GetPR(ctx context.Context, fullName, prID string) (codeci.PR, error) {
+	if s.getPR != nil {
+		return s.getPR(ctx, fullName, prID)
+	}
+	if fullName != fixtureRepo {
+		return codeci.PR{}, cerr.New(cerr.KindNotFound, "GetPR", errors.New("no such repo"))
+	}
+	// A typed failure, never a zero PR — the contract's own rule.
+	return codeci.PR{}, cerr.New(cerr.KindNotFound, "GetPR", errors.New("no such PR"))
+}
+
+func (s *stub) CommentPR(ctx context.Context, fullName, prID, body string) (string, error) {
+	if s.commentPR != nil {
+		return s.commentPR(ctx, fullName, prID, body)
+	}
+	if body == "" {
+		return "", cerr.New(cerr.KindInvalid, "CommentPR", errors.New("body is empty"))
+	}
+	return "comment-1", nil
 }
 
 func (s *stub) GetDiff(ctx context.Context, fullName, prID string) (codeci.Resolution[codeci.DiffFile], error) {
@@ -857,6 +880,25 @@ var violators = map[string]func() (codeci.CodeCI, manifest.Doc){
 		}
 		return s, stubManifest()
 	},
+	// Returns a zero PR with a nil error for a request that does not exist — the
+	// exact shape the check exists to catch, and the one that passes every other
+	// check in the harness because nothing else reads GetPR.
+	codeciconform.CheckGetPRUnresolvableIsAFailure: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.getPR = func(context.Context, string, string) (codeci.PR, error) {
+			return codeci.PR{}, nil
+		}
+		return s, stubManifest()
+	},
+	// Posts the empty comment and reports success. The id it returns is what makes
+	// the violation unambiguous: something was created.
+	codeciconform.CheckCommentRefusesEmptyBody: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.commentPR = func(context.Context, string, string, string) (string, error) {
+			return "posted-anyway", nil
+		}
+		return s, stubManifest()
+	},
 	codeciconform.CheckBranchProtectionReported: func() (codeci.CodeCI, manifest.Doc) {
 		s := newStub()
 		s.listBranches = func(context.Context, string) (codeci.Resolution[codeci.Branch], error) {
@@ -1099,5 +1141,66 @@ func TestCloseRefusesUnspecifiedReasonIsDrivenAtAnIssueThatCannotBeClosed(t *tes
 	requireFailed(t, rep, codeciconform.CheckCloseRefusesUnspecifiedReason)
 	if slices.Contains(closedWithoutReason, fixtureOpenIssue) || slices.Contains(closedWithoutReason, fixtureClosedIssue) {
 		t.Fatalf("the guard check was driven at a real fixture (%v); against a connector with no guard that closes a live issue to discover the guard is missing", closedWithoutReason)
+	}
+}
+
+// The tests below assert WHY each new check failed, not merely that it did.
+//
+// ⚠️ They exist because a mutation pass showed the gap. `violators` proves every
+// check has a stub that trips it — but a check can record a violation for the
+// WRONG REASON and that table cannot tell. Removing the nil-error branch from
+// prs/get-unresolvable-is-a-typed-failure still produced a violation, attributed
+// to "unclassified error" instead, and the whole suite stayed green.
+//
+// So each branch gets a stub that reaches only that branch, and the assertion is
+// on the detail string.
+
+func TestGetPRUnresolvable_ZeroPRWithNilErrorIsNamedAsSuch(t *testing.T) {
+	s := newStub()
+	s.getPR = func(context.Context, string, string) (codeci.PR, error) {
+		return codeci.PR{}, nil // the invented-request shape
+	}
+	rep := run(t, s, stubManifest())
+	detail, did := failed(rep, codeciconform.CheckGetPRUnresolvableIsAFailure)
+	if !did {
+		t.Fatalf("a connector that invents a pull request passed the check\n%s", rep)
+	}
+	if !strings.Contains(detail, "succeeded") {
+		t.Errorf("the detail blames the wrong thing — a nil error must be reported as a SUCCESS that should\n"+
+			"not have happened, not as an unclassified error. got: %s", detail)
+	}
+}
+
+func TestGetPRUnresolvable_UnclassifiedErrorIsNamedAsSuch(t *testing.T) {
+	s := newStub()
+	s.getPR = func(context.Context, string, string) (codeci.PR, error) {
+		return codeci.PR{}, errors.New("bare error, no cerr.Kind")
+	}
+	rep := run(t, s, stubManifest())
+	detail, did := failed(rep, codeciconform.CheckGetPRUnresolvableIsAFailure)
+	if !did {
+		t.Fatalf("an unclassified failure passed the check; a host cannot act on it\n%s", rep)
+	}
+	if !strings.Contains(detail, "unclassified") {
+		t.Errorf("the detail must name the error as unclassified, or the two failure shapes are\n"+
+			"indistinguishable in a report. got: %s", detail)
+	}
+}
+
+func TestCommentRefusesEmptyBody_PostedThenErroredIsCaught(t *testing.T) {
+	s := newStub()
+	s.commentPR = func(context.Context, string, string, string) (string, error) {
+		// The shape a check looking only at err would miss: something WAS posted.
+		return "posted-then-errored", cerr.New(cerr.KindInvalid, "CommentPR", errors.New("body is empty"))
+	}
+	rep := run(t, s, stubManifest())
+	detail, did := failed(rep, codeciconform.CheckCommentRefusesEmptyBody)
+	if !did {
+		t.Fatalf("a connector that posted an empty comment and THEN refused passed the check — the refusal\n"+
+			"does not undo the comment\n%s", rep)
+	}
+	if !strings.Contains(detail, "comment id") {
+		t.Errorf("the detail must say a comment id came back, which is what proves something was posted.\n"+
+			"got: %s", detail)
 	}
 }
