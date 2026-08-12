@@ -160,6 +160,23 @@ const (
 	// thing the refusal exists to protect. That is the same always-zero hazard
 	// the branch-protection field carries, on the other side of the same struct.
 	CheckDraftIsReported = "prs/draft-is-reported"
+
+	// CheckGetPRUnresolvableIsAFailure drives the rule that a pull/merge
+	// request which cannot be resolved is a TYPED FAILURE and never a zero PR.
+	//
+	// ⚠️ The zero value is the whole hazard: it is a syntactically valid
+	// pull/merge request numbered 0 with an unset state, so a caller that acts
+	// on it operates on nothing while believing it read something. A connector
+	// that returns (PR{}, nil) passes every other check in this harness.
+	CheckGetPRUnresolvableIsAFailure = "prs/get-unresolvable-is-a-typed-failure"
+
+	// CheckCommentRefusesEmptyBody drives the guard that an empty comment body
+	// is refused BEFORE anything is posted.
+	//
+	// The alternative is an empty comment on someone's change — an artefact a
+	// human then has to find and delete — which is the same reasoning CreatePR
+	// applies to a request with no title.
+	CheckCommentRefusesEmptyBody = "prs/comment-refuses-empty-body"
 	// CheckIdentity covers WhoAmI answering with an authenticated identity
 	// carrying a non-empty login, or failing with a classified error. An empty
 	// login reported as a success is refused: a host publishes this answer as
@@ -418,6 +435,8 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 	checkMergeRefusesUnspecifiedMethod(ctx, &rep, c, opts)
 	checkMergeRefusesDraft(ctx, &rep, c, opts)
 	checkCreateRefusesIncompleteRequest(ctx, &rep, c, opts)
+	checkGetPRUnresolvableIsAFailure(ctx, &rep, c, opts)
+	checkCommentRefusesEmptyBody(ctx, &rep, c, opts)
 	checkBranchProtectionReported(ctx, &rep, c, opts)
 	checkPRsCarryAURL(ctx, &rep, c, opts)
 	checkDraftIsReported(ctx, &rep, c, opts)
@@ -678,6 +697,58 @@ func checkCreateRefusesIncompleteRequest(ctx context.Context, rep *Report, c cod
 		return
 	}
 	rep.add(CheckCreateRefusesIncompleteRequest, true, fmt.Sprintf("refused: %s", cerr.KindOf(err)))
+}
+
+// checkGetPRUnresolvableIsAFailure asks for a pull/merge request that does not
+// exist and insists the answer is a classified failure.
+//
+// ⚠️ It checks the ERROR and the VALUE, because the two failure shapes are
+// different bugs: returning nil error with a zero PR is a connector that
+// invented a request, and returning an unclassified error is one a host cannot
+// act on without reading a message.
+func checkGetPRUnresolvableIsAFailure(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	pr, err := c.GetPR(ctx, opts.Repo, opts.UnknownPR)
+	if err == nil {
+		rep.add(CheckGetPRUnresolvableIsAFailure, false, fmt.Sprintf(
+			"GetPR(%s, %s) succeeded for a pull/merge request that does not exist, returning ID %q; the zero PR is a "+
+				"valid-looking request numbered 0, so a caller acts on nothing while believing it read something",
+			opts.Repo, opts.UnknownPR, pr.ID))
+		return
+	}
+	if !cerr.Classified(err) {
+		rep.add(CheckGetPRUnresolvableIsAFailure, false, fmt.Sprintf(
+			"GetPR(%s, %s) failed with an unclassified error, so a host cannot act on it without reading the message: %v",
+			opts.Repo, opts.UnknownPR, err))
+		return
+	}
+	rep.add(CheckGetPRUnresolvableIsAFailure, true, fmt.Sprintf("refused: %s", cerr.KindOf(err)))
+}
+
+// checkCommentRefusesEmptyBody drives the empty-body guard.
+//
+// ⚠️ It asserts the refusal came back with no comment identifier, because a
+// connector that posted an empty comment and then reported an error would pass a
+// check that looked only at err.
+func checkCommentRefusesEmptyBody(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	id, err := c.CommentPR(ctx, opts.Repo, opts.OpenPR, "")
+	if err == nil {
+		rep.add(CheckCommentRefusesEmptyBody, false, fmt.Sprintf(
+			"CommentPR(%s, %s, \"\") posted an empty comment (id %q); an empty comment on someone's change is an "+
+				"artefact a human has to find and delete", opts.Repo, opts.OpenPR, id))
+		return
+	}
+	if id != "" {
+		rep.add(CheckCommentRefusesEmptyBody, false, fmt.Sprintf(
+			"CommentPR(%s, %s, \"\") returned an error AND a comment id %q, so something was posted before the refusal",
+			opts.Repo, opts.OpenPR, id))
+		return
+	}
+	if !cerr.Classified(err) {
+		rep.add(CheckCommentRefusesEmptyBody, false, fmt.Sprintf(
+			"CommentPR(%s, %s, \"\") refused with an unclassified error: %v", opts.Repo, opts.OpenPR, err))
+		return
+	}
+	rep.add(CheckCommentRefusesEmptyBody, true, fmt.Sprintf("refused: %s", cerr.KindOf(err)))
 }
 
 // checkBranchProtectionReported drives codeci.Branch.Protected in BOTH

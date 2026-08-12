@@ -904,6 +904,8 @@ closed.
 | `CreatePR(ctx, req CreatePRRequest) (PR, error)` | Opens the pull/merge request described by `req` — `{FullName, Branch, Base, Title, Body, Draft}` — including a **draft** when `req.Draft` is set. MUST call `req.Validate()` before anything else and return its error unchanged: a struct lets a required field be forgotten where a positional argument forced an explicit `""`. |
 | `ListPRs(ctx, fullName, state) (Resolution[PR], error)` | Every pull/merge request in `state`, paged to completion. `state` must be `PRState.UsableAsFilter()`; `PRStateUnspecified` is `cerr.KindInvalid`. |
 | `MergePR(ctx, fullName, prID, method) error` | Merges `prID`. MUST validate `method.Specified()` **before** doing anything else, and MUST refuse a pull/merge request currently reported as a draft — both `cerr.KindInvalid`, both before any merge is attempted. |
+| `GetPR(ctx, fullName, prID) (PR, error)` | One pull/merge request as the host now holds it. ⚠️ An unresolvable `prID` is a TYPED FAILURE, never a zero `PR`: the zero value is a syntactically valid request numbered 0 with an unset state, and a caller acting on it operates on nothing while believing it read something. |
+| `CommentPR(ctx, fullName, prID, body) (commentID string, err error)` | Posts `body` on `prID` and returns the identifier the host assigned. The identifier is what makes the comment addressable afterwards — a connector that discards it forces callers to re-read the thread to find their own comment. An empty `body` is `cerr.KindInvalid`, refused **before** anything is posted. |
 | `GetDiff(ctx, fullName, prID) (Resolution[DiffFile], error)` | Every changed file in `prID`, paged to completion. A real pull/merge request always has at least one changed file, so `EmptyList` is never a legitimate answer here. |
 | `ListBranches(ctx, fullName) (Resolution[Branch], error)` | Every branch, paged to completion. |
 | `GetCheckRuns(ctx, fullName, ref) (Resolution[CheckRun], error)` | Every check/status entry against `ref`. A ref with no CI configured is a genuine, expressible empty result. |
@@ -1085,6 +1087,8 @@ if err := rep.Err(); err != nil {
 | `merge/refuses-draft` | `MergePR(Repo, DraftPR, MergeMethodMerge)` is refused, **without merging** `DraftPR` |
 | `create/refuses-an-incomplete-request` | `CreatePR` with a `CreatePRRequest` carrying no branch, base or title is refused with a classified error, **without opening anything** |
 | `branches/protection-is-reported` | `ListBranches` reports `Protected: true` for `ProtectedBranch` **and** `false` for `UnprotectedBranch` — both directions, so neither constant passes |
+| `prs/get-unresolvable-is-a-typed-failure` | `GetPR(Repo, UnknownPR)` fails with a classified `cerr.Kind`. ⚠️ Both the error **and** the value are checked: `(PR{}, nil)` is a connector that invented a request numbered 0, and it passes every other check here |
+| `prs/comment-refuses-empty-body` | `CommentPR(Repo, OpenPR, "")` is refused with a classified error **and** returns no comment id, so a connector that posted first and refused afterwards is caught |
 | `prs/carry-a-url` | every `PR` from `ListPRs(Repo)` carries a non-empty `URL` |
 | `identity/answers-with-a-login` | `WhoAmI()` reports an authenticated identity with a non-empty login, or fails with a classified error. An empty login reported as a success is **refused** |
 | `health/answers` | `Health()` reports a status or a classified failure |

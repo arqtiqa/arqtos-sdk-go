@@ -886,6 +886,38 @@ type CodeCI interface {
 	// be undone.
 	MergePR(ctx context.Context, fullName, prID string, method MergeMethod) error
 
+	// GetPR returns prID as the host now holds it.
+	//
+	// It completes the change surface this class owns. Before 2026-08-12 a
+	// caller could open, list, diff and merge through this class but had to
+	// reach a DIFFERENT class to read one pull/merge request back — the code
+	// host, which also carried open, list and comment under a second set of
+	// names. Neither class was a subset of the other, so the split was a
+	// decision to make rather than a duplication to tidy, and it was made in
+	// this class's favour: a code host owns repositories and git, and a change
+	// proposal is not either of those.
+	//
+	// ⚠️ An unresolvable prID is a typed FAILURE, never a zero PR. The zero
+	// value is a syntactically valid pull/merge request whose number is 0 and
+	// whose state is unset, and a caller that acts on it operates on nothing
+	// while believing it read something.
+	GetPR(ctx context.Context, fullName, prID string) (PR, error)
+
+	// CommentPR posts body as a comment on prID and returns the identifier the
+	// host assigned it.
+	//
+	// The returned identifier is what makes a comment addressable afterwards —
+	// to be edited, resolved, or recognised as one this connector already
+	// posted. A connector that discards it forces every caller to re-read the
+	// whole thread to find its own comment, and to guess when two comments have
+	// the same body.
+	//
+	// ⚠️ An empty body is refused with cerr.KindInvalid before anything is
+	// posted. The alternative is an empty comment on someone's change, which is
+	// an artefact a human then has to find and delete — the same reasoning
+	// [CreatePR] applies to a request with no title.
+	CommentPR(ctx context.Context, fullName, prID, body string) (commentID string, err error)
+
 	// GetDiff returns every changed file in prID, paging until the host
 	// reports no further page.
 	//

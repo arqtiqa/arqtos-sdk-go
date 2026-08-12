@@ -305,6 +305,26 @@ func (f *fakeCodeCI) MergePR(_ context.Context, _, prID string, method codeci.Me
 	return nil
 }
 
+func (f *fakeCodeCI) GetPR(_ context.Context, _, prID string) (codeci.PR, error) {
+	p, ok := f.prs[prID]
+	if !ok {
+		// A typed failure, never a zero PR: the zero value is a valid-looking
+		// pull request numbered 0, and a caller acting on it operates on nothing.
+		return codeci.PR{}, cerr.New(cerr.KindNotFound, "GetPR", errors.New("no such PR"))
+	}
+	return p, nil
+}
+
+func (f *fakeCodeCI) CommentPR(_ context.Context, _, prID, body string) (string, error) {
+	if body == "" {
+		return "", cerr.New(cerr.KindInvalid, "CommentPR", errors.New("body is empty"))
+	}
+	if _, ok := f.prs[prID]; !ok {
+		return "", cerr.New(cerr.KindNotFound, "CommentPR", errors.New("no such PR"))
+	}
+	return "comment-" + prID, nil
+}
+
 func (f *fakeCodeCI) GetDiff(_ context.Context, _, prID string) (codeci.Resolution[codeci.DiffFile], error) {
 	files, ok := f.diffs[prID]
 	if !ok || len(files) == 0 {
