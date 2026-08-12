@@ -10,6 +10,7 @@ contract method returns errors in.
 | [`CredentialLoader`](#credentialloader-methods) | a secret store | [`credential`](../credential/credential.go) | [`credconform`](../credconform/) |
 | [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
 | [`CodeCI`](#the-codeci-contract) | a code host's PR/CI surface | [`codeci`](../codeci/codeci.go) | [`codeciconform`](../codeciconform/) |
+| [`CodeHost`](#the-codehost-contract) | a code host's repository and git surface | [`codehost`](../codehost/codehost.go) | [`codehostconform`](../codehostconform/) |
 | [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
 | [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | [`authenticator`](../authenticator/authenticator.go) | [`authconform`](../authconform/) |
 
@@ -18,9 +19,9 @@ contract method returns errors in.
 **out-of-process** (Track-B) connectors — see
 [Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract).
 
-`CodeCI` and `Tracker` are native-only today: neither carries a `.proto` or a
-Track-B wire binding, the same position the other three each started from before
-their own wire protocol landed as a separate piece of work.
+`CodeCI`, `CodeHost` and `Tracker` are native-only today: none carries a `.proto`
+or a Track-B wire binding, the same position the other three each started from
+before their own wire protocol landed as a separate piece of work.
 
 The set of classes is **closed**: `connector.Classes()` is the whole list,
 `Class.Valid()` rejects anything outside it, and the `connector.yml`
@@ -1117,6 +1118,88 @@ their `.proto`/`plugin`/`transport` wiring as a separate, later piece of work.
 conformance harness that any native Go implementation — GitHub, GitLab, a
 third code host — compiles against today. Out-of-process support is a
 follow-on Story, not a prerequisite for this one.
+
+## The `CodeHost` contract
+
+`CodeHost` adapts a code host's **repository and git** surface. It is implemented
+by [`codehost`](../codehost/codehost.go) and checked by
+[`codehostconform`](../codehostconform/).
+
+### Why it is separate from `CodeCI`
+
+Same vendor, different contract. `CodeHost` owns repositories and git;
+[`CodeCI`](#the-codeci-contract) owns the change-proposal surface — opening,
+reading, listing, commenting on and merging a pull or merge request, its diff,
+and CI check and workflow-run state.
+
+The split was **ruled on 2026-08-12**, and it was a decision rather than a
+duplication to tidy: before it, both classes carried part of the change-request
+surface under different names — this one could open and comment but not merge,
+`CodeCI` could merge and diff but not read one back — so **neither was a subset
+of the other**. It was resolved in `CodeCI`'s favour, because a code host owns
+repositories and git and a change proposal is neither of those, leaving this
+class at eleven operations.
+
+Splitting this way lets an org pair either half with a different backend.
+
+⚠️ **`ListBranches` is deliberately in BOTH classes.** Every class must be
+self-sufficient — a `CodeCI` connector cannot call a `CodeHost` one — so each
+carries the branch read it needs. Two classes needing the same **fact**
+independently is legitimate; two classes owning the same **responsibility** was
+the defect the ruling removed.
+
+### `CodeHost` methods
+
+`CodeHost` embeds `connector.Connector` and adds eight required operations:
+
+| Method | Semantics |
+|---|---|
+| `RepoExists(ctx, fullName) (bool, error)` | Whether `fullName` (`<owner>/<name>`) is reachable with the identity this connector holds. ⚠️ The bool is meaningful **only** when the error is nil: `false` means the host answered that it is not there, and a failure to look is the error, **never** `false`. |
+| `GetRepo(ctx, fullName) (Repo, error)` | The current state of an existing repository. One that does not exist is `cerr.KindNotFound`. |
+| `ListRepos(ctx, owner) (Resolution[Repo], error)` | Every repository owned by `owner` — an org or a user — with topics populated. MUST page until the host reports no further pages; a read that stops early is a typed failure, **not a shorter list**. |
+| `CreateRepo(ctx, opts) (Repo, error)` | Creates a repository and returns it as the host now holds it, including any topics applied. |
+| `SetTopics(ctx, fullName, topics) error` | **Replaces** the repository's topic labels with `topics`. |
+| `CloneRepo(ctx, url, dest) error` | Clones the repository at `url` into `dest` over HTTPS. ⚠️ The token reaches git for the duration of that one command and no longer: not in the process's arguments, not written to any git config, not left in an OS keychain. **A connector that cannot promise that must not implement this operation.** |
+| `PushBranch(ctx, fullName, localDir, branch) error` | Pushes `branch` from the working tree at `localDir` to its origin. `fullName` identifies the repository for connectors that push through an API rather than through git. |
+| `ListBranches(ctx, fullName) (Resolution[Branch], error)` | Every branch of the named repository, paging until the host reports no further pages. |
+
+Both list operations return a `Resolution`, so a partial read cannot be reported
+as a smaller success — the same fail-closed property described under
+[`CredentialLoader` methods](#credentialloader-methods). The single-item reads
+return values, because a resolution carrying one item would be the same
+conflation in another shape.
+
+### `CodeHost` capabilities and optional operations
+
+Three operations live behind capabilities rather than in the interface. A host
+type-asserts for them, and `codehostconform.Run` fails a connector that declares
+one without implementing it **in both directions** — declared-and-absent leaves
+the host calling into nothing, and implemented-but-undeclared is behaviour the
+host will never reach for, because it reads the manifest before it loads
+anything.
+
+| Capability | Interface | Operation |
+|---|---|---|
+| `file_read` | `FileReader` | `ReadFile(ctx, fullName, path) ([]byte, error)` — `path`'s bytes from the **default** branch, no clone. A reachable repository that does not carry `path` is `cerr.KindNotFound`; ⚠️ every other failure is a failure to **look** and must carry its own kind, or a caller reads "could not look" as "not there" and concludes a file was deleted when a token expired. |
+| `webhooks` | `WebhookRegistrar` | `WebhookRegister(ctx, fullName, url, events) error` — registers `url` as a destination for the named events. |
+| `runner_tokens` | `RunnerTokenMinter` | `RunnerToken(ctx, fullName) (token, expiresAt, error)` — mints a registration token for a self-hosted CI runner and reports when it expires. ⚠️ The token is secret material with a short life: a caller hands it to the runner it is registering and keeps no copy. **This contract does not admit storing it.** |
+
+A fourth capability, `native_review`, declares that review happens **on the code
+host** rather than in arqtos. It carries **no operation** and is checked only for
+membership in this class's vocabulary — the review operations themselves belong
+to `CodeCI`.
+
+### This class graduated into the SDK
+
+`codehost` and `codehostconform` lived in `arqtos-connectors/connectorkit` until
+**2026-08-12**, when the class joined `connector.Classes()`. While it sat
+outside, `Class("CodeHost").Valid()` returned false and the class validated its
+own manifests; a connector could nonetheless declare `implements: CodeHost` and
+ship, because `connectorkit` validated it instead. Graduation closed that gap:
+the capability vocabulary is registered centrally in
+[`manifest`](../manifest/manifest.go) like every sibling's, so
+`manifest.Doc.Validate` now closes it, and the harness entry point is `Run`
+rather than the `Conform` it was named outside.
 
 ## The `Tracker` contract
 
