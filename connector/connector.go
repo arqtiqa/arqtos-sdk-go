@@ -37,7 +37,19 @@ const (
 	// failed directory read is a stale roster, whereas a failed authentication
 	// is a session that must not start. See the authenticator package.
 	ClassAuthenticator Class = "Authenticator"
-	// ClassRecordStore, ClassCodeHost, ... land with their designs.
+	// ClassCodeHost is a code host's REPOSITORY and GIT surface — repository
+	// existence, lookup, listing and creation, topics, clone, push and branch
+	// listing. It is deliberately distinct from [ClassCodeCI], which owns the
+	// change-proposal surface: both classes once carried open/list/comment on
+	// change requests under different names, and neither was a subset of the
+	// other, so the overlap was a decision rather than a duplication to tidy.
+	// It was resolved in CodeCI's favour on 2026-08-12 — a code host owns
+	// repositories and git, and a change proposal is neither of those — leaving
+	// this class at eleven operations. Same vendor, different contract, so an
+	// org can pair either half with a different backend. See the codehost
+	// package.
+	ClassCodeHost Class = "CodeHost"
+	// ClassRecordStore, ... land with their designs.
 )
 
 // classes is the single source of truth for the closed set of connector
@@ -51,6 +63,7 @@ var classes = []Class{
 	ClassCodeCI,
 	ClassTracker,
 	ClassAuthenticator,
+	ClassCodeHost,
 }
 
 // Classes returns the closed set of connector classes, sorted, as a copy. A

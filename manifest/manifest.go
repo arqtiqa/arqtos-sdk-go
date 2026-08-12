@@ -21,6 +21,7 @@ import (
 
 	"github.com/arqtiqa/arqtos-sdk-go/authenticator"
 	"github.com/arqtiqa/arqtos-sdk-go/codeci"
+	"github.com/arqtiqa/arqtos-sdk-go/codehost"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/ref"
@@ -96,6 +97,13 @@ var classCapabilities = map[connector.Class]connector.Capabilities{
 	connector.ClassTracker:          tracker.KnownCapabilities(),
 
 	connector.ClassAuthenticator: authenticator.KnownCapabilities(),
+
+	// ClassCodeHost registered on 2026-08-12, when the class graduated in from
+	// arqtos-connectors. Until then its vocabulary was closed by a
+	// codehost.ValidateManifest in that repository, because this map could not
+	// name a class the SDK did not publish — which is exactly the split this
+	// entry removes.
+	connector.ClassCodeHost: codehost.KnownCapabilities(),
 }
 
 // envNameRE matches a bare environment-variable NAME (e.g. INFISICAL_TOKEN):

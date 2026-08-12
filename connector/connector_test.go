@@ -55,6 +55,9 @@ func TestClassesIsTheClosedSetAndEveryConstantIsInIt(t *testing.T) {
 		connector.ClassCredentialLoader,
 		connector.ClassRoster,
 		connector.ClassCodeCI,
+		// ClassCodeHost graduated in from arqtos-connectors on 2026-08-12,
+		// carrying the narrowed eleven-operation contract.
+		connector.ClassCodeHost,
 		connector.ClassTracker,
 		connector.ClassAuthenticator,
 	}

@@ -241,7 +241,16 @@ func TestConnectorClassSetCannotBeHalfAdded(t *testing.T) {
 		// enum has plausibly been loosened: a class reserved in connector.go's
 		// trailing comment but never landed, a miscasing, a near-miss spelling,
 		// and the empty class a manifest that omits the field produces.
-		for _, name := range []connector.Class{"RecordStore", "CodeHost", "tracker", "TRACKER", "Trackers", ""} {
+		// ⚠️ "CodeHost" was in this list and is NOT any more: it became a real
+		// class on 2026-08-12 when it graduated into the SDK, at which point it
+		// stopped being able to serve as a must-be-refused probe. This is the
+		// test's own instruction below being followed — "pick another name" —
+		// rather than the assertion being weakened. "RecordStore" still covers
+		// the reserved-but-never-landed shape CodeHost was paired with, and
+		// "codehost" replaces it with a stronger probe than the name it retired:
+		// the miscasing of a class that IS real, which is what a manifest author
+		// writing the package name instead of the class name produces.
+		for _, name := range []connector.Class{"RecordStore", "codehost", "tracker", "TRACKER", "Trackers", ""} {
 			if slices.Contains(published, name) {
 				t.Fatalf("%q is now a real class, so it cannot serve as the closed-enum probe; pick another name", name)
 			}
@@ -296,6 +305,13 @@ func TestConnectorClassSetIsExactlyTheRegistry(t *testing.T) {
 	want := []connector.Class{
 		connector.ClassAuthenticator,
 		connector.ClassCodeCI,
+		// ClassCodeHost joined on 2026-08-12, graduating in from
+		// arqtos-connectors/connectorkit/codehost carrying the narrowed
+		// eleven-operation contract. The registry entry in
+		// arqtos-4-code-architecture.md was updated in the same change, per the
+		// instruction above — including removing the dated one-release exemption
+		// that let the row read as live while Classes() omitted it.
+		connector.ClassCodeHost,
 		connector.ClassCredentialLoader,
 		connector.ClassRoster,
 		connector.ClassTracker,
