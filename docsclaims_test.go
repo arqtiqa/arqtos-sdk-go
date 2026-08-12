@@ -167,13 +167,25 @@ func TestContractDocNativeOnlyClaimMatchesTheProtoFiles(t *testing.T) {
 			contractDoc, nativeOnlyMarker)
 	}
 
-	// The claim is the class names immediately BEFORE the marker. Everything
-	// after it is the contrasting half of the same sentence — it names the
-	// classes that DO have a wire binding — so reading the whole paragraph
+	// The claim is the class names before the marker, IN ITS OWN PARAGRAPH.
+	//
+	// Everything after the marker is the contrasting half of the same sentence
+	// — it names the classes that DO have a wire binding — so reading forward
 	// would collect both sides and the check would always agree with itself.
+	//
+	// ⚠️ The contrast can also sit BEFORE, and a fixed-size lookback does not
+	// survive that. This was measured: when Authenticator gained a wire
+	// protocol, the sentence naming the three classes that HAVE one landed in
+	// the preceding paragraph, drifted inside a 200-character window, and made
+	// the check report a class as claimed-native-only that the document says
+	// the opposite about. It then passed again only because an edit pushed that
+	// sentence ~30 characters further away — a green that depended on
+	// line-wrapping.
+	//
+	// The paragraph boundary is the real unit of the claim, so scope to it.
 	lookback := doc[:idx]
-	if len(lookback) > 200 {
-		lookback = lookback[len(lookback)-200:]
+	if para := strings.LastIndex(lookback, "\n\n"); para >= 0 {
+		lookback = lookback[para+2:]
 	}
 
 	var claimedNativeOnly []connector.Class

@@ -49,6 +49,10 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/manifest"
 )
 
+// TransportUnrecorded is what [Run] records: it was handed an
+// authenticator.Authenticator and cannot know what is behind it.
+const TransportUnrecorded = "transport not recorded"
+
 // The checks this harness runs. Each is driven by a violating stub; see the
 // package documentation for the gate that enforces it.
 const (
@@ -104,6 +108,18 @@ const (
 	// being refused with a classified error. A connector that completes
 	// against any handle has no session binding at all.
 	CheckUnknownHandleRefused = "handle/unknown-is-refused"
+	// CheckHandleSingleUse covers a handle being consumed by the exchange it
+	// completes: completing the SAME handle twice must be refused.
+	//
+	// A handle is bound to a PKCE verifier and a nonce, so accepting it twice
+	// is accepting a replay — the second completion presents an authorization
+	// code against state the provider should no longer hold.
+	//
+	// ⚠️ This check exists because a provider that never consumed a handle
+	// passed every other check. The obligation is stated in the wire contract
+	// and was driven by nothing, which is the same "green because nothing
+	// looked" shape the rest of this harness is built to refuse.
+	CheckHandleSingleUse = "handle/is-single-use"
 	// CheckInactiveIsReported covers a verified-but-disabled principal coming
 	// back AS AN ANSWER — Authenticated true, Active false — rather than as an
 	// error.
@@ -151,6 +167,19 @@ type Result struct {
 type Report struct {
 	// Connector is the name the manifest gives the connector under test.
 	Connector string
+	// Transport records HOW the connector under test was reached, because a
+	// green report does not mean the same thing in both cases.
+	//
+	// [Run] takes an authenticator.Authenticator and cannot tell a
+	// natively-compiled connector from a host stub talking to a subprocess — so
+	// it records [TransportUnrecorded] rather than guessing, and a report
+	// carrying that is NOT evidence the wire was exercised. [RunOutOfProcess]
+	// knows, and says so.
+	//
+	// For this class the distinction is sharp: proto3 omits a false bool and an
+	// empty string entirely, so the wire failures are exactly the ones an
+	// in-process run cannot see.
+	Transport string
 	// Results holds one entry per check that was run, in run order.
 	Results []Result
 }
@@ -189,7 +218,7 @@ func (r Report) Err() error {
 // String renders the report as one line per check, for CI logs.
 func (r Report) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "authconform: connector=%s", r.connectorName())
+	fmt.Fprintf(&b, "authconform: connector=%s transport=%s", r.connectorName(), r.transport())
 	for _, res := range r.Results {
 		status := "PASS"
 		if !res.Pass {
@@ -201,6 +230,13 @@ func (r Report) String() string {
 		}
 	}
 	return b.String()
+}
+
+func (r Report) transport() string {
+	if r.Transport == "" {
+		return TransportUnrecorded
+	}
+	return r.Transport
 }
 
 func (r Report) connectorName() string {
@@ -262,18 +298,19 @@ func Run(ctx context.Context, a authenticator.Authenticator, opts Options) (Repo
 		}
 	}
 
-	rep := Report{Connector: opts.Manifest.Name}
+	rep := Report{Connector: opts.Manifest.Name, Transport: TransportUnrecorded}
 
 	checkManifest(&rep, opts.Manifest)
 	checkClass(&rep, a)
 	checkCapabilityHonesty(&rep, a, opts.Manifest)
 	checkHealth(ctx, &rep, a)
-	handle := checkChallenge(ctx, &rep, a)
-	checkAssertion(ctx, &rep, a, handle, opts)
-	checkAssertionPrincipal(ctx, &rep, a, handle, opts)
-	checkRejection(ctx, &rep, a, handle, opts)
+	checkChallenge(ctx, &rep, a)
+	checkAssertion(ctx, &rep, a, opts)
+	checkAssertionPrincipal(ctx, &rep, a, opts)
+	checkRejection(ctx, &rep, a, opts)
 	checkUnknownHandle(ctx, &rep, a, opts)
-	checkInactive(ctx, &rep, a, handle, opts)
+	checkHandleSingleUse(ctx, &rep, a, opts)
+	checkInactive(ctx, &rep, a, opts)
 
 	return rep, nil
 }
@@ -348,14 +385,12 @@ func checkHealth(ctx context.Context, rep *Report, a authenticator.Authenticator
 	}
 }
 
-// checkChallenge drives Begin and returns the handle for the checks that need
-// one. An empty handle is returned when Begin failed, and the dependent checks
-// report their own failures rather than being skipped silently.
-func checkChallenge(ctx context.Context, rep *Report, a authenticator.Authenticator) string {
+// checkChallenge drives Begin and reports on what it returned.
+func checkChallenge(ctx context.Context, rep *Report, a authenticator.Authenticator) {
 	c, err := a.Begin(ctx)
 	if err != nil {
 		rep.add(CheckChallengeComplete, false, fmt.Sprintf("Begin failed: %v", err))
-		return ""
+		return
 	}
 	switch {
 	case c.AuthorizationURL == "":
@@ -367,7 +402,27 @@ func checkChallenge(ctx context.Context, rep *Report, a authenticator.Authentica
 	default:
 		rep.add(CheckChallengeComplete, true, "")
 	}
-	return c.Handle
+}
+
+// freshHandle begins a NEW exchange for a check that is about to complete one.
+//
+// ⚠️ Every Complete-driving check calls this rather than sharing one handle,
+// and the reason is a contract property rather than tidiness: A HANDLE IS
+// SINGLE-USE. It is bound to a PKCE verifier and a nonce, and a provider that
+// let one be completed twice would be accepting a replay.
+//
+// The first version of this harness began ONE exchange and reused its handle
+// across four completions. Every stub in its own test suite passed, because
+// none of them consumed a handle — the defect surfaced the moment a reference
+// provider that consumes correctly was pointed at it, and the harness blamed
+// the provider. A harness whose fixtures are more permissive than the contract
+// reports conformant connectors as broken.
+func freshHandle(ctx context.Context, a authenticator.Authenticator) (string, error) {
+	c, err := a.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	return c.Handle, nil
 }
 
 // checkAssertion and checkAssertionPrincipal each drive Complete themselves
@@ -378,8 +433,14 @@ func checkChallenge(ctx context.Context, rep *Report, a authenticator.Authentica
 // TWO checks and the companion meta-test — which requires a stub to break only
 // its own check — went red. A check that cannot be driven independently cannot
 // be attributed independently either. Two Complete calls is the price.
-func checkAssertion(ctx context.Context, rep *Report, a authenticator.Authenticator, handle string, opts Options) {
-	got, err := a.Complete(ctx, handle, opts.ValidCode)
+func checkAssertion(ctx context.Context, rep *Report, a authenticator.Authenticator, opts Options) {
+	handle, err := freshHandle(ctx, a)
+	if err != nil {
+		rep.add(CheckAssertionCoherent, false, fmt.Sprintf("Begin failed, so this check could not be driven: %v", err))
+		return
+	}
+	var got authenticator.Assertion
+	got, err = a.Complete(ctx, handle, opts.ValidCode)
 	if err != nil {
 		rep.add(CheckAssertionCoherent, false, fmt.Sprintf(
 			"Complete failed on the code the fixtures say completes: %v", err))
@@ -395,8 +456,14 @@ func checkAssertion(ctx context.Context, rep *Report, a authenticator.Authentica
 	rep.add(CheckAssertionCoherent, true, "")
 }
 
-func checkAssertionPrincipal(ctx context.Context, rep *Report, a authenticator.Authenticator, handle string, opts Options) {
-	got, err := a.Complete(ctx, handle, opts.ValidCode)
+func checkAssertionPrincipal(ctx context.Context, rep *Report, a authenticator.Authenticator, opts Options) {
+	handle, err := freshHandle(ctx, a)
+	if err != nil {
+		rep.add(CheckAssertionPrincipal, false, fmt.Sprintf("Begin failed, so this check could not be driven: %v", err))
+		return
+	}
+	var got authenticator.Assertion
+	got, err = a.Complete(ctx, handle, opts.ValidCode)
 	if err != nil {
 		rep.add(CheckAssertionPrincipal, false, fmt.Sprintf(
 			"Complete failed on the code the fixtures say completes: %v", err))
@@ -411,8 +478,14 @@ func checkAssertionPrincipal(ctx context.Context, rep *Report, a authenticator.A
 	rep.add(CheckAssertionPrincipal, true, "")
 }
 
-func checkRejection(ctx context.Context, rep *Report, a authenticator.Authenticator, handle string, opts Options) {
-	got, err := a.Complete(ctx, handle, opts.RejectedCode)
+func checkRejection(ctx context.Context, rep *Report, a authenticator.Authenticator, opts Options) {
+	handle, err := freshHandle(ctx, a)
+	if err != nil {
+		rep.add(CheckRejectionIsTyped, false, fmt.Sprintf("Begin failed, so this check could not be driven: %v", err))
+		return
+	}
+	var got authenticator.Assertion
+	got, err = a.Complete(ctx, handle, opts.RejectedCode)
 	if err == nil {
 		rep.add(CheckRejectionIsTyped, false, fmt.Sprintf(
 			"the code the fixtures say must be rejected completed with no error (Authenticated=%v): an "+
@@ -448,8 +521,34 @@ func checkUnknownHandle(ctx context.Context, rep *Report, a authenticator.Authen
 	rep.add(CheckUnknownHandleRefused, true, fmt.Sprintf("classified refusal: %s", cerr.KindOf(err)))
 }
 
-func checkInactive(ctx context.Context, rep *Report, a authenticator.Authenticator, handle string, opts Options) {
-	got, err := a.Complete(ctx, handle, opts.InactiveCode)
+func checkHandleSingleUse(ctx context.Context, rep *Report, a authenticator.Authenticator, opts Options) {
+	handle, err := freshHandle(ctx, a)
+	if err != nil {
+		rep.add(CheckHandleSingleUse, false, fmt.Sprintf("Begin failed, so this check could not be driven: %v", err))
+		return
+	}
+	if _, err := a.Complete(ctx, handle, opts.ValidCode); err != nil {
+		rep.add(CheckHandleSingleUse, false, fmt.Sprintf(
+			"Complete failed on the code the fixtures say completes: %v", err))
+		return
+	}
+	if _, err := a.Complete(ctx, handle, opts.ValidCode); err == nil {
+		rep.add(CheckHandleSingleUse, false,
+			"the same handle completed twice; a handle is bound to a verifier and a nonce, so accepting it "+
+				"again is accepting a replay")
+		return
+	}
+	rep.add(CheckHandleSingleUse, true, "")
+}
+
+func checkInactive(ctx context.Context, rep *Report, a authenticator.Authenticator, opts Options) {
+	handle, err := freshHandle(ctx, a)
+	if err != nil {
+		rep.add(CheckInactiveIsReported, false, fmt.Sprintf("Begin failed, so this check could not be driven: %v", err))
+		return
+	}
+	var got authenticator.Assertion
+	got, err = a.Complete(ctx, handle, opts.InactiveCode)
 	if err != nil {
 		rep.add(CheckInactiveIsReported, false, fmt.Sprintf(
 			"a verified-but-disabled principal was raised as an error (%v); it is a real answer, and "+

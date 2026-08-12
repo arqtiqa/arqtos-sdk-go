@@ -3,6 +3,7 @@ package authconform_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -41,12 +42,26 @@ type stub struct {
 	incoherent       bool // Complete returns Authenticated with no PrincipalID
 	anonOnReject     bool // a rejected code yields (anonymous assertion, nil error)
 	unclassifiedFail bool // failures are bare errors rather than cerr-classified
-	acceptsAnyHandle bool // an unknown handle completes successfully
-	inactiveAsError  bool // a verified-but-inactive principal is reported as an error
-	wrongPrincipal   bool // a coherent assertion about somebody else
-	unhealthy        bool // Health returns a status outside the vocabulary
+	// acceptsUnknownHandle accepts the UNKNOWN-handle fixture specifically,
+	// rather than any handle at all.
+	//
+	// ⚠️ The broader knob was the first version and the companion meta-test
+	// refused it: a stub accepting ANY handle also accepts a REUSED one, so it
+	// broke handle/is-single-use as well and neither catch could be
+	// attributed. "Accepts anything" is a superset of "accepts a replay", and a
+	// violating stub has to be narrower than the property it violates.
+	acceptsUnknownHandle bool
+	inactiveAsError      bool // a verified-but-inactive principal is reported as an error
+	wrongPrincipal       bool // a coherent assertion about somebody else
+	reusableHandles      bool // a handle survives the exchange it completes
+	unhealthy            bool // Health returns a status outside the vocabulary
 
+	// issued holds LIVE handles. A handle is consumed by Complete, because
+	// single-use is the whole point of binding a verifier and a nonce to it —
+	// and a stub that let one be reused could not catch a harness that reuses
+	// one.
 	issued map[string]bool
+	next   int
 }
 
 func newStub() *stub {
@@ -69,7 +84,11 @@ func (s *stub) Health(context.Context) (connector.Health, error) {
 }
 
 func (s *stub) Begin(context.Context) (authenticator.Challenge, error) {
-	c := authenticator.Challenge{AuthorizationURL: "https://idp.example/authorize", Handle: "h-1"}
+	s.next++
+	c := authenticator.Challenge{
+		AuthorizationURL: "https://idp.example/authorize",
+		Handle:           fmt.Sprintf("h-%d", s.next),
+	}
 	if s.noURL {
 		c.AuthorizationURL = ""
 	}
@@ -81,11 +100,14 @@ func (s *stub) Begin(context.Context) (authenticator.Challenge, error) {
 }
 
 func (s *stub) Complete(_ context.Context, handle, code string) (authenticator.Assertion, error) {
-	if !s.issued[handle] && !s.acceptsAnyHandle {
+	if !s.issued[handle] && !(s.acceptsUnknownHandle && handle == unknownHdl) {
 		if s.unclassifiedFail {
 			return authenticator.Assertion{}, errors.New("no such handle")
 		}
 		return authenticator.Assertion{}, cerr.New(cerr.KindInvalid, "Complete", errors.New("unknown handle"))
+	}
+	if !s.reusableHandles {
+		delete(s.issued, handle) // consumed, whatever the outcome
 	}
 	switch code {
 	case rejectedCode:
@@ -277,7 +299,12 @@ var violators = map[string]func() (authenticator.Authenticator, manifest.Doc){
 	},
 	authconform.CheckUnknownHandleRefused: func() (authenticator.Authenticator, manifest.Doc) {
 		s := newStub()
-		s.acceptsAnyHandle = true
+		s.acceptsUnknownHandle = true
+		return s, goodManifest()
+	},
+	authconform.CheckHandleSingleUse: func() (authenticator.Authenticator, manifest.Doc) {
+		s := newStub()
+		s.reusableHandles = true
 		return s, goodManifest()
 	},
 	authconform.CheckInactiveIsReported: func() (authenticator.Authenticator, manifest.Doc) {
