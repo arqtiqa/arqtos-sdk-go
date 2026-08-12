@@ -1,0 +1,201 @@
+// The Track-B wire contract for the arqtos Authenticator connector class:
+// establishing WHO IS DRIVING THIS SESSION, interactively and verifiably.
+//
+// This file is the contract for provider authors who will never read the Go
+// SDK — including authors writing in another language. Everything a host relies
+// on is stated here rather than only in the Go doc comments of the reference
+// implementation. If the two ever disagree, this file is what the wire actually
+// carries.
+//
+// # This is not the Roster class, and the difference is the failure mode
+//
+// A Roster reads a directory with a service credential and answers "who
+// exists". This class asks "who is here right now, and did they prove it". A
+// failed directory read is a stale roster. A FAILED AUTHENTICATION IS A SESSION
+// THAT MUST NOT START.
+//
+// # The host owns the browser and the loopback listener
+//
+// The provider never opens a browser and never binds a port. Begin returns an
+// authorization URL and an opaque handle; the host drives the operator's
+// browser, receives the authorization code on ITS OWN redirect listener, and
+// passes that code back to Complete.
+//
+// This is not a wiring preference. The connector contract's second invariant is
+// passthrough-prohibited: a connector never forwards a raw credential to another
+// party. A provider that obtained the operator's token and handed it onward
+// would be brokering a credential for a third party. Putting a listener inside
+// a third-party subprocess changes the trust boundary rather than the wiring.
+//
+// The SINGLE credential-shaped value crossing host to provider is the
+// authorization code, and that is unavoidable — the host receives it and the
+// provider must exchange it. It is acceptable because the code is single-use,
+// short-lived, PKCE-bound, and useless without the verifier the provider holds.
+//
+// # Nothing obtained from the exchange crosses back
+//
+// Assertion below carries an identifier and two booleans. THERE IS NO FIELD FOR
+// A TOKEN, an id token, or a raw claim set, and adding one would be a change to
+// a published contract rather than an extension of it. Passthrough is
+// unrepresentable on this wire rather than merely discouraged.
+//
+// # A rejected assertion is a status error, never a successful anonymous answer
+//
+// If verification fails — signature, issuer, audience, nonce, expiry — return a
+// gRPC status error (UNAUTHENTICATED / PERMISSION_DENIED as applicable). DO NOT
+// return an Assertion with authenticated = false.
+//
+// authenticated = false is a real answer, and it means the provider ANSWERED
+// and identified the caller as nobody. Reaching it because verification failed
+// reports ATTACKER-SUPPLIED INPUT as a legitimate anonymous session, and
+// nothing downstream questions it because it arrived with no error.
+//
+// ⚠️ proto3 defaults a bool to false and does not put a false field on the wire
+// at all. So the rejected-reported-as-anonymous shape is exactly what a
+// provider produces by returning an empty message on a path it forgot to fail.
+// That is why this is stated here rather than left to the Go implementation.
+//
+// # There is no capability on this wire
+//
+// The Authenticator class has an EMPTY capability vocabulary at v1. A
+// device-code path, a machine-principal path, a refresh path and a step-up path
+// were each identified and not added, because a capability nothing gates on is
+// a speculative feature flag. The Capabilities RPC exists because it is part of
+// the base contract every class shares, and a host reads it once at dial time;
+// a provider declaring any capability for this class is refused.
+
+syntax = "proto3";
+
+package connector.v1;
+
+// The base-contract messages (Health, Capabilities, Close) are shared by every
+// connector class rather than restated per class — see connector.proto.
+import "connector.proto";
+
+option go_package = "github.com/arqtiqa/arqtos-sdk-go/connectorpb";
+
+// Challenge is what a host needs in order to send the operator to the identity
+// provider, and nothing more.
+message Challenge {
+  // Where the host sends the operator's browser.
+  //
+  // An empty value is refused by the host: it has nowhere to send them, and
+  // proto3's default for a string is exactly what a provider that forgot to set
+  // it produces.
+  string authorization_url = 1;
+
+  // An OPAQUE reference to the exchange this challenge began. The host passes
+  // it back to Complete and never parses it.
+  //
+  // ⚠️ It is NOT the PKCE verifier and NOT the nonce. Those live in the
+  // provider's own memory against this handle and are destroyed when the handle
+  // is consumed or Close is called. A handle carrying the verifier would put
+  // the one value that makes the authorization code useless into the same place
+  // as the code.
+  string handle = 2;
+}
+
+// Assertion is the answer to "who is driving this session", after the provider
+// has verified it.
+//
+// ⚠️ THREE FIELDS, AND NO FOURTH. There is deliberately no token, no id token
+// and no claim set here — see the file header.
+message Assertion {
+  // The provider's STABLE identifier for the operator — the same identifier
+  // space a Roster reports in Principal.id, so a host can join a
+  // just-authenticated operator onto the groups a directory reports.
+  //
+  // If the two report different spaces the join silently matches nobody while
+  // every individual call succeeds. A vendor shipping both connectors is
+  // expected to pin the correspondence with a test against a shared fixture.
+  string principal_id = 1;
+
+  // Whether the provider verified the operator.
+  //
+  // This field and principal_id must AGREE: authenticated = true with an empty
+  // principal_id is a success that identifies no one, and a principal_id while
+  // authenticated is false is a name nothing verified. A host refuses both
+  // shapes as contract faults.
+  bool authenticated = 2;
+
+  // Whether the provider considers this principal currently enabled.
+  //
+  // active = false with authenticated = true is a REAL ANSWER — a verified
+  // principal who is suspended, on leave or mid-transfer — and the host decides
+  // what to do with it. Do not raise it as an error: doing so removes the
+  // host's ability to tell "suspended" from "could not authenticate", which are
+  // different sessions.
+  //
+  // ⚠️ proto3 defaults a bool to false, so a provider that never sets this
+  // reports every verified principal as disabled. The direction that costs more
+  // is the other one — reporting a disabled principal as enabled — so set it
+  // from what the provider actually said, never from a default.
+  bool active = 3;
+}
+
+message BeginRequest {}
+
+message BeginResponse {
+  Challenge challenge = 1;
+}
+
+message CompleteRequest {
+  // The handle from the Challenge this exchange began with.
+  //
+  // A handle the provider never issued, one already consumed, and one that has
+  // expired are three DISTINGUISHABLE outcomes, and none of them is a
+  // successful anonymous assertion. INVALID_ARGUMENT is the classification for
+  // all three; the message distinguishes them for an operator.
+  string handle = 1;
+
+  // The authorization code the host received on its own redirect listener.
+  //
+  // ⚠️ This is the one credential-shaped value on this wire, and it travels in
+  // this direction only. Do not log it, do not persist it, and do not return
+  // anything derived from it.
+  string code = 2;
+}
+
+message CompleteResponse {
+  Assertion assertion = 1;
+}
+
+service Authenticator {
+  // Begin starts an exchange and returns the Challenge the host needs to drive
+  // it.
+  //
+  // The provider generates and retains the PKCE verifier and the nonce against
+  // the returned handle. It does NOT open a browser and does NOT bind a
+  // listener; the host does both.
+  rpc Begin(BeginRequest) returns (BeginResponse);
+
+  // Complete exchanges the authorization code, VERIFIES the result, and returns
+  // the Assertion.
+  //
+  // Before returning anything it must verify the signature against the
+  // provider's key set (key selected by the assertion's own key id, key set
+  // fetched from the discovery document rather than pinned), the issuer, the
+  // audience, the nonce issued with this handle, and expiry.
+  //
+  // ⚠️ Any of those failing is a STATUS ERROR, never an Assertion with
+  // authenticated = false. See the file header for why that shape is the worst
+  // outcome available to this class.
+  rpc Complete(CompleteRequest) returns (CompleteResponse);
+
+  // Health reports reachability of the identity provider.
+  rpc Health(HealthRequest) returns (HealthResponse);
+
+  // Capabilities lists what this connector supports. The Authenticator class's
+  // vocabulary is EMPTY at v1, so a conformant provider returns nothing here. A
+  // host reads this ONCE, at dial time.
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+
+  // Close releases what the provider holds — in-flight handles and the
+  // verifiers and nonces held against them. It is idempotent.
+  //
+  // ⚠️ Every handle and every verifier must be destroyed here. Process teardown
+  // is the host's go-plugin client Kill(); this call is the provider's own
+  // chance to release first, and a verifier outliving the session is a
+  // credential outliving the session.
+  rpc Close(CloseRequest) returns (CloseResponse);
+}

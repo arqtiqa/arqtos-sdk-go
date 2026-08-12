@@ -13,14 +13,14 @@ contract method returns errors in.
 | [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
 | [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | [`authenticator`](../authenticator/authenticator.go) | [`authconform`](../authconform/) |
 
-`CredentialLoader` and `Roster` are implemented by **native** (in-process,
-compiled into the host) connectors, and both are also implemented by
+`CredentialLoader`, `Roster` and `Authenticator` are implemented by **native**
+(in-process, compiled into the host) connectors, and each is also implemented by
 **out-of-process** (Track-B) connectors — see
 [Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract).
-`CodeCI`, `Tracker` and `Authenticator` are native-only today: none carries a
-`.proto` or a Track-B wire binding, the same position `Roster` and
-`CredentialLoader` each started from before their own wire protocol landed as a
-separate piece of work.
+
+`CodeCI` and `Tracker` are native-only today: neither carries a `.proto` or a
+Track-B wire binding, the same position the other three each started from before
+their own wire protocol landed as a separate piece of work.
 
 The set of classes is **closed**: `connector.Classes()` is the whole list,
 `Class.Valid()` rejects anything outside it, and the `connector.yml`
