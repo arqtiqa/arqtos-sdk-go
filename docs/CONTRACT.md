@@ -11,7 +11,7 @@ contract method returns errors in.
 | [`Roster`](#the-roster-contract) | a directory of people and groups (read-only) | [`roster`](../roster/roster.go) | [`rosterconform`](../rosterconform/) |
 | [`CodeCI`](#the-codeci-contract) | a code host's PR/CI surface | [`codeci`](../codeci/codeci.go) | [`codeciconform`](../codeciconform/) |
 | [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
-| [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | ⏳ landing with the contract package | ⏳ landing with `authconform` |
+| [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | [`authenticator`](../authenticator/authenticator.go) | ⏳ landing with `authconform` |
 
 `CredentialLoader` and `Roster` are implemented by **native** (in-process,
 compiled into the host) connectors, and both are also implemented by
@@ -30,24 +30,65 @@ not know is refused before a host loads anything.
 
 ## The `Authenticator` contract
 
-⚠️ **The class is declarable; its contract package is not published yet.** This
-section is the placeholder the class table links to, and it will be replaced by
-the method-by-method contract when the `authenticator` package lands.
+Establishes **who is driving this session**, interactively and verifiably. It is
+deliberately distinct from `Roster`, which reads a directory with a service
+credential and answers *who exists*. A failed directory read is a stale roster;
+a failed authentication is **a session that must not start**.
 
-What is settled and will not change when it does:
+| operation | contract |
+|---|---|
+| `Begin(ctx) (Challenge, error)` | Starts an exchange and returns the authorization URL plus an **opaque handle**. The connector generates and retains the PKCE verifier and nonce against that handle. It does NOT open a browser and does NOT bind a listener. |
+| `Complete(ctx, handle, code) (Assertion, error)` | Exchanges the code the host received on its own redirect, **verifies before returning anything** — signature against the provider's key set, issuer, audience, the nonce issued with this handle, and expiry — and returns the [`Assertion`](#the-assertion). Any check failing is a `VerificationError`, never an assertion. An unknown, consumed or expired handle is `cerr.KindInvalid`. |
 
-- The class establishes **who is driving this session**, interactively and
-  verifiably. It is deliberately distinct from `Roster`, which reads a directory
-  with a service credential and answers *who exists*. A failed directory read is
-  a stale roster; a failed authentication is **a session that must not start**.
-- A verification failure is a **typed error, never `Authenticated: false`**. An
-  unverified assertion is not a smaller answer — it is an attacker-supplied one.
-- The capability vocabulary is **empty at v1**, deliberately. A device-code
-  path, a machine-principal path, a refresh path and a step-up path were each
-  identified and not added, because a capability nothing gates on is the
-  speculative feature flag this SDK's capability documentation argues against.
-  The manifest closes the vocabulary against that empty set today, so a
-  capability declared for this class is refused.
+⚠️ **The host opens the browser and owns the loopback redirect listener.** The
+connector holds the vendor knowledge and does the verification. This is not a
+wiring preference: contract invariant 2 is passthrough-prohibited, and a
+connector that obtained the operator's token and handed it onward would be
+brokering a credential for a third party. The single credential-shaped value
+crossing host to connector is the **authorization code** — single-use,
+short-lived, PKCE-bound, and useless without the verifier the connector holds.
+**Nothing obtained from the exchange crosses back.**
+
+### The `Assertion`
+
+`{PrincipalID, Authenticated, Active}`, and **nothing else**. There is no field
+for a token and none for a raw claim set, so passthrough is *unrepresentable*
+rather than merely discouraged — pinned by a test over the struct's fields.
+
+`Coherent()` is the single invariant: `Authenticated == (PrincipalID != "")`.
+Both incoherent shapes are refused — an authenticated assertion naming nobody
+cannot be acted on, and a principal named while denying authentication is a name
+nothing verified.
+
+`Active: false` with `Authenticated: true` is a **real answer** — a verified
+principal who is suspended or mid-transfer — reported as-is, never as an error
+and never defaulted.
+
+### Verification failures
+
+Five distinguishable reasons — bad signature, wrong issuer, wrong audience,
+replayed nonce, expired — all classifying as `cerr.KindUnauthorized`.
+Distinguishable for the **operator**, who needs to know which check said no;
+uniform for the **host**, because all five have the same routing answer: do not
+retry, do not trip the breaker, do not start the session.
+
+⚠️ **A rejected assertion is never `Authenticated: false`.** That is a permitted
+answer only when the provider *answered* and identified the caller as nobody.
+
+⚠️ **One shape no guard can catch, stated so nobody believes it does.** A
+connector whose verification failed and which returns an anonymous assertion
+with a **nil** error is, from outside, identical to one reporting a genuine
+anonymous answer. The difference is entirely inside the connector, so the
+obligation rests there and is caught by the conformance harness driving a stub
+built to violate it.
+
+### Capabilities
+
+**Empty at v1, deliberately.** A device-code path, a machine-principal path, a
+refresh path and a step-up path were each identified and not added, because a
+capability nothing gates on is a speculative feature flag. The manifest closes
+the vocabulary against that empty set, so a capability declared for this class is
+refused.
 
 ## The base contract
 
