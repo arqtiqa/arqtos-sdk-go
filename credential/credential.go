@@ -1,6 +1,26 @@
 // Package credential defines the CredentialLoader connector-class contract:
 // resolve op:// references to secret material, with lease/renew for dynamic secrets.
 // Material is refs-only in, redacted-by-default out, and wipeable (dies-with-session).
+//
+// # ⚠️ Close does NOT cross the wire for this class — put the wipe elsewhere
+//
+// [CredentialLoader] embeds connector.Connector, so every implementation writes a
+// Close. For THIS class it is never called over the wire: the CredentialLoader
+// service binds no Close RPC, and an out-of-process provider's teardown is owned by
+// the host killing the subprocess. The Roster and Authenticator services DO bind
+// one, so the same code in one of those runs and here it does not.
+//
+// ⚠️ A wipe written in Close therefore silently does not run out of process, which
+// is the one place the "wipeable (dies-with-session)" promise above is easiest to
+// believe and hardest to check. Put it where it will actually run: at the point the
+// material is finished with, and on process exit.
+//
+// ⚠️ This is a statement about the CURRENT binding, and prose cannot notice when a
+// binding changes. TestCloseBinding_OnlyTheServicesThatBindItAreClaimedTo at the
+// repository root is its control: if the CredentialLoader service gains a Close RPC
+// — a legitimate outcome, and the other half of arqtiqa/arqtos-sdk-go#89 — that test
+// fails and this paragraph must be corrected in the same change rather than left
+// confidently wrong.
 package credential
 
 import (
