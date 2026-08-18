@@ -12,10 +12,41 @@ import (
 )
 
 const (
-	CapRead    connector.Capability = "read"
-	CapLease   connector.Capability = "lease"
-	CapRotate  connector.Capability = "rotate"
-	CapOIDC    connector.Capability = "oidc"
+	// CapRead declares support for [CredentialLoader.Resolve] and
+	// [CredentialLoader.List] over static secret material. It is the baseline —
+	// docs/CONTRACT.md's "CredentialLoader capabilities" section expects it on
+	// every CredentialLoader.
+	CapRead connector.Capability = "read"
+	// CapLease declares support for [CredentialLoader.Lease], [Renew] and
+	// [Revoke] — dynamic, time-bounded secrets. See docs/CONTRACT.md,
+	// "CredentialLoader capabilities".
+	CapLease connector.Capability = "lease"
+	// CapRotate declares that this connector's BACKING STORE can be asked to
+	// rotate the underlying secret. Rotation itself is out of scope for this
+	// contract version; the capability marks only that the store can be asked.
+	// See docs/CONTRACT.md, "CredentialLoader capabilities".
+	CapRotate connector.Capability = "rotate"
+	// CapOIDC declares that THIS CONNECTOR authenticates OUTWARD to its own
+	// backing store via OIDC federation, holding no long-lived credential of its
+	// own.
+	//
+	// ⚠️ IT DOES NOT MEAN the reference this connector serves came from an OIDC
+	// flow, and it is not a behaviour exposed inward to a host. docs/CONTRACT.md's
+	// "CredentialLoader capabilities" section states the direction: these describe
+	// "how the connector itself authenticates outward, not a behavior it exposes
+	// inward — hosts use them to reason about the connector's own credential
+	// posture, e.g. for audit and rotation policy."
+	//
+	// ⚠️ The inward reading has already been shipped once (arqtos-sdk-go#90): a
+	// connector declared it on that reading, the manifest validated, no harness
+	// objected, and something false about its credential posture reached the one
+	// audience that acts on it.
+	CapOIDC connector.Capability = "oidc"
+	// CapAppRole declares that THIS CONNECTOR authenticates OUTWARD to its own
+	// backing store via an AppRole-style role-id/secret-id mechanism.
+	//
+	// ⚠️ IT DOES NOT MEAN this connector serves AppRole credentials to a host. Same
+	// direction as [CapOIDC], and the same reason — see that constant.
 	CapAppRole connector.Capability = "approle"
 	// CapBatchResolve declares that this connector resolves many references
 	// in ONE backend call, via [BatchResolver]. A connector that declares it
