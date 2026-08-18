@@ -150,12 +150,7 @@ func TestCapabilities_EveryConstantCarriesADocComment(t *testing.T) {
 //
 // Writing those four definitions is a semantic call about what the Tracker contract
 // promises, not a mechanical edit, so it is filed rather than guessed at here.
-var contractUndocumented = map[string]bool{
-	"tracker.CapBoardMembership":   true,
-	"tracker.CapServerFilter":      true,
-	"tracker.CapServerFilterState": true,
-	"tracker.CapServerFilterType":  true,
-}
+var contractUndocumented = map[string]bool{}
 
 func TestCapabilities_EveryConstantIsDefinedInTheContract(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("docs", "CONTRACT.md"))
@@ -179,6 +174,12 @@ func TestCapabilities_EveryConstantIsDefinedInTheContract(t *testing.T) {
 				documented--
 				continue
 			}
+			// ⚠️ Decrement here TOO, not only in the allowlisted branch above.
+			// Until this line existed the summary reported "25 of 25 are
+			// defined" on a run that FAILED because one was not — a count
+			// asserting something it never examined, which is the exact defect
+			// this test exists to catch, in the test itself.
+			documented--
 			missing = append(missing, key+" (neither "+d.Name+" nor "+d.Value+")")
 		}
 	}

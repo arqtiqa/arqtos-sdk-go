@@ -99,7 +99,7 @@ Every connector, regardless of class, implements
 | Method | Semantics |
 |---|---|
 | `Implements() Class` | Returns the connector class this instance implements — `connector.ClassCredentialLoader` for a `CredentialLoader`, `connector.ClassRoster` for a `Roster`. Used by the host to route by class without a type assertion. |
-| `Capabilities() Capabilities` | Returns the set of optional behaviors this instance supports (see each class's capability vocabulary: [`CredentialLoader`](#credentialloader-capabilities), [`Roster`](#the-roster-capability-vocabulary)). The host MUST check `Capabilities().Has(...)` before calling an optional method, and a connector MUST return `cerr.KindUnsupported` from any method it advertises as unsupported. |
+| `Capabilities() Capabilities` | Returns the set of optional behaviors this instance supports (see each class's capability vocabulary: [`CredentialLoader`](#credentialloader-capabilities), [`Roster`](#the-roster-capability-vocabulary), [`CodeCI`](#the-codeci-capability-vocabulary), [`Tracker`](#the-tracker-capability-vocabulary)). The host MUST check `Capabilities().Has(...)` before calling an optional method, and a connector MUST return `cerr.KindUnsupported` from any method it advertises as unsupported. |
 | `Health(ctx) (Health, error)` | Reports current reachability of the backing store: `Healthy`, `Degraded`, or `Unavailable`, with a free-text `Detail`. Must respect `ctx` cancellation/deadline. Used for host-side circuit-breaking and status surfaces — it is not itself an auth check. |
 | `Close() error` | Releases any held resources (connections, background goroutines, cached material). Must be safe to call once at end of connector lifetime; a `CredentialLoader` MUST NOT retain resolved `Material` past `Close()` — see [`docs/SECURITY.md`](SECURITY.md). |
 
@@ -1273,6 +1273,57 @@ seven scopes; only the re-read sees that. A re-read that itself fails leaves the
 create UNKNOWN rather than done: the guard returns a zeroed report and an error
 wrapping the read failure, so the create is neither reported clean (nothing
 confirmed it) nor failed (it may well have worked).
+
+### The `Tracker` capability vocabulary
+
+Eleven entries, and every one is a **measured difference between real trackers**
+rather than a speculative feature flag. Each is declared — in the connector's
+manifest **and** by `Capabilities()` — and checked against the running connector by
+`trackerconform`.
+
+| Capability | Wire name | Why it exists, and what a host may assume |
+|---|---|---|
+| `CapNativeTypes` | `native_types` | Whether an item's type is a first-class backend attribute or a convention over labels. `Item.Type` is populated either way — the methodology keys its status flow on the type and cannot work without one — so this governs the **write**: a host planning a type CHANGE learns whether it is setting an attribute or rewriting a label set, and a connector without it refuses a type write with `cerr.KindUnsupported`. That write is an ordinary attribute entry in `Change.Fields` — there is no second surface for it, and a `Change.Type` would be one backend's own mutation smuggled back in as a struct field. |
+| `CapNativeHierarchy` | `native_hierarchy` | Whether parent/child is a real link the backend maintains. Without it a parent can only be faked (a text field, a naming convention) and a faked parent cannot be traversed, so **rollup over children is unavailable, not merely slower**. A connector without it refuses `Change.Parent` with `cerr.KindUnsupported` rather than writing something no reader can follow back. |
+| `CapCrossScope` | `cross_scope` | Whether a board IS a project or is a view over many — and whether hierarchy may cross scopes, a child in one under a parent in another. Where it holds, an item's `Scope` is part of its identity and a parent's scope is its own. Where it does not, every item shares one scope and an `ItemRef` naming another is `cerr.KindInvalid`. |
+| `CapItemFields` | `item_fields` | Whether the backend serves fields on the ITEM as well as on the board — two surfaces, two APIs, usually two administrative scopes. Where both exist a `Catalogue` reports `FieldClassItem` fields beside `FieldClassBoard` ones and writes route by class; where only one exists, no `FieldClassItem` field is ever reported. |
+| `CapTrains` | `trains` | Whether delivery buckets are **administrable** through this connector, via `TrainAdmin`. Reading a train off an item is an ordinary read every tracker serves; CREATING one is separately privileged on most backends and absent from some. A connector that reads trains but cannot create them declares nothing here and still populates the train on every item. |
+| `CapScopedTrains` | `scoped_trains` | Whether trains are per-`Scope` or per-tracker — the same name is a DIFFERENT bucket in each scope, so a board spanning eight scopes needs the name created eight times. ⚠️ It is **not declaration-only**: it changes what `TrainAdmin` ACCEPTS and what its answers mean. **With** it, `TrainSpec.Scope` is required and `ListTrains` answers per scope; **without** it, a non-empty `TrainSpec.Scope` is `cerr.KindInvalid` and trains are reported under the zero `Scope`, because they are not partitioned. |
+| `CapSchemaAdmin` | `schema_admin` | Whether the board's own field schema can be created and extended here, via `SchemaAdmin`. The most privileged thing this class can do and the least often wanted: a host that reads and writes items needs nothing here, and a token scoped for item work will not carry it. |
+| `CapServerFilter` | `server_filter` | **The base tier** — whether the backend can narrow a read by a FIELD PREDICATE (`Filter.Predicates`), so "the items whose Status is Shipped" is answered by the backend rather than by reading the whole board and discarding most of it. Backed by `FilteredScanner`. ⚠️ It does **not** say the backend can express every filter this contract can build — a predicate it cannot ask is a typed refusal from `ScanWhere`, never a widened answer. |
+| `CapServerFilterState` | `server_filter_state` | Whether the backend can narrow by the item's OPEN/CLOSED state (`Filter.State`). **Refines the base tier** — see below. |
+| `CapServerFilterType` | `server_filter_type` | Whether the backend can narrow by the item's TYPE (`Filter.Types`), several types being a DISJUNCTION. **Refines the base tier.** ⚠️ Type is a `Filter` member rather than a `Predicate` because it is not a published FIELD — `Predicate.Field` resolves against `Catalogue.Fields`, and type is not there. |
+| `CapBoardMembership` | `board_membership` | Whether being ON this board is an administrable act of its own, via `Change.Place`, separately from the item's fields. The backends genuinely differ: on one a board is a container an item is ADDED to; on another it is a saved QUERY and membership is a consequence of field values, with no operation that makes an item a member; on a third the board IS a field on the item. A host may ask for placement only where this is declared; a `Change.Place` against a connector that has not is `cerr.KindUnsupported`, refused before any network call and **never ignored**. ⚠️ Unsupported, not Invalid — matching the other two write-gating capabilities: the request is well formed and this backend cannot serve it, which tells a host to write the fields that make the item match instead of hunting a bug of its own. |
+
+#### ⚠️ Why the three `server_filter*` entries are separate tiers
+
+This looks like over-modelling and is not. **A dimension added to `Filter` breaks an
+existing `FilteredScanner` SILENTLY**: a scanner that ignores the new member answers
+with a **superset**, and a superset is indistinguishable from the right answer. A host
+reads the manifest before it loads a connector, so an undeclared dimension is never
+sent — and one sent anyway is refused with `cerr.KindUnsupported` rather than ignored.
+
+Collapsing them would leave a host two bad options: send a filter the backend silently
+ignores — getting too many rows and reading it as a host bug — or filter client-side
+always, discarding the capability everywhere it does exist.
+
+⚠️ **The two dimension tiers REFINE the base one, and that is the declaration choice.**
+A connector that does not declare `CapServerFilter` offers nothing for them to refine and
+is **held to none of it** — declaring a dimension without the base is the pairing failure
+`optional/declared-is-implemented` reports, not a way to opt into a narrower filtered read. The rule is
+deliberate in the other direction too: failing a connector for a capability it never
+claimed would push authors to declare things in order to silence checks.
+
+⚠️ **Two further consequences worth stating separately:**
+
+- `CapServerFilterState` and `CapServerFilterType` are backed by **no new interface**,
+  unlike every other optional tier. Declared-versus-implemented is therefore checked
+  **behaviourally**, in both arms — a connector that declares one and widens the answer
+  fails, and so does one that refuses a dimension it declared.
+- ⚠️ `CapServerFilterType` does **NOT** imply `CapNativeTypes`. That one governs the
+  WRITE — whether a type change is an attribute update or a label rewrite. A backend
+  with only labels serves this READ perfectly well, because `Item.Type` is populated
+  either way and the filter renders as a label query.
 
 ### Checking your connector: `trackerconform`
 
