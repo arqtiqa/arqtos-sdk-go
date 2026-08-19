@@ -35,13 +35,24 @@ type CheckPublication struct {
 	Summary string
 	// DetailsURL points at the full report. It MAY be empty.
 	DetailsURL string
-	// ExternalID is the publisher's own identifier for this check state.
+	// ExternalID is the publisher's own identifier for this check state, and it
+	// is REQUIRED.
 	//
-	// It is what makes republishing safe: a publisher that retries after an
-	// ambiguous response needs the host to recognise the second call as the
-	// same assertion rather than as a second check. A publisher that cannot
-	// tell whether its first call landed, and has no way to say "this is that
-	// one again", must either risk a duplicate or risk no check at all.
+	// ⚠️ It is required because [CheckPublisher.PublishCheck] is required to be
+	// idempotent ON IT, and an empty id makes that contract unsatisfiable
+	// rather than merely unused: with nothing to match on, a retry after an
+	// ambiguous first call creates a SECOND check rather than updating the
+	// first. The publisher would then be advertising retry-safety it does not
+	// have, which is worse than not retrying at all.
+	//
+	// So the boundary refuses it rather than letting a host assign one. A
+	// host-assigned id is not retry-safe by construction — the publisher does
+	// not know it before the call it may need to repeat — and "optional field
+	// whose absence silently removes a MUST from the contract" is exactly the
+	// shape that gets discovered in production.
+	//
+	// A publisher that cannot produce a stable id for a decision does not have
+	// a stable decision to publish, and finding that out here is cheap.
 	ExternalID string
 }
 
@@ -55,6 +66,7 @@ var requiredCheckPublicationFields = []struct {
 }{
 	{"name", func(p CheckPublication) string { return p.Name }},
 	{"head_sha", func(p CheckPublication) string { return p.HeadSHA }},
+	{"external_id", func(p CheckPublication) string { return p.ExternalID }},
 }
 
 // Validate reports whether p carries everything needed to publish a check, as a
@@ -67,8 +79,13 @@ var requiredCheckPublicationFields = []struct {
 // to say why. Refusing at the boundary turns a permanent stall into an
 // immediate, named failure.
 //
-// Title, Summary, DetailsURL and ExternalID are not checked: each has a real
-// zero value.
+// ⚠️ ExternalID is required for a different reason from the other two, and it is
+// the one worth stating: it is not needed to ADDRESS the check, it is needed to
+// make [CheckPublisher.PublishCheck]'s idempotency contract satisfiable at all.
+// Left optional, an empty id would silently remove a MUST from the contract and
+// a publisher would advertise retry-safety it does not have.
+//
+// Title, Summary and DetailsURL are not checked: each has a real zero value.
 func (p CheckPublication) Validate() error {
 	var problems []string
 	for _, f := range requiredCheckPublicationFields {
@@ -131,6 +148,10 @@ type CheckPublisher interface {
 	// first call landed, so it will retry — and a contract that produced a
 	// duplicate check on retry would make every retry visibly wrong on the
 	// change request, which is exactly when someone is watching.
+	//
+	// That is why [CheckPublication.Validate] REQUIRES ExternalID: this MUST is
+	// unsatisfiable without one, so admitting an empty id would leave the
+	// contract stating a guarantee no implementation could honour.
 	//
 	// A repository or commit that does not exist is cerr.KindNotFound; a
 	// credential that may not publish is cerr.KindUnauthorized.

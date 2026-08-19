@@ -37,9 +37,10 @@ func TestCapabilities_CheckPublishIsNotCIControl(t *testing.T) {
 
 func TestCheckPublication_Validate(t *testing.T) {
 	valid := codeci.CheckPublication{
-		Name:    "arqtos/gate",
-		HeadSHA: "0f7c3a91d2b4e5f60718293a4b5c6d7e8f901234",
-		Status:  codeci.RunStatusSuccess,
+		Name:       "arqtos/gate",
+		HeadSHA:    "0f7c3a91d2b4e5f60718293a4b5c6d7e8f901234",
+		Status:     codeci.RunStatusSuccess,
+		ExternalID: "act:01a01578-ec47-7209-9200-cac2a1f75c7f",
 	}
 
 	tests := []struct {
@@ -56,6 +57,19 @@ func TestCheckPublication_Validate(t *testing.T) {
 		{
 			"no head sha", func(p codeci.CheckPublication) codeci.CheckPublication { p.HeadSHA = ""; return p },
 			true, []string{"head_sha"},
+		},
+		{
+			// ⚠️ Not a missing address — a missing IDEMPOTENCY KEY. PublishCheck
+			// MUST be idempotent on this id, so an empty one does not make the
+			// call less precise, it makes that MUST unsatisfiable: a retry
+			// after an ambiguous first call has nothing to match on and creates
+			// a second check. Refused at the boundary rather than discovered on
+			// the first retry.
+			"no external id", func(p codeci.CheckPublication) codeci.CheckPublication {
+				p.ExternalID = ""
+				return p
+			},
+			true, []string{"external_id"},
 		},
 		{
 			// The zero value. A publisher that forgot to set a status would
@@ -81,7 +95,7 @@ func TestCheckPublication_Validate(t *testing.T) {
 			"nothing set at all", func(codeci.CheckPublication) codeci.CheckPublication {
 				return codeci.CheckPublication{}
 			},
-			true, []string{"name", "head_sha", "unspecified"},
+			true, []string{"name", "head_sha", "external_id", "unspecified"},
 		},
 	}
 
@@ -113,7 +127,7 @@ func TestCheckPublication_Validate(t *testing.T) {
 // has decided — so validation must not require a terminal status.
 func TestCheckPublication_AcceptsANonTerminalStatus(t *testing.T) {
 	for _, s := range []codeci.RunStatus{codeci.RunStatusPending, codeci.RunStatusRunning} {
-		p := codeci.CheckPublication{Name: "arqtos/gate", HeadSHA: "0f7c3a9", Status: s}
+		p := codeci.CheckPublication{Name: "arqtos/gate", HeadSHA: "0f7c3a9", Status: s, ExternalID: "act:1"}
 		if err := p.Validate(); err != nil {
 			t.Errorf("Validate rejected status %s: %v — a gate publishes in-progress before it decides", s, err)
 		}

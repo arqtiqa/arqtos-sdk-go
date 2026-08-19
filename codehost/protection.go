@@ -3,6 +3,8 @@ package codehost
 import (
 	"context"
 	"fmt"
+
+	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 )
 
 // A BypassActor is one principal a ruleset permits to bypass the rules it
@@ -95,17 +97,31 @@ type Protection struct {
 //
 // concludes that nothing can bypass the gate from a read that returned nothing.
 // This turns that into a typed failure at the boundary.
+// ⚠️ Its refusals are cerr.KindInvalid, not bare errors, and that matters more
+// here than it looks. The caller this guard exists for is the one writing
+//
+//	if err == nil && len(p.BypassActors.Items()) == 0 { /* assurance: high */ }
+//
+// and that caller classifies failures with cerr.KindOf like every other call in
+// this contract. A bare error would classify as cerr.KindUnknown — which does
+// not trip a breaker and reads as "something odd happened" rather than "this
+// value is not usable" — so the refusal would be weaker precisely for the
+// audience it was written for. The Items() failure stays wrapped underneath, so
+// errors.Is still reaches it.
 func CheckProtection(p Protection) error {
 	if p.Ref == "" {
-		return fmt.Errorf("protection names no ref: a caller holding several cannot tell them apart")
+		return cerr.New(cerr.KindInvalid, "CheckProtection", fmt.Errorf(
+			"protection names no ref: a caller holding several cannot tell them apart"))
 	}
 	if _, err := p.RequiredChecks.Items(); err != nil {
-		return fmt.Errorf("required checks were not resolved, so this protection cannot support a claim "+
-			"about what gates %s: %w", p.Ref, err)
+		return cerr.New(cerr.KindInvalid, "CheckProtection", fmt.Errorf(
+			"required checks were not resolved, so this protection cannot support a claim "+
+				"about what gates %s: %w", p.Ref, err))
 	}
 	if _, err := p.BypassActors.Items(); err != nil {
-		return fmt.Errorf("bypass actors were not resolved for %s — an unread bypass list must never be "+
-			"read as an empty one, because the two are opposite claims: %w", p.Ref, err)
+		return cerr.New(cerr.KindInvalid, "CheckProtection", fmt.Errorf(
+			"bypass actors were not resolved for %s — an unread bypass list must never be "+
+				"read as an empty one, because the two are opposite claims: %w", p.Ref, err))
 	}
 	return nil
 }

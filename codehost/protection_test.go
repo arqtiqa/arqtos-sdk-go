@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 	"github.com/arqtiqa/arqtos-sdk-go/codehost"
 )
 
@@ -175,5 +176,47 @@ func TestProtectionInspector_IsNotAMethodOnTheRequiredInterface(t *testing.T) {
 	if got := tier.NumMethod(); got != 1 {
 		t.Errorf("ProtectionInspector declares %d methods, want 1 — a read-only probe that grew a "+
 			"second operation is worth looking at, because writing protection is a different authority", got)
+	}
+}
+
+// ⚠️ The refusal must be classifiable, not merely present. The caller this guard
+// exists for branches on cerr.KindOf like every other call in this contract; a
+// bare error classifies as KindUnknown, which does not trip a breaker and reads
+// as "something odd happened" rather than "this value is not usable".
+func TestCheckProtection_RefusalsAreClassifiedInvalid(t *testing.T) {
+	tests := map[string]codehost.Protection{
+		"no ref":            {BypassActors: codehost.EmptyList[codehost.BypassActor]()},
+		"unresolved bypass": {Ref: "refs/heads/main", RequiredChecks: codehost.EmptyList[codehost.RequiredCheck]()},
+		"unresolved checks": {Ref: "refs/heads/main", BypassActors: codehost.EmptyList[codehost.BypassActor]()},
+	}
+
+	for name, p := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := codehost.CheckProtection(p)
+			if err == nil {
+				t.Fatal("CheckProtection accepted an unusable Protection")
+			}
+			if got := cerr.KindOf(err); got != cerr.KindInvalid {
+				t.Errorf("kind = %v, want %v — a caller branches on the kind, never on the message", got, cerr.KindInvalid)
+			}
+		})
+	}
+}
+
+// The Items() failure must stay reachable underneath the classification, or the
+// guard has replaced a specific diagnosis with a general one.
+func TestCheckProtection_WrapsTheUnderlyingResolutionFailure(t *testing.T) {
+	p := codehost.Protection{Ref: "refs/heads/main", RequiredChecks: codehost.EmptyList[codehost.RequiredCheck]()}
+
+	err := codehost.CheckProtection(p)
+	if err == nil {
+		t.Fatal("CheckProtection accepted an unresolved bypass list")
+	}
+	_, inner := p.BypassActors.Items()
+	if inner == nil {
+		t.Fatal("an unresolved Resolution reported no error of its own")
+	}
+	if !strings.Contains(err.Error(), "bypass") {
+		t.Errorf("error = %v; want it to name the bypass list", err)
 	}
 }

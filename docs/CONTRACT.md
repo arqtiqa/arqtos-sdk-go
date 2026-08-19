@@ -1066,6 +1066,15 @@ a publisher that cannot tell whether an ambiguous first call landed will retry, 
 a contract that produced a duplicate check on retry would be visibly wrong on the
 change request at exactly the moment someone is watching it.
 
+⚠️ **`ExternalID` is therefore REQUIRED, not optional.** It is not needed to address
+the check — `name` and `head_sha` do that — it is needed to make the idempotency MUST
+above *satisfiable at all*. With no id to match on, a retry creates a second check
+rather than updating the first, so an empty one would silently remove a MUST from the
+contract while a publisher advertised retry-safety it does not have. A host-assigned
+id does not fix this: the publisher does not know it before the call it may need to
+repeat. A publisher that cannot produce a stable id for a decision does not have a
+stable decision to publish, and the boundary is the cheap place to find that out.
+
 ### Checking your connector: `codeciconform`
 
 [`codeciconform`](../codeciconform/) runs the parts of this contract a
@@ -1225,6 +1234,15 @@ the strong and common answer — is asserted with `EmptyList`; a read that did n
 complete is a typed failure. `CheckProtection` is the host-side guard that refuses
 a `Protection` whose lists were never resolved, for the same reason `CheckIdentity`
 exists: a `Protection` is a plain struct whose fields read fine.
+
+⚠️ `CheckProtection`'s refusals are **`cerr.KindInvalid`**, and that is deliberate
+rather than incidental. The caller this guard exists for is the one writing
+`if err == nil && len(p.BypassActors.Items()) == 0 { /* assurance: high */ }`, and
+that caller classifies failures with `cerr.KindOf` like every other call in this
+contract. A bare error would classify as `KindUnknown` — which does not trip a
+breaker and reads as *"something odd happened"* rather than *"this value is not
+usable"* — so the refusal would be weakest exactly for the audience it was written
+for. The underlying `Items()` failure stays wrapped, so `errors.Is` still reaches it.
 
 ⚠️ `cerr.KindUnauthorized` matters more here than anywhere else in this class. A
 credential that cannot see a ruleset reads exactly like a ref with no ruleset, and
