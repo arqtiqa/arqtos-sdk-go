@@ -167,6 +167,18 @@ const (
 	// without it MUST still implement the read-only CI operations in
 	// [CodeCI]; it simply has nothing behind [CIController].
 	CapCIControl connector.Capability = "ci_control"
+
+	// CapCheckPublish declares that this connector can PUBLISH a check state
+	// against a commit — create or update its own check — via
+	// [CheckPublisher], in addition to reading the checks others published.
+	//
+	// It is optional, and separately so from [CapCIControl], because the two
+	// are different permissions rather than two halves of one. Re-running a
+	// workflow acts on a run the connector did not create; publishing a check
+	// writes one the connector's own identity owns. A credential can hold
+	// either without the other, so collapsing them would make a host that
+	// checked one capability act on a wrong assumption about the other.
+	CapCheckPublish connector.Capability = "check_publish"
 )
 
 // knownCapabilities is the closed capability vocabulary of this class. A
@@ -174,7 +186,7 @@ const (
 // host does not recognise is a capability the host will not use, and a typo
 // is indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
-	CapCIControl,
+	CapCIControl, CapCheckPublish,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for the CodeCI
