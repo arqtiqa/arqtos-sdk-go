@@ -10,6 +10,14 @@ A connector is a small, focused adapter between arqtos and one external system
 classes — **`CredentialLoader`**, **`Roster`**, **`CodeCI`** and **`Tracker`** — plus the shared
 building blocks every connector class is built from.
 
+It also carries a second, separate thing: **the public half of the act kernel** —
+`kernel/`, `contracts/` and `verify/`. Those packages are not connector contracts
+and implement no connector class. They are here because two programs must agree,
+byte for byte, about what an act means — the private runtime that accepts acts,
+and the verifier an outsider runs against an exported evidence bundle — and the
+only way to guarantee that is for both to import one implementation of the
+semantics. See [The act kernel's public half](#the-act-kernels-public-half).
+
 This module is dependency-light by design: the semantic contract itself is
 stdlib-only. Third-party dependencies are confined to the packages that need
 them — `gopkg.in/yaml.v3` for the schemas, the gRPC/go-plugin stack for the
@@ -54,6 +62,9 @@ Ratified 2026-07-27, after both schemes were found live in one repo.
 | [`manifest`](manifest/) | The `connector.yml` schema: `name`, `implements`, `kind`, typed `capabilities`, refs-only `auth`, `min_host_version`. Strict parse, closed enums. |
 | [`mcpconform`](mcpconform/) | The MCP protocol surface for **declarative** connectors: checks that an MCP server can be driven by arqtos — including `SessionIndependence`, which POSTs a `tools/list` carrying **no `initialize` and no `Mcp-Session-Id`** and requires a result, so a server that needs a session it will not get is rejected. |
 | [`skillspec`](skillspec/) | The `skill.yml` schema (`Skill`, `Parse`, `Validate`) that rides along with the connector SDK. Standalone — not imported by the connector packages. |
+| [`kernel`](kernel/) | **Not a connector contract.** The deterministic act-kernel semantics, shared by the runtime and the verifier: [`canonical`](kernel/canonical/) (the encoding whose bytes an act's identity is a hash of — unknown fields **rejected**, never skipped), [`reduce`](kernel/reduce/) (the one pure reducer: no filesystem, environment, clock or network, and it returns rather than invokes at any depth), [`predicate`](kernel/predicate/) (the Predicate IR — fixed typed operators, no IO, no current time, bounded, deterministic errors), [`keyhistory`](kernel/keyhistory/) (whether a signature was valid *when it was made*, which is the question replay asks) and [`tapeformat`](kernel/tapeformat/) (the act chain's layout and **reading** — the write path stays in the runtime). ⚠️ Skeleton: declared and documented, not implemented. |
+| [`contracts`](contracts/) | **Not a connector contract.** The public record types an outsider needs to read a bundle, generated from one schema source shared with the runtime rather than hand-copied. Four layers kept apart — immutable signed intent, append-only witnesses, append-only evidence events, and a disposable rebuildable status view. ⚠️ Skeleton. |
+| [`verify`](verify/) | **Not a connector contract.** The outsider's verifier. Carries `Report` and the closed `Provenance` / `Coverage` vocabularies, so a verification claim always names the root it is relative to, that root's provenance, its freshness and its observation coverage — the zero value of each asserts *nothing*. ⚠️ `Verify` returns `ErrNotImplemented` for **every** input in this build, and that is enforced by a test rather than left to discipline: a verifier able to exit 0 without replaying is indistinguishable at the call site from one that replayed and agreed. |
 | [`scaffold`](scaffold/) / [`cmd/create-arqtos-connector`](cmd/create-arqtos-connector/) | Generates a Track-B `Roster` connector skeleton — see [Scaffolding a new connector](#scaffolding-a-new-connector). |
 
 See [`docs/CONTRACT.md`](docs/CONTRACT.md) for the full method-by-method semantics
@@ -610,6 +621,36 @@ getting it wrong is an estate-wide deprovision.
 Out of scope here (a separate, later contract): the host-side connector
 registry — discovery, lifecycle and the broker wiring for managing many
 connectors at once — and a `secrets.Provider` adapter.
+
+## The act kernel's public half
+
+`kernel/`, `contracts/` and `verify/` are in this module for one reason, and it is
+not that they were convenient to put here.
+
+An outsider verifies an evidence bundle by **replaying** it. Replay is only
+meaningful if the verifier applies the same semantics the runtime applied when it
+accepted the acts — the same encoding, the same reducer, the same predicate
+evaluation, the same key-validity rules. If the runtime kept those private, the
+verifier would have to re-derive them, and two independently written
+implementations of one semantics disagree exactly where it matters: on the
+disputed act, months later, with no way to tell which one is right.
+
+So the boundary is drawn by what must be **shared**, not by what is comfortable
+to publish:
+
+| here, public | in the private runtime |
+|---|---|
+| the encoding an act's identity is a hash of | publication, execution, promotion |
+| the reducer | the host gate and the sandbox |
+| the predicate IR | observation and the completeness auditor |
+| key-validity and rotation rules | credential policy and the durable journal |
+| the tape's layout, and **reading** it | the tape's **write** path and ref management |
+
+⚠️ **These packages are a skeleton.** The semantics are declared and documented;
+they are not implemented, and `verify` cannot return success. That is sequencing,
+not an oversight — the encoding's committed test vectors and the reducer's first
+failing test are written *before* anything satisfies them, so an implementation
+landing early would be judged by tests written to match it.
 
 ## CI: the private-content firewall
 

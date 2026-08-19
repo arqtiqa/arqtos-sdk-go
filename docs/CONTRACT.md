@@ -29,6 +29,57 @@ The set of classes is **closed**: `connector.Classes()` is the whole list,
 a class the SDK knows is always declarable in a manifest, and a class it does
 not know is refused before a host loads anything.
 
+## ⚠️ What this document does NOT cover: the act kernel's public half
+
+This module also carries `kernel/`, `contracts/` and `verify/`. **They are not
+connector contracts**, they implement no connector class, they appear in no table
+above, and nothing in this document applies to them. They are described here only
+so that a reader who finds them does not go looking for the class they belong to.
+
+**Why they are in this module at all.** Two programs must agree, byte for byte,
+about what an act means: the private runtime in `arqtos-core` that accepts acts,
+and the verifier an outsider runs against an exported evidence bundle. If the
+runtime kept those semantics private, the verifier would have to re-derive them —
+and two independently written implementations of one semantics disagree exactly
+where it matters: on the disputed act, months later, with nothing to say which is
+right. **There is one reducer, and both sides import it.**
+
+So the boundary is drawn by what must be *shared*, not by what is comfortable to
+publish:
+
+| public — here | private — `arqtos-core` |
+|---|---|
+| `kernel/canonical` — the encoding an act's identity is a hash of; unknown fields **rejected**, never skipped | publication, execution, promotion |
+| `kernel/reduce` — the **one** pure reducer: no filesystem, environment, clock or network; returns rather than invokes, at any depth | the host gate and the sandbox |
+| `kernel/predicate` — the Predicate IR: fixed typed operators, no IO, no current time, bounded, deterministic errors | observation and the completeness auditor |
+| `kernel/keyhistory` — whether a signature was valid *when it was made*, which a current key set cannot answer | credential policy and the durable journal |
+| `kernel/tapeformat` — the act chain's layout, and **reading** it | the tape's **write** path and ref management |
+| `contracts/` — the public record types, four layers kept apart | — |
+| `verify/` — the outsider's verifier | — |
+
+⚠️ **The tape split is deliberate and is not tidiness.** A verifier reads a tape
+and never writes one. Publication authority is what the whole design concentrates
+in one place — governed refs move only through the publication protocol, under
+compare-and-swap against an expected old object id, and no human or agent
+credential may move one. Publishing a writer here would put that surface in every
+consumer's hands for no reader's benefit.
+
+⚠️ **These packages are a SKELETON.** The semantics are declared and documented;
+they are not implemented. `verify.Verify` returns `ErrNotImplemented` for every
+input and **cannot** return success — enforced by a test, because a verifier able
+to exit 0 without replaying is indistinguishable at the call site from one that
+replayed and agreed. `TestSkeletonPackages_ExportNothingYet` fails the moment a
+skeleton package grows an exported identifier, so surface cannot land there
+without the change that adds it also adding its tests.
+
+⚠️ **`verify.ErrNotImplemented` is a plain `errors.New` sentinel, NOT a
+[`cerr.Error`](#the-cerrkind-taxonomy).** That is deliberate and it is the one
+place in this module where not using `cerr` is correct: `cerr` is the *connector*
+error taxonomy, classified by a host deciding whether to retry a backend, and
+`verify` is not a connector and has no backend. A caller distinguishes "this build
+has no replay" from "this bundle is bad" with `errors.Is`, which is the right
+instrument for a sentinel.
+
 ## The `Authenticator` contract
 
 Establishes **who is driving this session**, interactively and verifiably. It is
