@@ -762,6 +762,14 @@ type Branch struct {
 	// whatever the vendor calls the state in which a push or merge is not
 	// simply allowed.
 	//
+	// ⚠️ This is "is this branch protected?", not the Shape A assurance
+	// probe. Shape A is "a ruleset pins our App AND bypass-actors is
+	// empty", and that lives on the CodeHost class's ProtectionInspector —
+	// a different class, a different question, and a fail-closed pair of
+	// lists rather than a bool. Overloading this field as that probe
+	// would make a yes on the cheap question look like a yes on the
+	// expensive one.
+	//
 	// ⚠️ A connector MUST report what the code host says and MUST NOT leave
 	// this at its zero value because it did not look. false reads as "this
 	// branch is unprotected", which is the one always-zero field in this
@@ -1014,6 +1022,12 @@ type CodeCI interface {
 // Capabilities(). Declaring without implementing is worse than declaring
 // nothing — the host plans to retry a failed run and finds no operation to
 // do it with.
+//
+// ⚠️ The method set is RerunWorkflow and CancelWorkflow, and only those.
+// Publishing a check the connector's own identity owns is a different
+// permission and a different optional tier — [CheckPublisher] behind
+// [CapCheckPublish]. Adding a check-write method here would break every
+// existing implementer at compile time in THEIR repository, after release.
 type CIController interface {
 	// RerunWorkflow re-runs runID.
 	RerunWorkflow(ctx context.Context, fullName, runID string) error

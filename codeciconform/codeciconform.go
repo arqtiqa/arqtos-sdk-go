@@ -108,8 +108,9 @@ const (
 	// CheckCapabilityHonesty covers the manifest's declared capabilities and
 	// the running connector's Capabilities() being the same set.
 	CheckCapabilityHonesty = "capability/manifest-matches-runtime"
-	// CheckOptionalDeclared covers CapCIControl being declared exactly when
-	// codeci.CIController is implemented. "Implemented" is a Go interface
+	// CheckOptionalDeclared covers each optional operation being declared
+	// exactly when it is implemented: CapCIControl ↔ CIController and
+	// CapCheckPublish ↔ CheckPublisher. "Implemented" is a Go interface
 	// assertion against the connector's own type, independent of anything it
 	// declares — the same mechanism codehost's optional operations and
 	// roster's Watcher use, and deliberately NOT derived from Capabilities():
@@ -511,6 +512,20 @@ func checkCapabilityHonesty(rep *Report, c codeci.CodeCI, m manifest.Doc) {
 	}
 }
 
+// optionalOps pairs each capability that has an operation behind it with the
+// interface assertion that answers whether the operation is there.
+//
+// ⚠️ CheckPublisher is a NEW optional tier, never a method on CIController:
+// adding PublishCheck there would break every existing implementer at compile
+// time in THEIR repository, after release. The two stay distinct permissions.
+var optionalOps = []struct {
+	capability connector.Capability
+	implements func(codeci.CodeCI) bool
+}{
+	{codeci.CapCIControl, func(c codeci.CodeCI) bool { _, ok := c.(codeci.CIController); return ok }},
+	{codeci.CapCheckPublish, func(c codeci.CodeCI) bool { _, ok := c.(codeci.CheckPublisher); return ok }},
+}
+
 // checkOptionalDeclared fails in both directions, and "implemented" is a Go
 // type assertion against the connector's own type — never derived from
 // Capabilities(). Deriving it from the declaration would make this check
@@ -519,20 +534,24 @@ func checkCapabilityHonesty(rep *Report, c codeci.CodeCI, m manifest.Doc) {
 // doc for the narrower guarantee that leaves behind).
 func checkOptionalDeclared(rep *Report, c codeci.CodeCI) {
 	runtime := c.Capabilities()
-	_, implemented := c.(codeci.CIController)
-	declared := runtime.Has(codeci.CapCIControl)
-	switch {
-	case declared && !implemented:
-		rep.add(CheckOptionalDeclared, false, fmt.Sprintf(
-			"%s is declared but the connector does not implement codeci.CIController: a host that plans to retry a failed run calls into nothing", codeci.CapCIControl))
-	case !declared && implemented:
-		rep.add(CheckOptionalDeclared, false, fmt.Sprintf(
-			"the connector implements codeci.CIController but does not declare %s: a host reads the manifest before it loads the connector, so it will never use it", codeci.CapCIControl))
-	case declared:
-		rep.add(CheckOptionalDeclared, true, "declared and implemented")
-	default:
-		rep.add(CheckOptionalDeclared, true, "not declared, not implemented")
+	var problems []string
+	for _, op := range optionalOps {
+		declared := runtime.Has(op.capability)
+		implemented := op.implements(c)
+		switch {
+		case declared && !implemented:
+			problems = append(problems, fmt.Sprintf(
+				"%s is declared but the operation is not implemented: a host that plans for it calls into nothing", op.capability))
+		case !declared && implemented:
+			problems = append(problems, fmt.Sprintf(
+				"%s is implemented but not declared: a host reads the manifest before it loads the connector, so it will never use it", op.capability))
+		}
 	}
+	if len(problems) > 0 {
+		rep.add(CheckOptionalDeclared, false, strings.Join(problems, "; "))
+		return
+	}
+	rep.add(CheckOptionalDeclared, true, fmt.Sprintf("%d optional operations checked", len(optionalOps)))
 }
 
 func checkListsNoEmptySuccess(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {

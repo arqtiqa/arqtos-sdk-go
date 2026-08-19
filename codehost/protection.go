@@ -135,6 +135,10 @@ func CheckProtection(p Protection) error {
 // nothing — a host that plans to probe its own assurance finds no operation to
 // do it with, at the moment it is trying to establish whether it is protected.
 //
+// ⚠️ This is the Shape A probe ("a ruleset pins our App AND bypass-actors is
+// empty"). CodeCI's Branch.Protected answers a cheaper question — "is this
+// branch protected?" — and MUST NOT be overloaded as this one.
+//
 // ⚠️ This is a READ-ONLY tier, deliberately. Writing protection configuration is
 // a different and far larger authority: a connector that could relax a ruleset
 // could disable the gate it is being asked to report on. That operation is not

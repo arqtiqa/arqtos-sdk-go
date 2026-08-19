@@ -91,6 +91,14 @@ func (c Capabilities) Has(x Capability) bool {
 	return false
 }
 
+// HealthStatus is reachability of the backing store.
+//
+// ⚠️ This is the published-wire EXCEPTION to the SDK's "zero value means
+// unsaid" rule. Track-B HealthResponse.status numbering is 0 = healthy, 1 =
+// degraded, 2 = unavailable (proto/connector/v1/connector.proto), and
+// flipping the iota would break every existing provider. New enums in this
+// module still start at Unspecified and refuse a forgotten argument rather
+// than defaulting it.
 type HealthStatus int
 
 const (
@@ -98,6 +106,17 @@ const (
 	Degraded
 	Unavailable
 )
+
+// Valid reports whether s is in the closed vocabulary. Healthy is Valid:
+// it is a real published answer (wire 0), not "nothing was said".
+func (s HealthStatus) Valid() bool {
+	switch s {
+	case Healthy, Degraded, Unavailable:
+		return true
+	default:
+		return false
+	}
+}
 
 type Health struct {
 	Status HealthStatus
