@@ -92,6 +92,33 @@ func TestClassesIsHandedOutAsACopy(t *testing.T) {
 	}
 }
 
+// TestHealthStatusVocabulary pins the published-wire exception to the
+// SDK's "zero value means unsaid" rule. Track-B HealthResponse.status is
+// 0 = healthy, 1 = degraded, 2 = unavailable. Flipping the iota would
+// break every existing provider. New enums in this module still start at
+// Unspecified and refuse the zero value as a forgotten argument.
+func TestHealthStatusVocabulary(t *testing.T) {
+	if got := connector.HealthStatus(0); got != connector.Healthy {
+		t.Fatalf("HealthStatus(0) = %v, want Healthy — the published Track-B wire number", got)
+	}
+	for _, s := range []connector.HealthStatus{connector.Healthy, connector.Degraded, connector.Unavailable} {
+		if !s.Valid() {
+			t.Fatalf("%v is a vocabulary member but not Valid", s)
+		}
+	}
+	if connector.HealthStatus(42).Valid() {
+		t.Fatal("HealthStatus(42) must not be Valid — an out-of-vocabulary status is unsaid, not healthy")
+	}
+	// The zero value IS Healthy here. That is the exception, not a second
+	// rule: a forgotten Status would report healthy, which is why every
+	// Health() implementation must set it on purpose. New enums do not
+	// copy this numbering.
+	var zero connector.HealthStatus
+	if zero != connector.Healthy || !zero.Valid() {
+		t.Fatalf("zero HealthStatus = %v Valid=%v; the published wire makes 0 a real answer", zero, zero.Valid())
+	}
+}
+
 // TestAnUnknownClassIsNotValid: a Class is a string type, so any string can be
 // converted into one. Valid() is what separates a routing decision a host can
 // act on from a string somebody typed.

@@ -1039,7 +1039,7 @@ one would let callers stop deciding on all of them.
 | Field | Obligation |
 |---|---|
 | `PR.URL` | MUST be non-empty. Derivable from a vendor's URL layout, but a contract that leaves it to callers has pushed vendor knowledge back out to every caller. Unlike `CheckRun.DetailsURL`, which a host may genuinely not provide. |
-| `Branch.Protected` | MUST be what the code host says, and MUST NOT be left at its zero value because the connector did not look. `false` reads as *"this branch is unprotected"* — the one always-zero field in this class that is actively dangerous. A connector that cannot determine protection state fails `ListBranches` rather than returning branches asserting they are all unprotected. |
+| `Branch.Protected` | MUST be what the code host says, and MUST NOT be left at its zero value because the connector did not look. `false` reads as *"this branch is unprotected"* — the one always-zero field in this class that is actively dangerous. A connector that cannot determine protection state fails `ListBranches` rather than returning branches asserting they are all unprotected. ⚠️ This bool is *"is this branch protected?"*, **not** the Shape A assurance probe (*"a ruleset pins our App and bypass-actors is empty"*). That probe is `codehost.ProtectionInspector`. |
 
 **The vendor's own transport split is invisible here.** GitHub answers "what
 is the CI status of a ref" over GraphQL and "rerun this workflow" over REST,
@@ -1158,7 +1158,7 @@ if err := rep.Err(); err != nil {
 | `manifest/valid` | the manifest validates and declares this class |
 | `class/implements` | `Implements()` reports `connector.ClassCodeCI` |
 | `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
-| `optional/declared-is-implemented` | `ci_control` is declared exactly when `CIController` is implemented — "implemented" is a Go type assertion against the connector's own type, **never** derived from `Capabilities()` |
+| `optional/declared-is-implemented` | `ci_control` is declared exactly when `CIController` is implemented, and `check_publish` is declared exactly when `CheckPublisher` is implemented — "implemented" is a Go type assertion against the connector's own type, **never** derived from `Capabilities()` |
 | `lists/no-empty-success` | `ListPRs`, `ListBranches`, `GetCheckRuns` and `GetDiff` against the fixtures all resolve **readable, with entries** |
 | `lists/failure-is-typed-and-fail-closed` | `ListPRs(UnknownRepo)` and `GetDiff(Repo, UnknownPR)` each fail with a classified `cerr.Kind` **and** an unreadable resolution |
 | `merge/refuses-unspecified-method` | `MergePR(Repo, OpenPR, MergeMethodUnspecified)` is refused, **without merging** `OpenPR` |
@@ -1248,7 +1248,7 @@ conflation in another shape.
 
 ### `CodeHost` capabilities and optional operations
 
-Three operations live behind capabilities rather than in the interface. A host
+Four operations live behind capabilities rather than in the interface. A host
 type-asserts for them, and `codehostconform.Run` fails a connector that declares
 one without implementing it **in both directions** — declared-and-absent leaves
 the host calling into nothing, and implemented-but-undeclared is behaviour the
@@ -1261,9 +1261,9 @@ anything.
 | `webhooks` | `WebhookRegistrar` | `WebhookRegister(ctx, fullName, url, events) error` — registers `url` as a destination for the named events. |
 | `runner_tokens` | `RunnerTokenMinter` | `RunnerToken(ctx, fullName) (token, expiresAt, error)` — mints a registration token for a self-hosted CI runner and reports when it expires. ⚠️ The token is secret material with a short life: a caller hands it to the runner it is registering and keeps no copy. **This contract does not admit storing it.** |
 
-| `protection_inspect` | `ProtectionInspector` | `InspectProtection(ctx, fullName, ref) (Protection, error)` — the governed ref's enforcement configuration: the checks required before it moves, and the actors permitted to bypass them. ⚠️ **READ only, deliberately.** A connector able to relax a ruleset could disable the very gate it is being asked to report on; writing protection is a different authority and is not in this contract. |
+| `protection_inspect` | `ProtectionInspector` | `InspectProtection(ctx, fullName, ref) (Protection, error)` — the governed ref's enforcement configuration: the checks required before it moves, and the actors permitted to bypass them. ⚠️ **READ only, deliberately.** A connector able to relax a ruleset could disable the very gate it is being asked to report on; writing protection is a different authority and is not in this contract. ⚠️ This is the Shape A probe. `codeci.Branch.Protected` answers a cheaper question — *is this branch protected?* — and MUST NOT be overloaded as "ruleset pins our App and bypass-actors is empty". |
 
-A fourth capability, `native_review`, declares that review happens **on the code
+A fifth capability, `native_review`, declares that review happens **on the code
 host** rather than in arqtos. It carries **no operation** and is checked only for
 membership in this class's vocabulary — the review operations themselves belong
 to `CodeCI`.
@@ -1502,6 +1502,14 @@ per class would make the number of definitions grow with the class count while
 the meaning stayed fixed, and the copies would be free to drift. (buf's
 `RPC_REQUEST_RESPONSE_UNIQUE` is excepted for exactly that, with the reason
 recorded in `buf.yaml`.)
+
+⚠️ `HealthResponse.status` numbering is **0 = healthy, 1 = degraded, 2 =
+unavailable** — the same as `connector.HealthStatus`. That numbering is a
+published-wire **exception** to the SDK's "zero value means unsaid" rule:
+flipping the iota would break every existing provider. New enums still start at
+`Unspecified` and refuse a forgotten argument rather than defaulting it.
+`HealthStatus.Valid()` accepts `Healthy`; an out-of-vocabulary value is unsaid,
+not healthy.
 
 #### `CredentialLoader` over the wire
 

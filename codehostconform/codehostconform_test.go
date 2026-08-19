@@ -63,6 +63,7 @@ func (s *stub) ListRepos(ctx context.Context, owner string) (codehost.Resolution
 
 func (s *stub) RepoExists(context.Context, string) (bool, error)       { return true, nil }
 func (s *stub) GetRepo(context.Context, string) (codehost.Repo, error) { return codehost.Repo{}, nil }
+
 func (s *stub) CreateRepo(context.Context, codehost.CreateRepoOpts) (codehost.Repo, error) {
 	return codehost.Repo{}, nil
 }
@@ -71,6 +72,7 @@ func (s *stub) CloneRepo(context.Context, string, string) error   { return nil }
 func (s *stub) PushBranch(context.Context, string, string, string) error {
 	return nil
 }
+
 func (s *stub) ListBranches(context.Context, string) (codehost.Resolution[codehost.Branch], error) {
 	return codehost.Resolved([]codehost.Branch{{Name: "main"}}, codehost.Complete)
 }
@@ -99,10 +101,25 @@ func (tokenMintingStub) RunnerToken(context.Context, string) (string, time.Time,
 	return "placeholder-runner-registration-token", time.Now().Add(time.Hour), nil
 }
 
+// protectionInspectingStub implements the optional CapProtectionInspect
+// operation. It is a separate type because implementing it is what the
+// harness type-asserts for — and because ListBranches.Protected is NOT this
+// probe.
+type protectionInspectingStub struct{ *stub }
+
+func (protectionInspectingStub) InspectProtection(_ context.Context, _, ref string) (codehost.Protection, error) {
+	return codehost.Protection{
+		Ref:            ref,
+		RequiredChecks: codehost.EmptyList[codehost.RequiredCheck](),
+		BypassActors:   codehost.EmptyList[codehost.BypassActor](),
+	}, nil
+}
+
 var (
-	_ codehost.FileReader        = fileReadingStub{}
-	_ codehost.WebhookRegistrar  = hookRegisteringStub{}
-	_ codehost.RunnerTokenMinter = tokenMintingStub{}
+	_ codehost.FileReader          = fileReadingStub{}
+	_ codehost.WebhookRegistrar    = hookRegisteringStub{}
+	_ codehost.RunnerTokenMinter   = tokenMintingStub{}
+	_ codehost.ProtectionInspector = protectionInspectingStub{}
 )
 
 func stubManifest(caps ...connector.Capability) manifest.Doc {
@@ -252,6 +269,7 @@ func TestConform_CatchesAnOptionalOperationImplementedButUndeclared(t *testing.T
 		{"file read", fileReadingStub{newStub()}},
 		{"webhooks", hookRegisteringStub{newStub()}},
 		{"runner tokens", tokenMintingStub{newStub()}},
+		{"protection inspect", protectionInspectingStub{newStub()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rep := run(t, tc.c, stubManifest(codehost.CapNativeReview))
@@ -266,6 +284,29 @@ func TestConform_AcceptsAnOptionalOperationDeclaredAndImplemented(t *testing.T) 
 	rep := run(t, fileReadingStub{s}, stubManifest(codehost.CapFileRead))
 	if err := rep.Err(); err != nil {
 		t.Fatalf("a connector that declares and implements an optional operation was failed: %v\n%s", err, rep)
+	}
+}
+
+// ⚠️ CapProtectionInspect is a NEW optional tier. Declaring it without
+// implementing InspectProtection is the dangerous direction: a host plans to
+// probe its own assurance and finds no operation to do it with.
+func TestConform_CatchesProtectionInspectDeclaredButAbsent(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codehost.CapProtectionInspect}
+	rep := run(t, s, stubManifest(codehost.CapProtectionInspect))
+	requireFailed(t, rep, codehostconform.CheckOptionalDeclared)
+	detail, _ := failed(rep, codehostconform.CheckOptionalDeclared)
+	if !strings.Contains(detail, string(codehost.CapProtectionInspect)) {
+		t.Errorf("the failure does not name the capability: %q", detail)
+	}
+}
+
+func TestConform_AcceptsProtectionInspectDeclaredAndImplemented(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codehost.CapProtectionInspect}
+	rep := run(t, protectionInspectingStub{s}, stubManifest(codehost.CapProtectionInspect))
+	if err := rep.Err(); err != nil {
+		t.Fatalf("a connector that declares and implements protection_inspect was failed: %v\n%s", err, rep)
 	}
 }
 

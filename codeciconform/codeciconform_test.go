@@ -203,6 +203,17 @@ func (ciControllingStub) CancelWorkflow(context.Context, string, string) error {
 
 var _ codeci.CIController = ciControllingStub{}
 
+// checkPublishingStub implements the optional CapCheckPublish operation. It is
+// a separate type because implementing it is what the harness type-asserts
+// for — and because that assertion must stay independent of CIController.
+type checkPublishingStub struct{ *stub }
+
+func (checkPublishingStub) PublishCheck(context.Context, string, codeci.CheckPublication) (codeci.CheckRun, error) {
+	return codeci.CheckRun{ID: "c1", Name: "arqtos/gate", Status: codeci.RunStatusSuccess}, nil
+}
+
+var _ codeci.CheckPublisher = checkPublishingStub{}
+
 func stubManifest(caps ...connector.Capability) manifest.Doc {
 	return manifest.Doc{
 		Name:         "stub",
@@ -433,6 +444,36 @@ func TestRun_AcceptsAnOptionalOperationDeclaredAndImplemented(t *testing.T) {
 	rep := run(t, ciControllingStub{s}, stubManifest(codeci.CapCIControl))
 	if err := rep.Err(); err != nil {
 		t.Fatalf("a connector that declares and implements an optional operation was failed: %v\n%s", err, rep)
+	}
+}
+
+// ⚠️ CapCheckPublish is a NEW optional tier, not a method on CIController.
+// The declared-is-implemented check must cover it independently: a host that
+// read only ci_control would plan to publish a check it cannot publish.
+func TestRun_CatchesCheckPublishDeclaredButAbsent(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapCheckPublish} // *stub does not implement CheckPublisher
+	rep := run(t, s, stubManifest(codeci.CapCheckPublish))
+	requireFailed(t, rep, codeciconform.CheckOptionalDeclared)
+	detail, _ := failed(rep, codeciconform.CheckOptionalDeclared)
+	if !strings.Contains(detail, string(codeci.CapCheckPublish)) {
+		t.Errorf("the failure does not name the capability: %q", detail)
+	}
+}
+
+func TestRun_CatchesCheckPublishImplementedButUndeclared(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{}
+	rep := run(t, checkPublishingStub{s}, stubManifest())
+	requireFailed(t, rep, codeciconform.CheckOptionalDeclared)
+}
+
+func TestRun_AcceptsCheckPublishDeclaredAndImplemented(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapCheckPublish}
+	rep := run(t, checkPublishingStub{s}, stubManifest(codeci.CapCheckPublish))
+	if err := rep.Err(); err != nil {
+		t.Fatalf("a connector that declares and implements check_publish was failed: %v\n%s", err, rep)
 	}
 }
 

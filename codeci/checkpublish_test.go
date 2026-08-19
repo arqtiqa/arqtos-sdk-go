@@ -161,6 +161,36 @@ func TestCheckPublisher_IsNotAMethodOnAnyExistingInterface(t *testing.T) {
 	}
 }
 
+// ⚠️ CIController's published method set is RerunWorkflow and
+// CancelWorkflow. A check-write method belongs on CheckPublisher, not here:
+// adding one would break every existing implementer after release.
+func TestCIController_MethodSetIsRerunAndCancelOnly(t *testing.T) {
+	typ := reflect.TypeOf((*codeci.CIController)(nil)).Elem()
+	want := []string{"CancelWorkflow", "RerunWorkflow"}
+	got := make([]string, 0, typ.NumMethod())
+	for i := 0; i < typ.NumMethod(); i++ {
+		got = append(got, typ.Method(i).Name)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("CIController methods = %v, want exactly %v — check-write is CheckPublisher, not a third method here", got, want)
+	}
+}
+
+// Branch.Protected is a bool answering "does this branch have protection
+// rules?". Shape A ("ruleset pins our App and bypass-actors is empty")
+// cannot be represented on this type, and must not grow onto it.
+func TestBranch_ProtectedIsNotTheShapeAProbe(t *testing.T) {
+	typ := reflect.TypeOf(codeci.Branch{})
+	if _, ok := typ.FieldByName("Protected"); !ok {
+		t.Fatal("Branch lost Protected; ListBranches must still report whether the host protects the branch")
+	}
+	for _, name := range []string{"AppID", "BypassActors", "RequiredChecks", "PinnedTo"} {
+		if _, ok := typ.FieldByName(name); ok {
+			t.Errorf("Branch grew %s: that is Shape A material, which belongs on codehost.Protection, not on ListBranches", name)
+		}
+	}
+}
+
 // The validation failure must be classifiable through errors.Is/As the same way
 // every other refusal in this class is, or a caller has to string-match it.
 func TestCheckPublication_ValidateIsAClassifiedFailure(t *testing.T) {
