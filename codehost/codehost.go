@@ -90,6 +90,22 @@ const (
 	// reads and acts on, and it is recorded as such rather than dressed up as
 	// something the harness verifies.
 	CapNativeReview connector.Capability = "native_review"
+
+	// CapProtectionInspect declares that this connector can READ a governed
+	// ref's enforcement configuration — its required checks and the actors
+	// permitted to bypass them — via [ProtectionInspector].
+	//
+	// It is optional because reading protection configuration is separately
+	// privileged on every host that offers it at all, and on some it is not
+	// offered to a repository-scoped credential in any form. A host that
+	// assumed it would discover the gap while trying to establish whether it
+	// is protected, which is the worst moment to find out.
+	//
+	// ⚠️ READ only. Writing protection is deliberately not in this vocabulary:
+	// a connector able to relax a ruleset could disable the very gate it is
+	// being asked to report on, and that is a different authority from
+	// inspecting one.
+	CapProtectionInspect connector.Capability = "protection_inspect"
 )
 
 // knownCapabilities is the closed capability vocabulary of this class. A
@@ -97,7 +113,7 @@ const (
 // host does not recognise is a capability the host will not use, and a typo is
 // indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
-	CapWebhooks, CapRunnerTokens, CapFileRead, CapNativeReview,
+	CapWebhooks, CapRunnerTokens, CapFileRead, CapNativeReview, CapProtectionInspect,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for this class,
