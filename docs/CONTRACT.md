@@ -1046,8 +1046,25 @@ an empty login as a success.
 |---|---|---|
 | `CapCIControl` | `ci_control` | Reading and mutating CI are plausibly different permissions: a token or app installation scoped for review can read check/pipeline status without holding the separately-privileged, write-scoped permission a rerun or cancel needs — the same reasoning `codehost`'s runner-token capability is built on. Optional operation: `CIController` (`RerunWorkflow`, `CancelWorkflow`). |
 
+| `CapCheckPublish` | `check_publish` | Publishing a check the connector's own identity OWNS is a different permission from re-running a workflow it did not create — on GitHub an app installation can hold either without the other, so collapsing them into one capability would have a host act on a wrong assumption about the half it did not check. ⚠️ A separate INTERFACE too, never a method added to `CIController`: adding a method to a published optional tier breaks every existing implementer, and it breaks them at compile time in *their* repository, after release. Optional operation: `CheckPublisher` (`PublishCheck`). |
+
 A connector without `CapCIControl` MUST still implement every required,
 read-only `CodeCI` operation; it simply has nothing behind `CIController`.
+
+A connector without `CapCheckPublish` can still READ check status through
+`GetCheckRuns`; it simply cannot publish one of its own.
+
+⚠️ `CheckPublication` is addressed by **`HeadSHA`, never by branch or change-request
+number**. A check published against a branch is a claim about whatever that branch
+pointed at when the host processed the call — and a branch moves, so a verdict
+computed about one tree can attach to another. `Validate` refuses a publication
+missing `name` or `head_sha`, and refuses `RunStatusUnspecified`: a required check
+sitting in a state no rule recognises blocks the change request **forever**, with
+nothing in the log to say why, so the boundary turns a permanent stall into an
+immediate named failure. `PublishCheck` MUST be **idempotent on `ExternalID`** —
+a publisher that cannot tell whether an ambiguous first call landed will retry, and
+a contract that produced a duplicate check on retry would be visibly wrong on the
+change request at exactly the moment someone is watching it.
 
 ### Checking your connector: `codeciconform`
 
@@ -1184,10 +1201,42 @@ anything.
 | `webhooks` | `WebhookRegistrar` | `WebhookRegister(ctx, fullName, url, events) error` — registers `url` as a destination for the named events. |
 | `runner_tokens` | `RunnerTokenMinter` | `RunnerToken(ctx, fullName) (token, expiresAt, error)` — mints a registration token for a self-hosted CI runner and reports when it expires. ⚠️ The token is secret material with a short life: a caller hands it to the runner it is registering and keeps no copy. **This contract does not admit storing it.** |
 
+| `protection_inspect` | `ProtectionInspector` | `InspectProtection(ctx, fullName, ref) (Protection, error)` — the governed ref's enforcement configuration: the checks required before it moves, and the actors permitted to bypass them. ⚠️ **READ only, deliberately.** A connector able to relax a ruleset could disable the very gate it is being asked to report on; writing protection is a different authority and is not in this contract. |
+
 A fourth capability, `native_review`, declares that review happens **on the code
 host** rather than in arqtos. It carries **no operation** and is checked only for
 membership in this class's vocabulary — the review operations themselves belong
 to `CodeCI`.
+
+#### ⚠️ Why `Protection`'s lists are fail-closed
+
+`Protection` carries `Resolution[RequiredCheck]` and `Resolution[BypassActor]`
+rather than two plain slices, and this is the one place in this class where the
+wrapper is doing safety work rather than hygiene.
+
+The claim a caller wants to make is *"this ref requires a check pinned to our app,
+**and nothing may bypass it**"*. The second half is an assertion about an **empty
+list** — and a `[]BypassActor` returned by a read that failed is also empty. The
+two are indistinguishable at the call site and they are **opposite**: one says
+nobody can bypass the gate, the other says nobody looked.
+
+So a connector cannot report an empty bypass list by accident. Genuine emptiness —
+the strong and common answer — is asserted with `EmptyList`; a read that did not
+complete is a typed failure. `CheckProtection` is the host-side guard that refuses
+a `Protection` whose lists were never resolved, for the same reason `CheckIdentity`
+exists: a `Protection` is a plain struct whose fields read fine.
+
+⚠️ `cerr.KindUnauthorized` matters more here than anywhere else in this class. A
+credential that cannot see a ruleset reads exactly like a ref with no ruleset, and
+the second is the answer that downgrades an assurance claim to nothing. A connector
+MUST distinguish them.
+
+⚠️ `RequiredCheck.AppID` is the difference between a check that **gates** and one
+that **decorates**. An unpinned status context is matched by NAME, so any credential
+that can write a status to the repository can satisfy it. `Pinned()` reports whether
+a check is bound to any app; `PinnedTo(appID)` reports the claim that actually
+matters, because a check pinned to a *different* app is enforcement on someone
+else's behalf.
 
 ### This class graduated into the SDK
 
