@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,18 +21,29 @@ import (
 // needs a test rather than care: the two comments are twenty lines apart, both
 // look authored, and nothing brings them into view together.
 func TestDoc_PackageAndFunctionAgreeAboutTheDefault(t *testing.T) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ParseComments)
-	if err != nil {
-		t.Fatalf("parsing the package: %v", err)
-	}
-	pkg, ok := pkgs["reduce"]
-	if !ok {
-		t.Fatal("package reduce not found; this check is not seeing its own source")
+	// ⚠️ parser.ParseDir is deprecated (SA1019) — it ignores build tags. The
+	// files are globbed and parsed individually instead, which also lets this
+	// check assert it SAW something rather than trusting a map lookup.
+	sources, err := filepath.Glob("*.go")
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no package sources found to read: %v", err)
 	}
 
+	fset := token.NewFileSet()
 	var pkgDoc, funcDoc string
-	for _, file := range pkg.Files {
+	parsed := 0
+	for _, name := range sources {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+		if file.Name.Name != "reduce" {
+			continue
+		}
+		parsed++
 		if file.Doc != nil && pkgDoc == "" {
 			pkgDoc = file.Doc.Text()
 		}
@@ -41,6 +53,9 @@ func TestDoc_PackageAndFunctionAgreeAboutTheDefault(t *testing.T) {
 				funcDoc = fn.Doc.Text()
 			}
 		}
+	}
+	if parsed == 0 {
+		t.Fatal("no file declared package reduce; this check is not seeing its own source")
 	}
 	if pkgDoc == "" || funcDoc == "" {
 		t.Fatal("package doc or Reduce's doc is missing, so this check compares nothing")
