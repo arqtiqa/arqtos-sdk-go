@@ -157,10 +157,74 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 	if out, decided := spendRule(in, head); decided {
 		return out, nil
 	}
+	if out, decided := treeRule(in, head); decided {
+		return out, nil
+	}
 
 	out := refused("no rule in this build admits this candidate")
 	out.Head = head
 	return out, nil
+}
+
+// ObservedTreeKey is the EvidenceEvent detail an observation reports the tree it
+// actually saw under.
+const ObservedTreeKey = "observed_tree_oid"
+
+// treeRule refuses a candidate observed against a tree its signed body does not
+// bind.
+//
+// ⭐ THIS IS THE W2 KILL GATE. If a tree swap is not caught here, the design's
+// central claim does not hold: an attacker with a valid signature over one tree
+// can have a DIFFERENT tree merged, and every downstream artefact — the receipt,
+// the evidence bundle, the verifier's replay — agrees with itself while
+// describing something that did not happen.
+//
+// ⚠️ Everything about such an act is valid. The signature verifies, the DSSE
+// binding is intact, the act body id is correct. Nothing inside the act is
+// wrong; only the comparison of BOUND against OBSERVED can find it, which is
+// why no amount of checking the act alone would.
+func treeRule(in Input, head string) (Outcome, bool) {
+	candidate := *in.Candidate
+	if candidate.CandidateTreeOID == "" {
+		out := refused("the candidate binds no tree, so no effect can be checked against it")
+		out.Head = head
+		return out, true
+	}
+
+	seen := 0
+	for _, ev := range in.Observations {
+		// ⚠️ An observation about a DIFFERENT act says nothing about this one.
+		// Applying it would refuse an innocent candidate on someone else's
+		// evidence, which is a false positive that erodes trust in the gate.
+		if ev.ActBodyID != candidate.ActBodyID {
+			continue
+		}
+		observed, ok := ev.Detail[ObservedTreeKey]
+		if !ok || observed == "" {
+			continue
+		}
+		seen++
+		if observed != candidate.CandidateTreeOID {
+			out := refused("the candidate binds tree %s and was observed against %s; the effect is not "+
+				"the effect that was authorised", candidate.CandidateTreeOID, observed)
+			out.Head = head
+			return out, true
+		}
+	}
+
+	// ⚠️ NO OBSERVATION IS NOT A MATCH. Absence of evidence is not evidence of
+	// absence, and an act nobody watched must not be accepted AS IF the effect
+	// had been seen to match — that is precisely the state a tree swap arrives
+	// in when the observer is degraded. The refusal says which it is, so the
+	// two are never confused in a report.
+	if seen == 0 {
+		out := refused("no observation reports a tree for this act, so the effect cannot be compared "+
+			"against the tree it binds (%s); an unobserved act is not a matching one",
+			candidate.CandidateTreeOID)
+		out.Head = head
+		return out, true
+	}
+	return Outcome{}, false
 }
 
 // spendRule refuses a candidate whose permit the accepted prefix already spent.
