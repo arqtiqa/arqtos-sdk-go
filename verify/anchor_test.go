@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arqtiqa/arqtos-sdk-go/internal/redfixture"
 	"github.com/arqtiqa/arqtos-sdk-go/verify"
 )
 
@@ -249,39 +250,42 @@ func TestTrustAnchorDocumentCoversEveryCase(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RED FIXTURE — the alternate genesis, as a CHAIN
+// THE KILL GATE — the alternate genesis, as a CHAIN
 // ---------------------------------------------------------------------------
 
-// ⚠️ THIS FIXTURE IS RED ON PURPOSE, and it is skipped rather than failing so
-// that CI stays green on a tree whose gap is KNOWN and NAMED.
+// ⚠️ A REAL BODY, required to fail. It used to be a t.Skip with nothing after
+// it — a test that could not fail, and therefore guarded nothing.
 //
-// What it is waiting for: a self-consistent forked CHAIN. A compromised
-// administrator mints an alternate genesis and builds a tape on it that replays
-// perfectly — every signature valid, every act consistent, every dependency
-// satisfied. The claim this fixture must establish is that such a bundle is
-// refused ON THE ANCHOR, and that its internal consistency never enters the
-// decision.
+// The claim: a compromised administrator mints an alternate genesis and builds a
+// tape on it that replays PERFECTLY — every signature valid, every act
+// consistent. Such a bundle must be refused ON THE ANCHOR, and its internal
+// consistency must never enter the decision.
 //
-// ⚠️ [Anchor.Check] already decides the digest comparison, and the tests above
-// cover it. That is NOT this claim. The dangerous case is the one where replay
-// SUCCEEDS, because that is when a verifier is most tempted to report a pass —
-// so the fixture needs a real bundle and a real replay, and [verify.Verify]
-// returns ErrNotImplemented for every input in this build.
+// ⚠️ Anchor.Check already decides the digest comparison, and the tests above
+// cover it green. That is NOT this claim. The dangerous case is the one where
+// replay SUCCEEDS, because that is when a verifier is most tempted to report a
+// pass — so this needs a real bundle and a real replay.
 func TestAlternateGenesisChainIsRefusedOnTheAnchor(t *testing.T) {
-	t.Skip("RED FIXTURE — waiting on full replay. A forked chain that replays PERFECTLY must still be " +
-		"refused on the anchor, and that claim cannot be made until Verify can replay at all; the " +
-		"digest comparison alone is not it. See TestAlternateGenesisFixtureIsStillNeeded, which fails " +
-		"once Verify stops returning ErrNotImplemented so this skip cannot outlive its reason.")
-}
+	redfixture.Expect(t, "full replay in verify.Verify", func(ft redfixture.T) {
+		// A bundle built on a genesis the verifier does not anchor.
+		bundle := strings.NewReader(`{"genesis":"` + genesisB + `","acts":[]}`)
 
-// ⚠️ THE GUARD ON THE SKIP ABOVE. A skipped test nobody removes is a permanent
-// hole that reads as coverage, so this fails the moment replay lands — forcing
-// the fixture to be written and the skip deleted in the same change.
-func TestAlternateGenesisFixtureIsStillNeeded(t *testing.T) {
-	_, err := verify.Verify(context.Background(), strings.NewReader("{}"))
-	if !errors.Is(err, verify.ErrNotImplemented) {
-		t.Fatalf("Verify no longer returns ErrNotImplemented (got %v): full replay exists, so the "+
-			"alternate-genesis fixture must be WRITTEN and its skip removed in this change. A forked "+
-			"chain that replays perfectly is the case the anchor exists for.", err)
-	}
+		report, err := verify.Verify(context.Background(), bundle)
+		if errors.Is(err, verify.ErrNotImplemented) {
+			ft.Fatalf("Verify cannot replay, so the anchor is never consulted: %v", err)
+		}
+		if err == nil {
+			ft.Fatal("a bundle built on an unanchored genesis was accepted")
+		}
+		// ⚠️ THE REASON. Refused-for-any-reason would be satisfied by a verifier
+		// that refuses everything, and by one that refused on the chain's
+		// contents — which is exactly the reasoning an alternate genesis is
+		// built to invite.
+		if !errors.Is(err, verify.ErrAnchorMismatch) {
+			ft.Errorf("the bundle was refused with %v, not on the anchor", err)
+		}
+		if report.RootProvenance.Witnessed() {
+			ft.Errorf("the report claims a witnessed root for a bundle that failed its anchor check")
+		}
+	})
 }
