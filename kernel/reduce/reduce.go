@@ -147,8 +147,66 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 		}, nil
 	}
 
-	out := refused("no rule in this build admits this input; %d accepted entr(y/ies), candidate=%v",
-		len(in.Accepted), in.Candidate != nil)
+	if in.Candidate == nil {
+		out := refused("no rule in this build admits a replay of %d accepted entr(y/ies) with no candidate",
+			len(in.Accepted))
+		out.Head = head
+		return out, nil
+	}
+
+	if out, decided := spendRule(in, head); decided {
+		return out, nil
+	}
+
+	out := refused("no rule in this build admits this candidate")
 	out.Head = head
 	return out, nil
+}
+
+// spendRule refuses a candidate whose permit the accepted prefix already spent.
+//
+// ⚠️ The conservation law is NON-AMPLIFICATION, NOT QUANTITY CONSERVATION.
+// Nothing counts permits and a grant may issue many; what is forbidden is one
+// permit reaching two accepted acts.
+//
+// ⚠️ And under E3-H this law is DETECTIVE. The host does not consume permits, so
+// acceptance guarantees at most one arqtos acceptance — unmatched or duplicated
+// HOST effects are caught by reconciliation, not prevented here. Reading this
+// rule as a preventative one is how the residual gets lost.
+func spendRule(in Input, head string) (Outcome, bool) {
+	candidate := *in.Candidate
+	if candidate.Permit.IssuerActBodyID == "" {
+		out := refused("the candidate names no permit; an act with no authorisation is not admissible")
+		out.Head = head
+		return out, true
+	}
+
+	// ⚠️ Walk the ACCEPTED ENTRIES, not the Acts map. The tape is what was
+	// accepted; the map is a lookup beside it. An act present in the map but
+	// not on the tape was never accepted and spends nothing, and iterating the
+	// map would silently include it.
+	for i, entry := range in.Accepted {
+		if i == 0 {
+			// The genesis act establishes authority rather than consuming it.
+			continue
+		}
+		act, ok := in.Acts[entry.ActBodyID]
+		if !ok {
+			// ⚠️ AN ABSENT RECORD IS NOT EVIDENCE OF ABSENCE. An accepted entry
+			// whose act is missing might have spent this very permit, and
+			// treating it as unspent would let a double-spend through by
+			// withholding a file.
+			out := refused("entry %d records act %s, whose ActSpec is missing, so it cannot be shown "+
+				"not to have spent this permit", i, entry.ActBodyID)
+			out.Head = head
+			return out, true
+		}
+		if act.Permit == candidate.Permit {
+			out := refused("permit %s#%s is already spent by %s at entry %d",
+				candidate.Permit.IssuerActBodyID, candidate.Permit.OutputIndex, entry.ActBodyID, i)
+			out.Head = head
+			return out, true
+		}
+	}
+	return Outcome{}, false
 }

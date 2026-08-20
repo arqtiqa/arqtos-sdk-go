@@ -385,32 +385,113 @@ func TestReduce_RefusesWhatNoRuleAdmits(t *testing.T) {
 
 // The candidate spends a permit the accepted prefix has already spent — proved a
 // real double-spend, green, above. The refusal must NAME the earlier spend.
+// ⚠️ PROMOTED. Assertions unedited — the wrapper is gone because the body no
+// longer fails, which is what redfixture.Expect demands.
 func TestReduce_RejectsAPermitDoubleSpend(t *testing.T) {
-	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
-		candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
-		in := input(t)
-		in.Candidate = &candidate
+	candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
+	in := input(t)
+	in.Candidate = &candidate
 
-		out, err := reduce.Reduce(context.Background(), in)
-		if err != nil {
-			ft.Fatalf("reducing a double-spend returned %v; it must be judged, not deferred", err)
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("reducing a double-spend returned %v; it must be judged, not deferred", err)
+	}
+	if out.Accepted {
+		t.Fatal("a permit already spent by the accepted prefix was spent again")
+	}
+	// ⚠️ The REASON, not the refusal. A reducer that refuses everything
+	// satisfies "not accepted" and is useless.
+	var spentBy string
+	for id, a := range in.Acts {
+		if a.Permit == candidate.Permit {
+			spentBy = id
 		}
-		if out.Accepted {
-			ft.Fatal("a permit already spent by the accepted prefix was spent again")
-		}
-		// ⚠️ The REASON, not the refusal. A reducer that refuses everything
-		// satisfies "not accepted" and is useless.
-		var spentBy string
-		for id, a := range in.Acts {
-			if a.Permit == candidate.Permit {
-				spentBy = id
-			}
-		}
-		if !strings.Contains(out.Reason, spentBy) {
-			ft.Errorf("the refusal %q does not name the earlier spend (%s), so nobody auditing the tape "+
-				"could reconcile it", out.Reason, spentBy)
-		}
-	})
+	}
+	if !strings.Contains(out.Reason, spentBy) {
+		t.Errorf("the refusal %q does not name the earlier spend (%s), so nobody auditing the tape "+
+			"could reconcile it", out.Reason, spentBy)
+	}
+}
+
+// ⚠️ THE OTHER HALF, without which the rule is indistinguishable from refusing
+// everything. A candidate spending an UNSPENT permit must get past this rule.
+func TestReduce_DoesNotRefuseAnUnspentPermit(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
+	candidate.Permit.IssuerActBodyID = "sha256:" + strings.Repeat("a", 64)
+	in := input(t)
+	in.Candidate = &candidate
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if strings.Contains(out.Reason, "already spent") {
+		t.Fatalf("an unspent permit was refused as a double-spend: %s", out.Reason)
+	}
+}
+
+// The genesis act establishes authority rather than consuming it, so it must not
+// be treated as a spender — otherwise the first act to reuse its permit shape
+// would be refused for the wrong reason.
+func TestReduce_TheGenesisActSpendsNothing(t *testing.T) {
+	genesisEntry := input(t).Accepted[0]
+	candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
+
+	in := input(t)
+	// An ActSpec is deliberately registered under the genesis entry's id, with
+	// the candidate's permit. If genesis were treated as a spender, this would
+	// be reported as a double-spend.
+	impostor := candidate
+	impostor.ActBodyID = genesisEntry.ActBodyID
+	in.Acts[genesisEntry.ActBodyID] = impostor
+	in.Candidate = &candidate
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if strings.Contains(out.Reason, genesisEntry.ActBodyID) {
+		t.Errorf("the genesis act was treated as having spent a permit: %s", out.Reason)
+	}
+}
+
+// ⚠️ AN ABSENT RECORD IS NOT EVIDENCE OF ABSENCE. An accepted entry whose
+// ActSpec is missing might have spent this very permit, and treating it as
+// unspent would let a double-spend through by WITHHOLDING A FILE.
+func TestReduce_RefusesWhenAnAcceptedActIsMissing(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
+	in := input(t)
+	in.Candidate = &candidate
+	for id := range in.Acts {
+		delete(in.Acts, id)
+	}
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if out.Accepted {
+		t.Fatal("a candidate was accepted against a prefix whose acts are missing")
+	}
+	if !strings.Contains(out.Reason, "missing") {
+		t.Errorf("the refusal %q does not say the record is missing — an absent act must not read "+
+			"as an unspent permit", out.Reason)
+	}
+}
+
+func TestReduce_RefusesACandidateNamingNoPermit(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
+	candidate.Permit = contracts.PermitID{}
+	in := input(t)
+	in.Candidate = &candidate
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if out.Accepted || !strings.Contains(out.Reason, "no permit") {
+		t.Errorf("a candidate with no permit was not refused for that reason: %v %q", out.Accepted, out.Reason)
+	}
 }
 
 // The candidate's body binds one tree and the observation reports another —
