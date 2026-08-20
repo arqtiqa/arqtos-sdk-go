@@ -30,44 +30,53 @@ func TestREADME_KernelStatusMatchesThePackages(t *testing.T) {
 	}
 	doc := strings.Join(strings.Fields(string(raw)), " ")
 
-	// The claim the README makes about each kernel package, and what the tree
-	// must show for it to be true.
-	cases := []struct {
-		pkg          string
-		claim        string
-		wantExported bool
-	}{
-		{"kernel/canonical", "[`canonical`](kernel/canonical/) **implemented**", true},
-		{"kernel/tapeformat", "[`tapeformat`](kernel/tapeformat/) **implemented**", true},
-		{"kernel/reduce", "[`reduce`](kernel/reduce/) **seam only**", true},
-		{"kernel/predicate", "[`predicate`](kernel/predicate/)", false},
-		{"kernel/keyhistory", "[`keyhistory`](kernel/keyhistory/)", false},
+	packages := []string{
+		"kernel/canonical",
+		"kernel/tapeformat",
+		"kernel/reduce",
+		"kernel/predicate",
+		"kernel/keyhistory",
 	}
 
-	for _, c := range cases {
-		t.Run(c.pkg, func(t *testing.T) {
-			claim := strings.Join(strings.Fields(c.claim), " ")
-			if !strings.Contains(doc, claim) {
-				t.Errorf("the README does not carry the claim %q", claim)
-			}
-			got := hasExportedSurface(t, c.pkg)
-			if got != c.wantExported {
-				verb := "does not export anything"
-				if got {
-					verb = "exports something"
+	for _, pkg := range packages {
+		t.Run(pkg, func(t *testing.T) {
+			status := derivedStatus(t, pkg)
+			name := pkg[strings.LastIndex(pkg, "/")+1:]
+			link := "[`" + name + "`](" + pkg + "/)"
+
+			// The claim the README must carry, derived from the tree.
+			want := link + " **" + status + "**"
+			if status == statusSkeleton {
+				// The two skeletons are listed together in one clause, so the
+				// bold marker follows both links rather than each one.
+				if !strings.Contains(doc, link) {
+					t.Fatalf("the README does not mention %s at all", pkg)
 				}
-				t.Errorf("%s %s, which contradicts the README's claim %q", c.pkg, verb, claim)
+				if strings.Contains(doc, link+" **implemented**") {
+					t.Errorf("the README calls %s implemented; it exports nothing runnable", pkg)
+				}
+				return
+			}
+			if !strings.Contains(doc, want) {
+				t.Errorf("%s is implemented, but the README does not say so — it must carry %q.\n"+
+					"⚠️ Derived from the package, not from a phrase: this test cannot be satisfied "+
+					"by leaving a stale sentence in place.", pkg, want)
+			}
+			for _, stale := range []string{"**seam only**", "**skeleton**", "**not implemented**"} {
+				if strings.Contains(doc, link+" "+stale) {
+					t.Errorf("the README still calls %s %s, but the package is implemented", pkg, stale)
+				}
 			}
 		})
 	}
 
-	// ⚠️ The two skeletons must still be listed as such, and the "whole kernel
-	// is a skeleton" sentence must be gone — it is the claim that went stale.
+	// ⚠️ The "whole kernel is a skeleton" sentence must stay gone — it is the
+	// claim that went stale first, and the one this test was written for.
 	if strings.Contains(doc, "⚠️ Skeleton: declared and documented, not implemented. |") {
 		t.Error("the README still calls the whole kernel a skeleton; canonical and tapeformat are implemented")
 	}
-	if len(cases) != 5 {
-		t.Fatalf("checked %d kernel packages, want 5", len(cases))
+	if len(packages) != 5 {
+		t.Fatalf("checked %d kernel packages, want 5", len(packages))
 	}
 }
 
@@ -94,14 +103,41 @@ func TestREADME_DoesNotAttributeUnknownFieldRejectionToTheEncoder(t *testing.T) 
 	assertEncoderKeepsUnknownKeys(t)
 }
 
-func hasExportedSurface(t *testing.T, dir string) bool {
+const (
+	statusImplemented = "implemented"
+	statusSkeleton    = "skeleton"
+)
+
+// derivedStatus reports what the TREE says about a package, so the README can be
+// compared against it.
+//
+// ⚠️ THIS FUNCTION IS THE POINT OF THE FIX. The previous version of this test
+// asserted that the README contained a particular claim STRING and otherwise
+// only checked that the package exported something. Correcting a stale sentence
+// therefore FAILED the test — the guard against drift had become the thing
+// enforcing it, and the README described a seam that no longer existed because a
+// test required it to.
+//
+// A package is a skeleton when it exports nothing callable, or when it DECLARES
+// ErrNotImplemented — the repo-wide sentinel for a surface that is present and
+// deliberately inert. Anything else is implemented. There is no claim string in
+// that rule.
+//
+// ⚠️ THE FIRST VERSION OF THIS RULE COUNTED, and a falsifier caught it: it read
+// "skeleton" only when EVERY exported function returned the sentinel. Stub out a
+// package's entry point and leave two exported helpers beside it, and the count
+// says two-of-three are real — so the README kept claiming "implemented" over a
+// reducer that decided nothing, which is the precise state this whole bug was
+// filed about. A status is not a majority vote among a package's exports.
+func derivedStatus(t *testing.T, dir string) string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("reading %s: %v", dir, err)
 	}
 	fset := token.NewFileSet()
-	examined := 0
+	examined, exported := 0, 0
+	declaresSentinel := false
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -112,32 +148,46 @@ func hasExportedSurface(t *testing.T, dir string) bool {
 			t.Fatalf("parsing %s: %v", name, err)
 		}
 		examined++
+		if declaresNotImplemented(f) {
+			declaresSentinel = true
+		}
 		for _, d := range f.Decls {
-			switch decl := d.(type) {
-			case *ast.FuncDecl:
-				if decl.Name.IsExported() && decl.Recv == nil {
-					return true
-				}
-			case *ast.GenDecl:
-				for _, spec := range decl.Specs {
-					switch sp := spec.(type) {
-					case *ast.TypeSpec:
-						if sp.Name.IsExported() {
-							return true
-						}
-					case *ast.ValueSpec:
-						for _, n := range sp.Names {
-							if n.IsExported() {
-								return true
-							}
-						}
-					}
-				}
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || !fn.Name.IsExported() || fn.Recv != nil || fn.Body == nil {
+				continue
 			}
+			exported++
 		}
 	}
 	if examined == 0 {
 		t.Fatalf("%s holds no non-test source, so this check looked at nothing", dir)
+	}
+	if exported == 0 || declaresSentinel {
+		return statusSkeleton
+	}
+	return statusImplemented
+}
+
+// declaresNotImplemented reports whether a file DECLARES the inert-surface
+// sentinel. A package that has one is announcing that some part of it is a
+// placeholder, and the README must not call it implemented.
+func declaresNotImplemented(f *ast.File) bool {
+	for _, d := range f.Decls {
+		gen, ok := d.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, n := range vs.Names {
+				if n.Name == "ErrNotImplemented" {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }

@@ -21,17 +21,36 @@
 //     level of invocation is a reducer whose behaviour depends on what it
 //     called, and that dependency is not in the tape.
 //
-// # ⚠️ Skeleton
+// # What it decides, and what it does not
 //
-// Empty on purpose, and this package is the sharpest case of why. The first
-// engineering act of this design is `reduce_test.go` — permit double-spend
-// rejected, tree-swap rejected, repository genesis accepted, over a fixture DAG
-// — and those tests are written to FAIL, and to stay failing, until the reducer
-// that satisfies them is built as its own deliberate piece of work.
+// Reduce runs every rule it declares and ACCEPTS what none of them refused.
+// Today those rules are: the accepted prefix is a chain; its acceptance times do
+// not regress and come from one authority; a candidate is not already on the
+// tape; its permit was not already spent; and an independent OBSERVATION reports
+// the tree the act binds.
 //
-// An implementation landing here before that test exists would be judged by
-// tests written to match it, which is the failure the ordering exists to
-// prevent.
+// # ⚠️ What it does NOT check, and a caller must not assume
+//
+//   - NON-AMPLIFICATION. A candidate carries a permit OUTPOINT, not a permit
+//     body, so this package has no scope or expiry to compare against the root
+//     grant. Attenuation is checked where permits are ISSUED, and a reducer that
+//     has not seen the issuance is trusting that path.
+//   - The CANONICAL HEAD. Nothing here holds a lock or performs a
+//     compare-and-swap. A caller that reduced against a stale head and then
+//     published would silently re-base; refusing that is the publisher's job.
+//   - SIGNATURES. Reduce is given acts that a verifier already accepted.
+//
+// # How this package stopped being a skeleton, and what did not survive
+//
+// The first engineering act of this design was reduce_test.go, written before
+// any reducer and wrapped in a harness that required each fixture to FAIL. The
+// rejection fixtures were promoted honestly as their rules landed.
+//
+// ⚠️ The ALLOW-direction tests did not survive that discipline. Four of them
+// asserted only that a phrase was ABSENT from the refusal reason, which a
+// neighbouring rule's refusal satisfies — so the reducer admitted nothing but
+// genesis for a week with a green suite. allowpath_test.go now enforces
+// mechanically that a test claiming an acceptance reads Outcome.Accepted.
 //
 // Authority: dcn-arq-00005 §10, §13, §17, §22, §27.
 package reduce
