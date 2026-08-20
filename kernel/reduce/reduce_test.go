@@ -498,28 +498,113 @@ func TestReduce_RefusesACandidateNamingNoPermit(t *testing.T) {
 // proved a real swap, green, above. Every signature is valid and the act is
 // internally coherent; only the reducer comparing bound against observed catches
 // it. This is the W2 kill gate.
+// ⭐ THE W2 KILL GATE, PROMOTED. Assertions unedited.
 func TestReduce_RejectsATreeSwap(t *testing.T) {
-	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
-		candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
-		observation := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
-		in := input(t)
-		in.Candidate = &candidate
-		in.Observations = []contracts.EvidenceEvent{observation}
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	observation := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
+	in := input(t)
+	in.Candidate = &candidate
+	in.Observations = []contracts.EvidenceEvent{observation}
 
-		out, err := reduce.Reduce(context.Background(), in)
-		if err != nil {
-			ft.Fatalf("reducing a tree swap returned %v; it must be judged, not deferred", err)
-		}
-		if out.Accepted {
-			ft.Fatal("an act observed against a tree its signed body does not bind was accepted — if a " +
-				"tree swap is not caught here, the design's central claim does not hold")
-		}
-		observed := observation.Detail["observed_tree_oid"]
-		if !strings.Contains(out.Reason, candidate.CandidateTreeOID) || !strings.Contains(out.Reason, observed) {
-			ft.Errorf("the refusal %q does not name both the bound tree (%s) and the observed one (%s)",
-				out.Reason, candidate.CandidateTreeOID, observed)
-		}
-	})
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("reducing a tree swap returned %v; it must be judged, not deferred", err)
+	}
+	if out.Accepted {
+		t.Fatal("an act observed against a tree its signed body does not bind was accepted — if a " +
+			"tree swap is not caught here, the design's central claim does not hold")
+	}
+	observed := observation.Detail["observed_tree_oid"]
+	if !strings.Contains(out.Reason, candidate.CandidateTreeOID) || !strings.Contains(out.Reason, observed) {
+		t.Errorf("the refusal %q does not name both the bound tree (%s) and the observed one (%s)",
+			out.Reason, candidate.CandidateTreeOID, observed)
+	}
+}
+
+// ⚠️ THE OTHER DIRECTION. Without this the rule is indistinguishable from
+// refusing every act that carries an observation.
+func TestReduce_DoesNotRefuseAnActObservedAgainstTheTreeItBinds(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	observation := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
+	observation.Detail[reduce.ObservedTreeKey] = candidate.CandidateTreeOID
+
+	in := input(t)
+	in.Candidate = &candidate
+	in.Observations = []contracts.EvidenceEvent{observation}
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if strings.Contains(out.Reason, "not the effect that was authorised") {
+		t.Fatalf("an act observed against the tree it binds was refused as a swap: %s", out.Reason)
+	}
+}
+
+// ⚠️ ABSENCE OF EVIDENCE IS NOT EVIDENCE OF ABSENCE. An act nobody watched must
+// not be accepted AS IF the effect had been seen to match — that is precisely
+// the state a tree swap arrives in when the observer is degraded.
+func TestReduce_RefusesAnActWithNoObservationRatherThanAssumingAMatch(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	in := input(t)
+	in.Candidate = &candidate
+	in.Observations = nil
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if out.Accepted {
+		t.Fatal("an act with no observation at all was accepted as if its effect had been seen")
+	}
+	// ⚠️ And the reason must say WHICH it is. "Unobserved" and "observed and
+	// wrong" are different findings with different responses, and a report that
+	// could not tell them apart would send someone to the wrong place.
+	if !strings.Contains(out.Reason, "no observation") {
+		t.Errorf("the refusal %q does not distinguish unobserved from mismatched", out.Reason)
+	}
+	if strings.Contains(out.Reason, "not the effect that was authorised") {
+		t.Errorf("an unobserved act was reported as a tree swap: %s", out.Reason)
+	}
+}
+
+// An observation about a DIFFERENT act says nothing about this one. Applying it
+// would refuse an innocent candidate on someone else's evidence.
+func TestReduce_IgnoresAnObservationAboutAnotherAct(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	foreign := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
+	foreign.ActBodyID = "sha256:" + strings.Repeat("b", 64)
+
+	in := input(t)
+	in.Candidate = &candidate
+	in.Observations = []contracts.EvidenceEvent{foreign}
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if strings.Contains(out.Reason, "not the effect that was authorised") {
+		t.Fatalf("an observation about another act was applied to this one: %s", out.Reason)
+	}
+	// It is unobserved, which is its own refusal.
+	if !strings.Contains(out.Reason, "no observation") {
+		t.Errorf("the refusal %q does not report the candidate as unobserved", out.Reason)
+	}
+}
+
+func TestReduce_RefusesACandidateThatBindsNoTree(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	candidate.CandidateTreeOID = ""
+	in := input(t)
+	in.Candidate = &candidate
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if out.Accepted || !strings.Contains(out.Reason, "binds no tree") {
+		t.Errorf("a candidate binding no tree was not refused for that reason: %v %q", out.Accepted, out.Reason)
+	}
 }
 
 // ⚠️ CLOCK ROLLBACK, and it lives HERE rather than in contracts because
