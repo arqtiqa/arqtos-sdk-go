@@ -16,6 +16,18 @@ import (
 // caller told only "invalid" will look at the timestamp.
 var ErrInvalidTime = errors.New("contracts: recorded time is unusable")
 
+// ErrInvalidGenesis is a malformed ledger bootstrap: a genesis act that does not
+// say what the first link of a chain has to say.
+var ErrInvalidGenesis = errors.New("contracts: repository genesis is unusable")
+
+// ErrAmplification is an issued authority that exceeds the one it was issued
+// from.
+//
+// ⚠️ Distinct from ErrInvalidGenesis on purpose. A malformed act is an authoring
+// bug; amplification is authority appearing from nowhere, and the two deserve
+// different reactions.
+var ErrAmplification = errors.New("contracts: issued authority exceeds its parent")
+
 // SchemaVersion is the version every record kind in this package carries.
 //
 // ⚠️ It is on EVERY kind, not on the bundle, and that is deliberate. A bundle

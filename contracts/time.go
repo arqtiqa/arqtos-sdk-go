@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -66,6 +67,42 @@ func (p ClockProvenance) String() string {
 		return n
 	}
 	return fmt.Sprintf("invalid_clock_provenance(%d)", int(p))
+}
+
+// MarshalJSON renders p as its NAME.
+//
+// ⚠️ Two reasons, and the second is structural. A record whose digest is its
+// identity is encoded canonically, and the canonical form forbids JSON numbers —
+// so an int-valued enum could not appear in one at all. And a name is what an
+// outsider reads: "3" in an evidence bundle means nothing without this package,
+// which is most of what an outsider-verifiable bundle exists to avoid.
+//
+// An out-of-vocabulary value is an ERROR rather than a number, so a corrupt enum
+// cannot round-trip through a record and come back looking valid.
+func (p ClockProvenance) MarshalJSON() ([]byte, error) {
+	if !p.Valid() {
+		return nil, fmt.Errorf("%w: cannot encode %s", ErrInvalidTime, p)
+	}
+	return json.Marshal(p.String())
+}
+
+// UnmarshalJSON reads the name form written by [ClockProvenance.MarshalJSON].
+//
+// ⚠️ A JSON number is REFUSED, not accepted as the underlying integer. Accepting
+// both would mean two encodings of one value, and the one that is not canonical
+// would still verify — which is the whole failure the canonical form prevents.
+func (p *ClockProvenance) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return fmt.Errorf("%w: clock provenance must be a name, not %s", ErrInvalidTime, data)
+	}
+	for candidate, n := range clockProvenanceNames {
+		if n == name {
+			*p = candidate
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %q is not a clock provenance", ErrInvalidTime, name)
 }
 
 // A TimeAuthority is who asserted a time, and what is known about their clock.
