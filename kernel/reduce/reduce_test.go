@@ -20,7 +20,8 @@ import (
 // # Why these are written before the reducer
 //
 // A verification test written AFTER the verifier is a test shaped to whatever
-// the verifier happened to do. These three claims — genesis accepted, a permit
+// the verifier happened to do. ⚠️ That protects the REJECTIONS only — see the
+// allow-direction note below, where writing the test first did not help. These three claims — genesis accepted, a permit
 // double-spend rejected, a tree swap rejected — are written first, over a
 // committed fixture DAG, so the reducer has to satisfy a check it did not
 // author.
@@ -32,10 +33,25 @@ import (
 // harness went red — "RED FIXTURE IS NO LONGER RED" — and demanded the fixture
 // be promoted to an ordinary test in the same change.
 //
-// The assertions below are those originals, unedited. Only the wrapper is gone.
-// Editing them to fit the implementation is the one thing that harness exists to
-// prevent, and there is no longer a redfixture import in this file — which is
-// the visible measure that the reducer satisfied checks it did not author.
+// The REJECTION assertions below are those originals, unedited. Only the wrapper
+// is gone. Editing them to fit the implementation is the one thing that harness
+// exists to prevent, and there is no longer a redfixture import in this file.
+//
+// # ⚠️ FOUR ALLOW-DIRECTION TESTS WERE REWRITTEN, AND THAT IS NOT A PROMOTION
+//
+// They are not fixtures and never were. Each claimed to prove the reducer ADMITS
+// something, and each asserted only that a particular phrase was ABSENT from the
+// refusal reason — which a neighbouring rule's refusal satisfies. All four were
+// green for a week over a reducer whose only acceptance was the genesis case.
+//
+// One of them could not have passed honestly at all: it offered a candidate with
+// no observation, so the correct answer was always a refusal, and the phrase it
+// watched for was never going to appear.
+//
+// They now assert out.Accepted, and allowpath_test.go enforces mechanically that
+// any test claiming an acceptance reads it — because the comments on those four
+// named this exact failure mode and nobody, including their author, spotted that
+// the assertion underneath did not check it.
 //
 // # ⚠️ "For the right reason" is checked TODAY, and green
 //
@@ -375,20 +391,70 @@ func TestReduce_RefusesAnUnusableBootstrap(t *testing.T) {
 	}
 }
 
-// ⚠️ REFUSE BY DEFAULT. A rule that has not been written yet must not let
-// anything through — so an input no rule admits is refused, with a reason
-// saying so, rather than accepted or errored.
-func TestReduce_RefusesWhatNoRuleAdmits(t *testing.T) {
-	in := input(t) // two accepted entries, no candidate: no rule covers this yet
+// ⚠️ THIS TEST REPLACES "REFUSE BY DEFAULT", WHICH WAS RETIRED WITH A REASON.
+//
+// While rules were missing, refusing by default was right: an unwritten rule
+// must not let anything through. It was ALSO how the reducer came to admit no
+// candidate at all — the genesis case was the only accept, every candidate fell
+// through to the fallback, and the tests written to catch exactly that asserted
+// a phrase was ABSENT rather than that the act was ACCEPTED. The fallback
+// satisfied them.
+//
+// What replaces it is a property that survives new rules: ADDING A RULE CAN ONLY
+// EVER REFUSE MORE. Both rule sets are enumerated, and this test fails if one
+// shrinks — a rule dropped in a refactor is the only way the reducer gets more
+// permissive by accident.
+func TestReduce_RunsEveryRuleItDeclares(t *testing.T) {
+	if got := len(reduce.PrefixRuleNames()); got != 1 {
+		t.Errorf("prefix rules: got %d, want 1 — a rule was added or dropped without updating this test", got)
+	}
+	if got := len(reduce.CandidateRuleNames()); got != 3 {
+		t.Errorf("candidate rules: got %d, want 3 — a rule was added or dropped without updating this test", got)
+	}
+	for _, name := range append(reduce.PrefixRuleNames(), reduce.CandidateRuleNames()...) {
+		if name == "" {
+			t.Error("a declared rule has no name — it cannot be reported in a refusal")
+		}
+	}
+}
+
+// A replay with no candidate asks whether the tape is well-formed and what
+// authority it establishes. A verified one is ACCEPTED.
+//
+// ⚠️ This input was previously the fixture for "no rule admits this", and the
+// same input was ALSO the fixture for "a tape in order is not refused by the
+// time rule". Two tests, opposite names, one refusal, both green — which is what
+// a phrase-absence assertion buys.
+func TestReduce_AcceptsAReplayOfAnAcceptedTape(t *testing.T) {
+	out, err := reduce.Reduce(context.Background(), input(t))
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if !out.Accepted {
+		t.Fatalf("a verified tape replayed with no candidate was REFUSED: %s", out.Reason)
+	}
+	if out.Head == "" {
+		t.Error("accepted without reporting the head it was decided against")
+	}
+}
+
+// ⚠️ ONE ACT, ONE POSITION. Re-offering an act already on the tape is not a
+// no-op: it would give one act two acceptance times, and it would spend its
+// permit again the day the spend rule stops looking at the whole prefix.
+func TestReduce_RefusesACandidateAlreadyOnTheTape(t *testing.T) {
+	in := input(t)
+	replayed := in.Acts[in.Accepted[1].ActBodyID]
+	in.Candidate = &replayed
+
 	out, err := reduce.Reduce(context.Background(), in)
 	if err != nil {
-		t.Fatalf("returned an error rather than a decision: %v", err)
+		t.Fatalf("Reduce: %v", err)
 	}
 	if out.Accepted {
-		t.Fatal("an input no rule admits was ACCEPTED — the default must be refusal")
+		t.Fatal("an act already on the tape was accepted a second time")
 	}
-	if out.Reason == "" {
-		t.Error("refused without a reason")
+	if !strings.Contains(out.Reason, "already on the tape") {
+		t.Errorf("refused for the wrong reason: %s", out.Reason)
 	}
 }
 
@@ -422,20 +488,27 @@ func TestReduce_RejectsAPermitDoubleSpend(t *testing.T) {
 	}
 }
 
-// ⚠️ THE OTHER HALF, without which the rule is indistinguishable from refusing
-// everything. A candidate spending an UNSPENT permit must get past this rule.
-func TestReduce_DoesNotRefuseAnUnspentPermit(t *testing.T) {
+// ⚠️ THE OTHER HALF, and it asserts ACCEPTANCE. Asserting only that the
+// "already spent" phrase is absent was the original defect: the candidate was
+// refused by the NEXT rule, the phrase was duly absent, and the test was green
+// while the reducer admitted nothing.
+func TestReduce_AcceptsACandidateSpendingAnUnspentPermit(t *testing.T) {
 	candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
 	candidate.Permit.IssuerActBodyID = "sha256:" + strings.Repeat("a", 64)
 	in := input(t)
 	in.Candidate = &candidate
+	// ⚠️ AND IT MUST BE OBSERVED. The earlier version of this test supplied no
+	// observation and asserted only that the phrase "already spent" was absent —
+	// so the candidate was refused as UNOBSERVED, the phrase was duly absent, and
+	// the test was green over an input that could never have been accepted.
+	in.Observations = []contracts.EvidenceEvent{observing(t, candidate)}
 
 	out, err := reduce.Reduce(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Reduce: %v", err)
 	}
-	if strings.Contains(out.Reason, "already spent") {
-		t.Fatalf("an unspent permit was refused as a double-spend: %s", out.Reason)
+	if !out.Accepted {
+		t.Fatalf("a candidate spending an unspent permit was REFUSED: %s", out.Reason)
 	}
 }
 
@@ -530,23 +603,21 @@ func TestReduce_RejectsATreeSwap(t *testing.T) {
 	}
 }
 
-// ⚠️ THE OTHER DIRECTION. Without this the rule is indistinguishable from
-// refusing every act that carries an observation.
-func TestReduce_DoesNotRefuseAnActObservedAgainstTheTreeItBinds(t *testing.T) {
+// ⭐ THE ACCEPT PATH. This is the act the whole design exists to admit: signed,
+// authorised by an unspent permit, on an in-order chain, and independently
+// observed to have produced the tree it binds. It is ACCEPTED.
+func TestReduce_AcceptsAnActObservedAgainstTheTreeItBinds(t *testing.T) {
 	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
-	observation := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
-	observation.Detail[reduce.ObservedTreeKey] = candidate.CandidateTreeOID
-
 	in := input(t)
 	in.Candidate = &candidate
-	in.Observations = []contracts.EvidenceEvent{observation}
+	in.Observations = []contracts.EvidenceEvent{observing(t, candidate)}
 
 	out, err := reduce.Reduce(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Reduce: %v", err)
 	}
-	if strings.Contains(out.Reason, "not the effect that was authorised") {
-		t.Fatalf("an act observed against the tree it binds was refused as a swap: %s", out.Reason)
+	if !out.Accepted {
+		t.Fatalf("an act observed against the tree it binds was REFUSED: %s", out.Reason)
 	}
 }
 
@@ -705,6 +776,10 @@ func TestReduce_RefusesATapeWhoseAuthorityChanges(t *testing.T) {
 // ⚠️ NOT-BEFORE, NOT STRICTLY-AFTER. Two acts accepted in the same instant are
 // ordered by their positions on the tape; refusing equal times would refuse a
 // correct tape whose clock is coarser than its acceptance rate.
+//
+// ⚠️ THE FOURTH INSTANCE OF THE PHRASE-ABSENCE DEFECT, and the one nobody found
+// by reading. Three were named in review; the mechanical scan in
+// allowpath_test.go found this one on its first run.
 func TestReduce_AcceptsEqualTimesAtAdjacentPositions(t *testing.T) {
 	in := input(t)
 	entries := append([]tapeformat.Entry(nil), in.Accepted...)
@@ -715,23 +790,31 @@ func TestReduce_AcceptsEqualTimesAtAdjacentPositions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reduce: %v", err)
 	}
-	if strings.Contains(out.Reason, "regress") {
-		t.Fatalf("equal acceptance times were reported as a regression: %s", out.Reason)
+	if !out.Accepted {
+		t.Fatalf("a tape with two acts accepted in the same instant was REFUSED: %s", out.Reason)
 	}
 }
 
-// A tape whose times run forwards passes this rule, or it is indistinguishable
-// from refusing every tape with more than one entry.
-func TestReduce_DoesNotRefuseATapeInOrder(t *testing.T) {
+// A tape whose times run forwards is ACCEPTED, or the time rule is
+// indistinguishable from refusing every tape with more than one entry.
+func TestReduce_AcceptsATapeWhoseTimesRunForwards(t *testing.T) {
 	out, err := reduce.Reduce(context.Background(), input(t))
 	if err != nil {
 		t.Fatalf("Reduce: %v", err)
 	}
-	for _, forbidden := range []string{"regress", "not comparable"} {
-		if strings.Contains(out.Reason, forbidden) {
-			t.Errorf("a tape in order was refused by the time rule: %s", out.Reason)
-		}
+	if !out.Accepted {
+		t.Fatalf("a tape whose times run forwards was REFUSED: %s", out.Reason)
 	}
+}
+
+// observing builds an independent observation reporting the tree act binds — the
+// evidence an act needs before the tree rule will let it through.
+func observing(t *testing.T, act contracts.ActSpec) contracts.EvidenceEvent {
+	t.Helper()
+	ev := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
+	ev.ActBodyID = act.ActBodyID
+	ev.Detail[reduce.ObservedTreeKey] = act.CandidateTreeOID
+	return ev
 }
 
 func rolledBack(t *testing.T) reduce.Input {

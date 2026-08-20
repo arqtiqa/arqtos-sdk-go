@@ -132,42 +132,104 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 	}
 	head := in.Accepted[len(in.Accepted)-1].ActBodyID
 
-	if out, decided := timeRule(in, head); decided {
-		return out, nil
-	}
-
-	// Replaying the bootstrap alone: the act is accepted, and the authority it
-	// establishes is carried out.
-	if len(in.Accepted) == 1 && in.Candidate == nil {
-		return Outcome{
-			Accepted: true,
-			Head:     head,
-			// ⚠️ COPIED, not aliased. An outcome sharing the caller's backing
-			// array lets a mutation of one silently change the other, which is
-			// exactly the defect that made a golden fixture drift earlier in
-			// this project.
-			RootKeys:  append([]contracts.RootKey(nil), in.Genesis.RootKeys...),
-			RootGrant: in.Genesis.RootGrant,
-		}, nil
+	// ⚠️ EVERY RULE RUNS, AND ACCEPTANCE IS WHAT IS LEFT WHEN NONE REFUSED.
+	//
+	// The earlier shape refused by DEFAULT and accepted only the genesis case,
+	// which meant no candidate could ever be admitted — and the allow-direction
+	// tests did not catch it, because they asserted a phrase was ABSENT rather
+	// than that the act was ACCEPTED. A neighbouring rule's refusal satisfied
+	// every one.
+	//
+	// Refusing by default was right while rules were missing and is wrong now:
+	// a reducer that never accepts is exactly as useless as one that always
+	// does. What replaces it is a property that still cannot be weakened by
+	// accident — ADDING A RULE CAN ONLY EVER REFUSE MORE. The rule sets below
+	// are enumerated, their sizes are asserted by a test, and nothing accepts
+	// before all of them have run.
+	for _, r := range prefixRules {
+		if out, decided := r.apply(in, head); decided {
+			return out, nil
+		}
 	}
 
 	if in.Candidate == nil {
-		out := refused("no rule in this build admits a replay of %d accepted entr(y/ies) with no candidate",
-			len(in.Accepted))
+		// A replay with no candidate asks "is this tape well-formed, and what
+		// authority does it establish". A verified prefix answers yes.
+		return accepted(in, head), nil
+	}
+
+	for _, r := range candidateRules {
+		if out, decided := r.apply(in, head); decided {
+			return out, nil
+		}
+	}
+	return accepted(in, head), nil
+}
+
+// A rule decides, or declines to. It never mutates, and it never reaches past
+// the input it was given — the purity test enforces both.
+//
+// ⚠️ The name is carried explicitly rather than derived by reflection. A pure
+// reducer that imported runtime to describe itself would be reaching outside its
+// own inputs for a cosmetic reason, and the purity test that forbids exactly
+// that kind of reach is worth more than the two lines it saves.
+type rule struct {
+	name  string
+	apply func(Input, string) (Outcome, bool)
+}
+
+// prefixRules judge the accepted tape itself, with or without a candidate.
+//
+// ⚠️ Enumerated rather than inlined so a test can assert how many there are. A
+// rule deleted in a refactor would otherwise make the reducer quietly more
+// permissive, which is the one direction that must never happen by accident.
+var prefixRules = []rule{
+	{"time", timeRule},
+}
+
+// candidateRules judge an act being offered against that tape.
+var candidateRules = []rule{
+	{"replay", replayRule},
+	{"spend", spendRule},
+	{"tree", treeRule},
+}
+
+// accepted builds the acceptance, carrying the authority the genesis act
+// established and the head the decision was made against.
+func accepted(in Input, head string) Outcome {
+	return Outcome{
+		Accepted: true,
+		Head:     head,
+		// ⚠️ COPIED, not aliased. An outcome sharing the caller's backing
+		// array lets a mutation of one silently change the other, which is
+		// exactly the defect that made a golden fixture drift earlier in
+		// this project.
+		RootKeys:  append([]contracts.RootKey(nil), in.Genesis.RootKeys...),
+		RootGrant: in.Genesis.RootGrant,
+	}
+}
+
+// replayRule refuses a candidate that is already on the tape.
+//
+// ⚠️ One act, one position — the same law tapeformat.VerifyChain enforces
+// within a tape. Re-offering an accepted act is not a no-op: it would spend its
+// permit a second time if the spend rule ever stopped looking, and it would
+// give one act two acceptance times.
+func replayRule(in Input, head string) (Outcome, bool) {
+	candidate := *in.Candidate
+	if candidate.ActBodyID == "" {
+		out := refused("the candidate carries no act body id, so it cannot be placed on the tape")
 		out.Head = head
-		return out, nil
+		return out, true
 	}
-
-	if out, decided := spendRule(in, head); decided {
-		return out, nil
+	for i, entry := range in.Accepted {
+		if entry.ActBodyID == candidate.ActBodyID {
+			out := refused("the candidate is already on the tape at entry %d; one act has one position", i)
+			out.Head = head
+			return out, true
+		}
 	}
-	if out, decided := treeRule(in, head); decided {
-		return out, nil
-	}
-
-	out := refused("no rule in this build admits this candidate")
-	out.Head = head
-	return out, nil
+	return Outcome{}, false
 }
 
 // timeRule refuses a tape whose acceptance times do not run forwards.
@@ -319,4 +381,23 @@ func spendRule(in Input, head string) (Outcome, bool) {
 		}
 	}
 	return Outcome{}, false
+}
+
+// PrefixRuleNames and CandidateRuleNames report the rules this build runs.
+//
+// ⚠️ They exist so a test can assert the sets did not SHRINK. A reducer gets
+// stricter safely — a new rule can only refuse more — but a rule deleted in a
+// refactor makes it quietly more permissive, and nothing else in the package
+// would notice.
+func PrefixRuleNames() []string { return ruleNames(prefixRules) }
+
+// CandidateRuleNames reports the rules applied to an offered act.
+func CandidateRuleNames() []string { return ruleNames(candidateRules) }
+
+func ruleNames(rules []rule) []string {
+	names := make([]string, 0, len(rules))
+	for _, r := range rules {
+		names = append(names, r.name)
+	}
+	return names
 }
