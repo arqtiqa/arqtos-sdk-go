@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/arqtiqa/arqtos-sdk-go/contracts"
-	"github.com/arqtiqa/arqtos-sdk-go/internal/redfixture"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/canonical"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/reduce"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/tapeformat"
@@ -26,11 +25,17 @@ import (
 // committed fixture DAG, so the reducer has to satisfy a check it did not
 // author.
 //
-// # ⚠️ They stay RED into W2, and that is the schedule
+// # ⚠️ They were RED into W2, and they are green now — PROMOTED, not edited
 //
-// The reducer that turns them green is separate, deliberate work. What this file
-// delivers is the failing tests: they exist, they name what they wait for, and
-// they precede the code they will judge.
+// Every one was written before the reducer existed and wrapped in
+// redfixture.Expect, which requires its body to FAIL. As each rule landed, the
+// harness went red — "RED FIXTURE IS NO LONGER RED" — and demanded the fixture
+// be promoted to an ordinary test in the same change.
+//
+// The assertions below are those originals, unedited. Only the wrapper is gone.
+// Editing them to fit the implementation is the one thing that harness exists to
+// prevent, and there is no longer a redfixture import in this file — which is
+// the visible measure that the reducer satisfied checks it did not author.
 //
 // # ⚠️ "For the right reason" is checked TODAY, and green
 //
@@ -246,15 +251,19 @@ func TestFixtureDAG_TheTwoRejectionCandidatesAreDistinct(t *testing.T) {
 // THE KILL GATES
 // ---------------------------------------------------------------------------
 //
-// ⚠️ Each of these has a REAL BODY that runs, and redfixture.Expect requires it
-// to fail. An empty body fails Expect; a body that starts passing fails Expect
-// and demands promotion. That is the difference between these and what shipped
-// in W1 — t.Skip lines with nothing after them, tests that could not fail and
-// therefore guarded nothing.
+// ⚠️ ALL FOUR ARE GREEN, AND ALL FOUR WERE PROMOTED. Each was written before the
+// reducer existed and wrapped in redfixture.Expect, which requires its body to
+// FAIL: an empty body fails it, and a body that starts passing fails it and
+// demands promotion in the same change. That is what happened to each of these
+// as its rule landed, and the assertions are the originals — unedited.
+//
+// The contrast is with what shipped in W1: t.Skip lines with nothing after them,
+// tests that could not fail and therefore guarded nothing.
 //
 // Every one asserts the REASON, never merely that an error occurred. A reducer
 // that refused every input would satisfy the weaker assertion, and would be
-// exactly as wrong as one that accepted everything.
+// exactly as wrong as one that accepted everything — which is why each rule also
+// carries a test proving it does NOT refuse the case it is meant to allow.
 
 func input(t *testing.T) reduce.Input {
 	t.Helper()
@@ -612,34 +621,129 @@ func TestReduce_RefusesACandidateThatBindsNoTree(t *testing.T) {
 // It was previously an empty skip in contracts/time_test.go, guarded by a canary
 // watching for a `contracts` export containing "Rollback" — a signal that could
 // never fire, because what it waits for is the reducer.
+// ⚠️ PROMOTED. Assertions unedited.
 func TestReduce_RejectsAClockRollback(t *testing.T) {
-	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
-		in := input(t)
-		if len(in.Accepted) < 2 {
-			ft.Fatalf("the fixture tape holds %d entries; a rollback needs two", len(in.Accepted))
-		}
+	in := input(t)
+	if len(in.Accepted) < 2 {
+		t.Fatalf("the fixture tape holds %d entries; a rollback needs two", len(in.Accepted))
+	}
 
-		// The second entry's acceptance time moves BACKWARDS, from the same
-		// authority — so the two are comparable and the regression is real
-		// rather than an artefact of comparing two clocks.
-		rolled := append([]tapeformat.Entry(nil), in.Accepted...)
-		rolled[1].AcceptedAt = contracts.AcceptedTime{
-			At:        rolled[0].AcceptedAt.At.Add(-time.Hour),
-			Authority: rolled[0].AcceptedAt.Authority,
-		}
-		in.Accepted = rolled
+	// The second entry's acceptance time moves BACKWARDS, from the same
+	// authority — so the two are comparable and the regression is real
+	// rather than an artefact of comparing two clocks.
+	rolled := append([]tapeformat.Entry(nil), in.Accepted...)
+	rolled[1].AcceptedAt = contracts.AcceptedTime{
+		At:        rolled[0].AcceptedAt.At.Add(-time.Hour),
+		Authority: rolled[0].AcceptedAt.Authority,
+	}
+	in.Accepted = rolled
 
-		out, err := reduce.Reduce(context.Background(), in)
-		if err != nil {
-			ft.Fatalf("reducing a rolled-back tape returned %v; it must be judged, not deferred", err)
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("reducing a rolled-back tape returned %v; it must be judged, not deferred", err)
+	}
+	if out.Accepted {
+		t.Fatal("a tape whose acceptance times run backwards under one authority was accepted")
+	}
+	if !strings.Contains(strings.ToLower(out.Reason), "time") {
+		t.Errorf("the refusal %q does not name the time regression", out.Reason)
+	}
+}
+
+// ⚠️ The promoted fixture asserts only that the reason mentions "time", and the
+// incomparable-authorities refusal below ALSO mentions clocks. That is the
+// assert-the-sentinel trap one level up, so this pins the phrase that belongs to
+// THIS rule.
+func TestReduce_TheRollbackRefusalNamesTheRegressionSpecifically(t *testing.T) {
+	in := rolledBack(t)
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if !strings.Contains(out.Reason, "regress") {
+		t.Errorf("the refusal %q does not say the times regress", out.Reason)
+	}
+	if strings.Contains(out.Reason, "not comparable") {
+		t.Errorf("a regression under ONE authority was reported as incomparable clocks: %s", out.Reason)
+	}
+}
+
+// ⚠️ A DIFFERENT FINDING, AND IT MUST READ AS ONE. Incomparable clocks is a
+// configuration fact about the acceptors; a regression is a clock that moved
+// backwards. They send an operator to different places, and a reducer that
+// collapsed them would send them to the wrong one.
+func TestReduce_RefusesATapeWhoseAuthorityChanges(t *testing.T) {
+	in := input(t)
+	entries := append([]tapeformat.Entry(nil), in.Accepted...)
+	entries[1].AcceptedAt.Authority = contracts.TimeAuthority{
+		Name:       "authority:somewhere-else",
+		Provenance: contracts.ClockLocal,
+	}
+	in.Accepted = entries
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if out.Accepted {
+		t.Fatal("a tape spanning two incomparable clocks was accepted")
+	}
+	if !strings.Contains(out.Reason, "not comparable") {
+		t.Errorf("the refusal %q does not say the clocks are not comparable", out.Reason)
+	}
+	if strings.Contains(out.Reason, "regress") {
+		t.Errorf("two incomparable clocks were reported as a regression: %s", out.Reason)
+	}
+	// And it names BOTH authorities, or nobody can tell which acceptor drifted.
+	for _, want := range []string{"authority:acceptor", "authority:somewhere-else"} {
+		if !strings.Contains(out.Reason, want) {
+			t.Errorf("the refusal %q does not name %q", out.Reason, want)
 		}
-		if out.Accepted {
-			ft.Fatal("a tape whose acceptance times run backwards under one authority was accepted")
+	}
+}
+
+// ⚠️ NOT-BEFORE, NOT STRICTLY-AFTER. Two acts accepted in the same instant are
+// ordered by their positions on the tape; refusing equal times would refuse a
+// correct tape whose clock is coarser than its acceptance rate.
+func TestReduce_AcceptsEqualTimesAtAdjacentPositions(t *testing.T) {
+	in := input(t)
+	entries := append([]tapeformat.Entry(nil), in.Accepted...)
+	entries[1].AcceptedAt = entries[0].AcceptedAt
+	in.Accepted = entries
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if strings.Contains(out.Reason, "regress") {
+		t.Fatalf("equal acceptance times were reported as a regression: %s", out.Reason)
+	}
+}
+
+// A tape whose times run forwards passes this rule, or it is indistinguishable
+// from refusing every tape with more than one entry.
+func TestReduce_DoesNotRefuseATapeInOrder(t *testing.T) {
+	out, err := reduce.Reduce(context.Background(), input(t))
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	for _, forbidden := range []string{"regress", "not comparable"} {
+		if strings.Contains(out.Reason, forbidden) {
+			t.Errorf("a tape in order was refused by the time rule: %s", out.Reason)
 		}
-		if !strings.Contains(strings.ToLower(out.Reason), "time") {
-			ft.Errorf("the refusal %q does not name the time regression", out.Reason)
-		}
-	})
+	}
+}
+
+func rolledBack(t *testing.T) reduce.Input {
+	t.Helper()
+	in := input(t)
+	entries := append([]tapeformat.Entry(nil), in.Accepted...)
+	entries[1].AcceptedAt = contracts.AcceptedTime{
+		At:        entries[0].AcceptedAt.At.Add(-time.Hour),
+		Authority: entries[0].AcceptedAt.Authority,
+	}
+	in.Accepted = entries
+	return in
 }
 
 // The fixture set is committed and complete. A file deleted or renamed would

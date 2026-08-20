@@ -132,6 +132,10 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 	}
 	head := in.Accepted[len(in.Accepted)-1].ActBodyID
 
+	if out, decided := timeRule(in, head); decided {
+		return out, nil
+	}
+
 	// Replaying the bootstrap alone: the act is accepted, and the authority it
 	// establishes is carried out.
 	if len(in.Accepted) == 1 && in.Candidate == nil {
@@ -164,6 +168,48 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 	out := refused("no rule in this build admits this candidate")
 	out.Head = head
 	return out, nil
+}
+
+// timeRule refuses a tape whose acceptance times do not run forwards.
+//
+// ⚠️ THIS IS A PROPERTY OF THE SEQUENCE, not of a pair of values, which is why
+// it lives in the reducer and not beside AcceptedTime. The pair comparison it
+// rests on — AcceptedTime.NotBefore — is the contract's; the sequence is the
+// tape's, and only something holding the whole tape can see a regression.
+//
+// ⚠️ AND TWO AUTHORITIES ARE NOT COMPARABLE. A regression is only a regression
+// if both times came from the same clock. Comparing two clocks is how a
+// rolled-back one buys a later position, and "I could not tell" must never read
+// as "in order" — so a tape whose authority changes is refused with its OWN
+// reason. Incomparable and out-of-order are different findings: one is a
+// configuration fact about the acceptors, the other is a clock that moved
+// backwards, and they send an operator to different places.
+func timeRule(in Input, head string) (Outcome, bool) {
+	for i := 1; i < len(in.Accepted); i++ {
+		prev := in.Accepted[i-1].AcceptedAt
+		cur := in.Accepted[i].AcceptedAt
+
+		if cur.Authority != prev.Authority {
+			out := refused("entries %d and %d record acceptance under different authorities (%q and %q), "+
+				"whose clocks are not comparable; the tape's order cannot be checked across them",
+				i-1, i, prev.Authority.Name, cur.Authority.Name)
+			out.Head = head
+			return out, true
+		}
+
+		// ⚠️ NOT-BEFORE, not strictly-after. Two acts accepted in the same
+		// instant are ordered by their positions on the tape, and refusing
+		// equal times would refuse a correct tape whose clock is simply
+		// coarser than its acceptance rate.
+		if !cur.NotBefore(prev) {
+			out := refused("entry %d was accepted at %s and entry %d at %s under the one authority %q — "+
+				"the tape's acceptance times regress, which is a rolled-back clock or a reordered chain",
+				i-1, prev.At, i, cur.At, cur.Authority.Name)
+			out.Head = head
+			return out, true
+		}
+	}
+	return Outcome{}, false
 }
 
 // ObservedTreeKey is the EvidenceEvent detail an observation reports the tree it
