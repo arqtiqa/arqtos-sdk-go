@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -420,16 +421,92 @@ func TestReduce_RefusesAnUnusableBootstrap(t *testing.T) {
 // shrinks — a rule dropped in a refactor is the only way the reducer gets more
 // permissive by accident.
 func TestReduce_RunsEveryRuleItDeclares(t *testing.T) {
-	if got := len(reduce.PrefixRuleNames()); got != 1 {
-		t.Errorf("prefix rules: got %d, want 1 — a rule was added or dropped without updating this test", got)
+	if got := reduce.PrefixRuleNames(); !slices.Equal(got, []string{"time"}) {
+		t.Errorf("prefix rules are %v, want [time]", got)
 	}
-	if got := len(reduce.CandidateRuleNames()); got != 4 {
-		t.Errorf("candidate rules: got %d, want 4 — a rule was added or dropped without updating this test", got)
+	if got := reduce.CandidateRuleNames(); !slices.Equal(got, []string{"replay", "lineage", "spend", "tree"}) {
+		t.Errorf("candidate rules are %v, want [replay lineage spend tree]", got)
 	}
-	for _, name := range append(reduce.PrefixRuleNames(), reduce.CandidateRuleNames()...) {
-		if name == "" {
-			t.Error("a declared rule has no name — it cannot be reported in a refusal")
-		}
+}
+
+// ⭐ EVERY DECLARED RULE MUST ACTUALLY REFUSE SOMETHING, and this is the test the
+// count-based guard should have been from the start.
+//
+// ⚠️ Pinning the NAMES is not enough either, and the acceptance criteria for this
+// fix said to say so if that turned out to be true. It is: swap a rule's
+// implementation for
+//
+//	func noopRule(Input, string) (Outcome, bool) { return Outcome{}, false }
+//
+// while keeping its entry {"tree", noopRule}, and both the count and the name set
+// still match. The reducer is then strictly more permissive — the one direction
+// that must never happen by accident.
+//
+// So each rule is handed an input only IT should refuse, and the refusal must be
+// attributed to it. A hollowed-out rule lets its input fall through, and this
+// test names which rule went silent.
+func TestReduce_EveryDeclaredRuleRefusesSomething(t *testing.T) {
+	cases := []struct {
+		rule  string
+		input func(*testing.T) reduce.Input
+	}{
+		{"time", rolledBack},
+		{"replay", func(t *testing.T) reduce.Input {
+			in := input(t)
+			replayed := in.Acts[in.Accepted[1].ActBodyID]
+			in.Candidate = &replayed
+			return in
+		}},
+		{"lineage", func(t *testing.T) reduce.Input {
+			candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+			candidate.Permit.IssuerActBodyID = "sha256:" + strings.Repeat("b", 64)
+			in := input(t)
+			in.Candidate = &candidate
+			in.Observations = []contracts.EvidenceEvent{observing(t, candidate)}
+			return in
+		}},
+		{"spend", func(t *testing.T) reduce.Input {
+			candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
+			in := input(t)
+			in.Candidate = &candidate
+			in.Observations = []contracts.EvidenceEvent{observing(t, candidate)}
+			return in
+		}},
+		{"tree", func(t *testing.T) reduce.Input {
+			candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+			in := input(t)
+			in.Candidate = &candidate
+			in.Observations = []contracts.EvidenceEvent{read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")}
+			return in
+		}},
+	}
+
+	// ⚠️ The table must cover every DECLARED rule, or a rule added tomorrow is
+	// unproved while this test still passes.
+	declared := append(reduce.PrefixRuleNames(), reduce.CandidateRuleNames()...)
+	covered := make([]string, 0, len(cases))
+	for _, c := range cases {
+		covered = append(covered, c.rule)
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(declared)), slices.Sorted(slices.Values(covered))) {
+		t.Fatalf("rules %v are declared but %v are proved live — every rule needs an input only it refuses",
+			declared, covered)
+	}
+
+	for _, c := range cases {
+		t.Run(c.rule, func(t *testing.T) {
+			out, err := reduce.Reduce(context.Background(), c.input(t))
+			if err != nil {
+				t.Fatalf("Reduce: %v", err)
+			}
+			if out.Accepted {
+				t.Fatalf("the %q rule refused nothing — its input was ACCEPTED, so the rule is not live", c.rule)
+			}
+			if out.Rule != c.rule {
+				t.Fatalf("the %q rule was expected to refuse this input, but %q did (%s) — "+
+					"%q is declared and silent", c.rule, out.Rule, out.Reason, c.rule)
+			}
+		})
 	}
 }
 
