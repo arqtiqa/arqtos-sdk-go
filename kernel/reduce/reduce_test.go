@@ -248,6 +248,18 @@ func TestFixtureDAG_TheTreeSwapCandidateIsObservedAgainstADifferentTree(t *testi
 	t.Logf("act binds tree %s; observation reports %s", act.CandidateTreeOID, observed)
 }
 
+// ⚠️ THE SWAP FIXTURE'S EVIDENCE MUST BE AN OBSERVATION, or the W2 kill gate is
+// testing the wrong thing. Since only an observation feeds the tree comparison,
+// a fixture that drifted to any other kind would make the swap test assert an
+// UNOBSERVED refusal while still being green — a gate that had stopped checking
+// what it names.
+func TestFixtureDAG_TheSwapEvidenceIsAnObservation(t *testing.T) {
+	ev := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
+	if ev.EventKind != contracts.EventObservation {
+		t.Fatalf("the tree-swap evidence is a %q, not an observation — the swap gate would pass vacuously", ev.EventKind)
+	}
+}
+
 // ⚠️ The two rejection candidates must be different acts. Two fixtures that
 // reduced to one would be one fixture and a duplicate, with the second one's
 // coverage imaginary.
@@ -888,5 +900,72 @@ func TestFixtureDAG_EveryRecordDecodesStrictly(t *testing.T) {
 	}
 	if checked != 5 {
 		t.Fatalf("decoded %d records, want 5 — the tape is checked separately by its own reader", checked)
+	}
+}
+
+// ⭐ ONLY AN OBSERVATION COUNTS. A receipt is the host's OWN record of what it
+// did; an observation is what an independent observer saw. Reconciling a host's
+// claim against itself is not reconciliation, and the tree gate rests entirely
+// on the comparison being against a view the acting party did not write.
+//
+// ⚠️ The rule previously read the tree key from ANY evidence event. The fixture
+// happens to be an observation, so every existing test passed — the defect was
+// invisible to the whole suite.
+func TestReduce_ReadsTheObservedTreeOnlyFromAnObservation(t *testing.T) {
+	for _, kind := range []contracts.EvidenceEventKind{
+		contracts.EventReceipt,
+		contracts.EventAttempt,
+		contracts.EventAcceptance,
+		contracts.EventViolation,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+			swap := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
+			swap.EventKind = kind // a MISMATCHING tree, reported by the wrong kind
+
+			in := input(t)
+			in.Candidate = &candidate
+			in.Observations = []contracts.EvidenceEvent{swap}
+
+			out, err := reduce.Reduce(context.Background(), in)
+			if err != nil {
+				t.Fatalf("Reduce: %v", err)
+			}
+			if out.Accepted {
+				t.Fatal("an act with no independent observation was ACCEPTED")
+			}
+			// ⚠️ ASSERT THE REASON. Both outcomes here are refusals, and a test
+			// checking only that the act was refused would pass on the swap
+			// verdict — which is the answer that must NOT be given, because it
+			// would mean the host's own record had satisfied the gate.
+			if strings.Contains(out.Reason, "not the effect that was authorised") {
+				t.Errorf("a %s satisfied the tree gate — the host's own record is not independent evidence: %s",
+					kind, out.Reason)
+			}
+			if !strings.Contains(out.Reason, "no observation reports a tree") {
+				t.Errorf("refused for the wrong reason; an act evidenced only by a %s is UNOBSERVED: %s",
+					kind, out.Reason)
+			}
+		})
+	}
+}
+
+// The mirror: an observation carrying a matching tree still admits the act, so
+// the kind check cannot be satisfied by refusing everything.
+func TestReduce_AcceptsWhenTheMatchingTreeComesFromAnObservation(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	ev := observing(t, candidate)
+	ev.EventKind = contracts.EventObservation
+
+	in := input(t)
+	in.Candidate = &candidate
+	in.Observations = []contracts.EvidenceEvent{ev}
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if !out.Accepted {
+		t.Fatalf("a matching observation did not admit the act: %s", out.Reason)
 	}
 }
