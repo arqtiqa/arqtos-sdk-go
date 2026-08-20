@@ -307,6 +307,20 @@ func treeRule(in Input, head string) (Outcome, bool) {
 		if ev.ActBodyID != candidate.ActBodyID {
 			continue
 		}
+		// ⚠️ ONLY AN OBSERVATION IS INDEPENDENT EVIDENCE, and this is the whole
+		// reason the record layer distinguishes the kinds.
+		//
+		// A RECEIPT is the host's own record of what it did. Comparing an act
+		// against the host's account of itself is not reconciliation — a host
+		// that wrote the wrong tree would report the wrong tree, and the
+		// comparison would pass. An ATTEMPT says what was tried, not what
+		// happened. An ACCEPTANCE is about the tape, not the effect.
+		//
+		// Reading the tree key from any of them would let the gate be satisfied
+		// by the very party it exists to check.
+		if ev.EventKind != contracts.EventObservation {
+			continue
+		}
 		observed, ok := ev.Detail[ObservedTreeKey]
 		if !ok || observed == "" {
 			continue
