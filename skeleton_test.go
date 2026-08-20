@@ -43,12 +43,14 @@ import (
 // removal is what this guard is FOR. It went red naming all 36 exported
 // identifiers and demanding the entry come out in the same change as the
 // tests. It did.
+// ⚠️ "kernel/tapeformat" came out the same way, on the change that gave it the
+// entry shape, the chain check and the stream reader. The guard went red naming
+// all 11 exported identifiers; the tests landed with them.
 var skeletonPackages = []string{
 	"kernel",
 	"kernel/keyhistory",
 	"kernel/predicate",
 	"kernel/reduce",
-	"kernel/tapeformat",
 }
 
 // exportedDecls returns the exported top-level identifiers declared in dir.

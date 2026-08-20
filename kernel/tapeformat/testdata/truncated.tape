@@ -1,0 +1,3 @@
+{"schema_version":"1","format":"arqtos.tape.v1","entry_count":"3"}
+{"schema_version":"1","sequence":"0","act_body_id":"sha256:0000000000000000000000000000000000000000000000000000000000000000","parent_act_body_id":"","accepted_at":{"at":"2026-08-20T00:00:00Z","authority":{"name":"authority:acceptor","provenance":"synchronised"}}}
+{"schema_version":"1","sequence":"1","act_body_id":"sha256:1111111111111111111111111111111111111111111111111111111111111111","parent_act_body_id":"sha256:0000000000000000000000000000000000000000000000000000000000000000","accepted_at":{"at":"2026-08-20T00:01:00Z","authority":{"name":"authority:acceptor","provenance":"synchronised"}}}
