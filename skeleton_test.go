@@ -37,14 +37,14 @@ import (
 // part of the work, not a workaround for it — and doing it in the same change is
 // what stops a package quietly acquiring an API with no test behind it, which is
 // exactly what an empty skeleton makes easy.
-// ⚠️ "contracts" was removed on the change that gave it real surface — the
+// ⚠️ "contracts" and "kernel/canonical" were each removed on the change that
+// gave them real surface — the
 // four record layers, their JSON Schemas and their golden fixtures — and that
 // removal is what this guard is FOR. It went red naming all 36 exported
 // identifiers and demanding the entry come out in the same change as the
 // tests. It did.
 var skeletonPackages = []string{
 	"kernel",
-	"kernel/canonical",
 	"kernel/keyhistory",
 	"kernel/predicate",
 	"kernel/reduce",
