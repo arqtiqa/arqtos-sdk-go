@@ -64,8 +64,13 @@ var goldens = map[contracts.Kind]struct {
 		Principal:     "principal:operator",
 		KeyID:         "key:operator-2026-08",
 		Signature:     "base64:c2lnbmF0dXJlLXBsYWNlaG9sZGVy",
-		At:            time.Date(2026, 8, 20, 9, 30, 0, 0, time.UTC),
-		TimeSource:    "authority:host-clock",
+		At: contracts.AcceptedTime{
+			At: time.Date(2026, 8, 20, 9, 30, 0, 0, time.UTC),
+			Authority: contracts.TimeAuthority{
+				Name:       "authority:host-clock",
+				Provenance: contracts.ClockSynchronised,
+			},
+		},
 	}},
 
 	contracts.KindEvidenceEvent: {"evidence_event.v1.json", "evidence_event.v1.schema.json", contracts.EvidenceEvent{
