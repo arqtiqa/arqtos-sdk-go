@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arqtiqa.github.io/arqtos/schema/status_view.v1.schema.json",
+  "title": "StatusView v1 — a disposable projection",
+  "description": "Authoritative for nothing. Deleting it entirely must leave governed verification valid, and rebuilding from zero must reach the same result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "rebuilt_through_sequence", "entries"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "status_view" },
+    "rebuilt_through_sequence": { "type": "integer", "minimum": 0 },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["act_body_id", "state"],
+        "properties": {
+          "act_body_id": { "type": "string" },
+          "state": { "type": "string", "description": "Derived, never authored." },
+          "desired_spec_id": { "type": "string" },
+          "observed_spec_id": { "type": "string" }
+        }
+      }
+    }
+  }
+}

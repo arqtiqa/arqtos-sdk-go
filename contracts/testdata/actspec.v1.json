@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "actspec",
+  "act_body_id": "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
+  "act_kind": "governed_merge",
+  "repository_id": "repo:example/governed",
+  "change_request_id": "cr:example/governed/41",
+  "head_sha": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+  "base_constraint": "refs/heads/main@9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c",
+  "merge_method": "squash",
+  "candidate_tree_oid": "tree:5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081",
+  "charter_digest": "sha256:abc0000000000000000000000000000000000000000000000000000000000001",
+  "charter_rule_id": "rule:low-risk-docs",
+  "manifest": [
+    {
+      "path": "docs/threat-model.md",
+      "content_digest": "sha256:def0000000000000000000000000000000000000000000000000000000000002"
+    }
+  ],
+  "permit": {
+    "issuer_act_body_id": "sha256:1110000000000000000000000000000000000000000000000000000000000003",
+    "output_index": 0
+  },
+  "footprint": {
+    "reads": [
+      {
+        "resource_id": "charter:example/governed",
+        "expected_version": 7
+      }
+    ],
+    "writes": [
+      {
+        "resource_id": "ref:refs/heads/main",
+        "expected_version": 41,
+        "new_digest": "sha256:2220000000000000000000000000000000000000000000000000000000000004"
+      }
+    ],
+    "namespace_roots": [
+      "lane:docs"
+    ]
+  },
+  "nonce": "01a01578-ec47-7209-9200-cac2a1f75c7f",
+  "valid_until": "2026-08-21T12:00:00Z",
+  "reducer_version": "reduce/v0"
+}
