@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 )
 
 // ErrInvalidTime is a recorded time that cannot be used in the replay path —
@@ -35,6 +36,51 @@ var ErrAmplification = errors.New("contracts: issued authority exceeds its paren
 // would say only when the container was written, which is the one moment nobody
 // is verifying.
 const SchemaVersion = 1
+
+// SchemaVersionNumber is [SchemaVersion] in the form records carry it.
+//
+// ⚠️ DERIVED, never restated. Two constants for one version drift, and the one
+// nobody updates becomes the lie.
+var SchemaVersionNumber = FromInt(SchemaVersion)
+
+// A Number is an integer carried as its decimal string.
+//
+// ⚠️ THIS IS NOT A STYLE CHOICE. Records in this package are digested with the
+// canonical encoding, and that encoding FORBIDS JSON numbers: two encoders can
+// disagree about how a number is written — exponent form, trailing zero,
+// precision — while agreeing it is the same number, and a record whose digest is
+// its identity cannot afford that.
+//
+// An int-typed field therefore makes its record unencodable, and the failure is
+// invisible until the first time an identity is computed. This type names the
+// rule once, so a reflection test can require it everywhere rather than trusting
+// each author to remember it.
+type Number string
+
+// ErrNotANumber is a Number that is not the canonical spelling of an integer.
+var ErrNotANumber = errors.New("contracts: not the canonical decimal spelling of an integer")
+
+// FromInt renders i as a Number.
+func FromInt(i int64) Number { return Number(strconv.FormatInt(i, 10)) }
+
+// Int parses n.
+//
+// ⚠️ A NON-CANONICAL SPELLING IS REFUSED, not silently accepted. "007" and "7"
+// would otherwise be two spellings of one value in bytes that are digested,
+// which is the exact ambiguity carrying integers as strings exists to remove.
+func (n Number) Int() (int64, error) {
+	i, err := strconv.ParseInt(string(n), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q", ErrNotANumber, string(n))
+	}
+	if strconv.FormatInt(i, 10) != string(n) {
+		return 0, fmt.Errorf("%w: %q is not how %d is written", ErrNotANumber, string(n), i)
+	}
+	return i, nil
+}
+
+// Valid reports whether n is the canonical spelling of an integer.
+func (n Number) Valid() bool { _, err := n.Int(); return err == nil }
 
 // A Kind names one record layer.
 //

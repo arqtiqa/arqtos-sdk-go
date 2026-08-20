@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": "1",
   "kind": "witness",
   "act_body_id": "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
   "witness_kind": "ratification",

@@ -2,7 +2,6 @@ package contracts
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/canonical"
@@ -25,11 +24,6 @@ import (
 // A compromised administrator can mint an alternate genesis and build a chain on
 // it that replays perfectly. Every claim this file supports is therefore
 // RELATIVE to a genesis, and none of it says the genesis is the right one.
-
-// GenesisSchemaVersion is [SchemaVersion] in the string form the canonical
-// encoding requires. It is DERIVED rather than restated, so the two cannot
-// drift apart.
-var GenesisSchemaVersion = strconv.Itoa(SchemaVersion)
 
 // A RepositoryIdentity names the repository a ledger governs.
 //
@@ -298,14 +292,12 @@ func (g Grant) Attenuates(parent Grant) error {
 
 // A RepositoryGenesis is the ledger bootstrap: the act every other act traces to.
 type RepositoryGenesis struct {
-	// SchemaVersion is [GenesisSchemaVersion].
+	// SchemaVersion is [SchemaVersionNumber].
 	//
-	// ⚠️ It is a STRING, and that is the canonical encoding's rule rather than
-	// a style choice: this act's digest is its identity, and the canonical form
-	// forbids JSON numbers because two encoders can disagree about how a number
-	// is written while agreeing it is the same number. A field whose digest is
-	// identity cannot afford that.
-	SchemaVersion string `json:"schema_version"`
+	// ⚠️ A [Number] — an integer carried as its decimal string — for the reason
+	// that type exists: this act's digest is its identity, and the canonical
+	// form forbids JSON numbers.
+	SchemaVersion Number `json:"schema_version"`
 	// Repository is which repository this ledger governs.
 	Repository RepositoryIdentity `json:"repository"`
 	// RootKeys are the keys that are root from genesis.

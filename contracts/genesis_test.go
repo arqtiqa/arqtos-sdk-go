@@ -34,7 +34,7 @@ func rootGrant() contracts.Grant {
 
 func goodGenesis() contracts.RepositoryGenesis {
 	return contracts.RepositoryGenesis{
-		SchemaVersion: contracts.GenesisSchemaVersion,
+		SchemaVersion: contracts.SchemaVersionNumber,
 		Repository:    contracts.RepositoryIdentity{Authority: "github.com", Path: "arqtiqa/arqtos-core"},
 		RootKeys: []contracts.RootKey{
 			{KeyID: "root-1", Algorithm: "ed25519", PublicKey: "TFVSZWFsUHVibGljS2V5Qnl0ZXM="},
