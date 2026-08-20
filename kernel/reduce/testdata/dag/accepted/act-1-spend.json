@@ -1,45 +1,45 @@
 {
-  "schema_version": "1",
-  "kind": "actspec",
-  "act_body_id": "sha256:6df323f6da9c94a237b6678f516b8487b628ba3655972bfc26af93d8158721cb",
+  "act_body_id": "sha256:d4b498a91e2da6e17137f3b1ead8ec83223149416cf4f4ee01e014e052c447e2",
   "act_kind": "merge_change_request",
-  "repository_id": "github.com/arqtiqa/arqtos-core",
-  "change_request_id": "cr-1",
-  "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
   "base_constraint": "refs/heads/main@eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-  "merge_method": "merge",
   "candidate_tree_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "change_request_id": "cr-1",
   "charter_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "charter_rule_id": "rule.merge.protected-main",
-  "manifest": [
-    {
-      "path": "docs/decision.md",
-      "content_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-    }
-  ],
-  "permit": {
-    "issuer_act_body_id": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-    "output_index": "0"
-  },
   "footprint": {
+    "namespace_roots": [
+      "refs/heads"
+    ],
     "reads": [
       {
-        "resource_id": "charter:main",
-        "expected_version": "1"
+        "expected_version": "1",
+        "resource_id": "charter:main"
       }
     ],
     "writes": [
       {
-        "resource_id": "ref:refs/heads/main",
         "expected_version": "1",
-        "new_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+        "new_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "resource_id": "ref:refs/heads/main"
       }
-    ],
-    "namespace_roots": [
-      "refs/heads"
     ]
   },
+  "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+  "kind": "actspec",
+  "manifest": [
+    {
+      "content_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "path": "docs/decision.md"
+    }
+  ],
+  "merge_method": "merge",
   "nonce": "nonce-1",
-  "valid_until": "2026-08-21T00:00:00Z",
-  "reducer_version": "reduce/0.1.0"
+  "permit": {
+    "issuer_act_body_id": "sha256:083e58c2eb5b85955ac863342b0fa2df33c51de89f3cb392327f227552ca2a3a",
+    "output_index": "0"
+  },
+  "reducer_version": "reduce/0.1.0",
+  "repository_id": "github.com/arqtiqa/arqtos-core",
+  "schema_version": "1",
+  "valid_until": "2026-08-21T00:00:00Z"
 }

@@ -2,6 +2,9 @@ package reduce_test
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -420,8 +423,8 @@ func TestReduce_RunsEveryRuleItDeclares(t *testing.T) {
 	if got := len(reduce.PrefixRuleNames()); got != 1 {
 		t.Errorf("prefix rules: got %d, want 1 — a rule was added or dropped without updating this test", got)
 	}
-	if got := len(reduce.CandidateRuleNames()); got != 3 {
-		t.Errorf("candidate rules: got %d, want 3 — a rule was added or dropped without updating this test", got)
+	if got := len(reduce.CandidateRuleNames()); got != 4 {
+		t.Errorf("candidate rules: got %d, want 4 — a rule was added or dropped without updating this test", got)
 	}
 	for _, name := range append(reduce.PrefixRuleNames(), reduce.CandidateRuleNames()...) {
 		if name == "" {
@@ -506,7 +509,11 @@ func TestReduce_RejectsAPermitDoubleSpend(t *testing.T) {
 // while the reducer admitted nothing.
 func TestReduce_AcceptsACandidateSpendingAnUnspentPermit(t *testing.T) {
 	candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
-	candidate.Permit.IssuerActBodyID = "sha256:" + strings.Repeat("a", 64)
+	// ⚠️ A DIFFERENT OUTPUT OF THE SAME ISSUER, not a fabricated issuer. The
+	// earlier version invented an issuer id, which the lineage rule now refuses
+	// outright — so the test would have proved nothing about double-spending
+	// while appearing to. An unspent permit is a real outpoint nobody consumed.
+	candidate.Permit.OutputIndex = contracts.FromInt(7)
 	in := input(t)
 	in.Candidate = &candidate
 	// ⚠️ AND IT MUST BE OBSERVED. The earlier version of this test supplied no
@@ -544,8 +551,13 @@ func TestReduce_TheGenesisActSpendsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reduce: %v", err)
 	}
-	if strings.Contains(out.Reason, genesisEntry.ActBodyID) {
-		t.Errorf("the genesis act was treated as having spent a permit: %s", out.Reason)
+	// ⚠️ ASSERT THE POSITION, NOT THE ID. This once searched the reason for the
+	// genesis act's id anywhere in the string. That was ambiguous the moment the
+	// fixture's permits started naming the genesis act as their ISSUER — the id
+	// then appears in every double-spend reason, describing the permit rather
+	// than the spender, and the test failed over a correct refusal.
+	if strings.Contains(out.Reason, "at entry 0") {
+		t.Errorf("the genesis act was reported as a spender: %s", out.Reason)
 	}
 }
 
@@ -967,5 +979,88 @@ func TestReduce_AcceptsWhenTheMatchingTreeComesFromAnObservation(t *testing.T) {
 	}
 	if !out.Accepted {
 		t.Fatalf("a matching observation did not admit the act: %s", out.Reason)
+	}
+}
+
+// ⭐ AUTHORITY THAT TRACES TO NO ACCEPTED ACT WAS NEVER GRANTED. A permit is an
+// outpoint into an act's outputs; an outpoint naming an issuer nobody accepted
+// cites a grant that does not exist.
+//
+// ⚠️ This is LINEAGE, not attenuation. See lineageRule's doc for why the reducer
+// cannot check scope against today's ActSpec, and for the residual that leaves.
+func TestReduce_RefusesAPermitIssuedByAnActNotOnTheTape(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	candidate.Permit.IssuerActBodyID = "sha256:" + strings.Repeat("b", 64)
+
+	in := input(t)
+	in.Candidate = &candidate
+	in.Observations = []contracts.EvidenceEvent{observing(t, candidate)}
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if out.Accepted {
+		t.Fatal("a permit citing an issuer nobody accepted was admitted")
+	}
+	// ⚠️ Assert the reason. Every other candidate rule would also refuse this
+	// input for a reason of its own, and a test checking only that it was
+	// refused would pass while lineage went unchecked.
+	if !strings.Contains(out.Reason, "not on the accepted tape") {
+		t.Errorf("refused for the wrong reason: %s", out.Reason)
+	}
+}
+
+// The mirror: the fixture's permits are issued by the genesis act, which IS on
+// the tape, so lineage cannot be satisfied by refusing every permit.
+func TestReduce_AcceptsAPermitIssuedByTheGenesisAct(t *testing.T) {
+	candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+	if candidate.Permit.IssuerActBodyID != input(t).Accepted[0].ActBodyID {
+		t.Fatalf("the fixture's permit is not issued by the genesis act, so this test proves nothing: %s",
+			candidate.Permit.IssuerActBodyID)
+	}
+	in := input(t)
+	in.Candidate = &candidate
+	in.Observations = []contracts.EvidenceEvent{observing(t, candidate)}
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Reduce: %v", err)
+	}
+	if !out.Accepted {
+		t.Fatalf("a permit issued by an accepted act was REFUSED: %s", out.Reason)
+	}
+}
+
+// ⚠️ THE REDUCER DOES NOT CHECK ATTENUATION, AND A CALLER MUST NOT ASSUME IT DOES.
+//
+// This is a claim about a GAP, so it is pinned rather than left to a doc comment
+// that nothing reads. contracts.Grant.Attenuates is the one definition of
+// non-amplification; if the reduce path ever starts checking scope it must
+// delegate to it, and this test will fail and demand the claim be rewritten.
+func TestReduce_DoesNotClaimToCheckAttenuation(t *testing.T) {
+	// ⚠️ READ THE AST, NOT THE TEXT. A text scan matched the word inside
+	// lineageRule's own doc comment — the comment that EXPLAINS the gap — so the
+	// check failed on the documentation of the very claim it was pinning.
+	f, err := parser.ParseFile(token.NewFileSet(), "reduce.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing reduce.go: %v", err)
+	}
+	called := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			called[sel.Sel.Name] = true
+		}
+		return true
+	})
+	for _, symbol := range []string{"Attenuates", "Permits"} {
+		if called[symbol] {
+			t.Errorf("reduce.go now calls %s — the reducer checks scope, so lineageRule's doc "+
+				"and the README's \"does not check non-amplification\" clause are both stale", symbol)
+		}
+	}
+	// The scan must be able to see a call at all, or it is vacuous.
+	if !called["Validate"] {
+		t.Error("the AST scan found no known selector in reduce.go; it is not seeing the file")
 	}
 }
