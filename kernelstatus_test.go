@@ -80,6 +80,29 @@ func TestREADME_KernelStatusMatchesThePackages(t *testing.T) {
 	}
 }
 
+// ⚠️ Unknown-field rejection is NOT in kernel/canonical. Encode keeps extra map
+// keys. The README once said it was, which would have a reader trust the encoder
+// to refuse a widened body — it does not.
+func TestREADME_DoesNotAttributeUnknownFieldRejectionToTheEncoder(t *testing.T) {
+	raw, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.Join(strings.Fields(string(raw)), " ")
+	if strings.Contains(doc, "hash of — unknown fields **rejected**") {
+		t.Error("the README attributes unknown-field rejection to kernel/canonical, which does not do it — " +
+			"Encode keeps extra map keys. The rejection is in contracts.Decode and tapeformat.")
+	}
+
+	// And the claim must appear where it IS true.
+	if !strings.Contains(doc, "`Decode` **rejects unknown fields**") {
+		t.Error("the README no longer says where unknown-field rejection actually happens")
+	}
+
+	// Proved, not asserted: the encoder really does keep an unknown key.
+	assertEncoderKeepsUnknownKeys(t)
+}
+
 const (
 	statusImplemented = "implemented"
 	statusSkeleton    = "skeleton"
