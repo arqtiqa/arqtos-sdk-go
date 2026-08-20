@@ -54,6 +54,14 @@ type Outcome struct {
 	// everything would satisfy the weaker assertion.
 	Reason string
 
+	// Head is the entry the decision was made relative to: the last entry of a
+	// verified accepted prefix.
+	//
+	// ⚠️ REPORTED, not assumed. Acceptance is single-headed, and a decision
+	// that does not say which head it was made against cannot be reconciled
+	// later against a tape that has since advanced.
+	Head string
+
 	// RootKeys and RootGrant are the authority the genesis act established.
 	//
 	// ⚠️ Carried out so an accepted genesis can be shown to have ESTABLISHED
@@ -110,11 +118,26 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 			"rooted in the genesis it claims", got, genesisID), nil
 	}
 
+	// ⚠️ THE PREFIX MUST BE A CHAIN BEFORE IT CAN HAVE A HEAD. A reducer that
+	// judged a candidate against a broken prefix would be deciding against a
+	// history that does not exist.
+	//
+	// ⚠️ AND THE RULE IS DELEGATED, not reimplemented. tapeformat.VerifyChain
+	// is the one definition of what a chain is, and the public verifier applies
+	// it too — a second implementation here is precisely what the public-kernel
+	// boundary exists to prevent, and the two would disagree on the cases
+	// neither test happens to cover.
+	if err := tapeformat.VerifyChain(in.Accepted); err != nil {
+		return refused("the accepted prefix is not a chain, so it has no head to accept against: %v", err), nil
+	}
+	head := in.Accepted[len(in.Accepted)-1].ActBodyID
+
 	// Replaying the bootstrap alone: the act is accepted, and the authority it
 	// establishes is carried out.
 	if len(in.Accepted) == 1 && in.Candidate == nil {
 		return Outcome{
 			Accepted: true,
+			Head:     head,
 			// ⚠️ COPIED, not aliased. An outcome sharing the caller's backing
 			// array lets a mutation of one silently change the other, which is
 			// exactly the defect that made a golden fixture drift earlier in
@@ -124,6 +147,8 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 		}, nil
 	}
 
-	return refused("no rule in this build admits this input; %d accepted entr(y/ies), candidate=%v",
-		len(in.Accepted), in.Candidate != nil), nil
+	out := refused("no rule in this build admits this input; %d accepted entr(y/ies), candidate=%v",
+		len(in.Accepted), in.Candidate != nil)
+	out.Head = head
+	return out, nil
 }
