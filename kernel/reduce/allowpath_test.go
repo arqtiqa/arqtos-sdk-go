@@ -26,6 +26,21 @@ import (
 //
 // So the check is mechanical: a test whose NAME claims an acceptance must
 // assert one. It reads this package's own test sources.
+//
+// # ⚠️ AND IT MEASURED A PROXY FOR ITS FIRST WEEK — the defect it exists to catch
+//
+// The body check was strings.Contains over a raw source slice, looking for the
+// text "out.Accepted". A COMMENT satisfies that. Replacing a live assertion with
+//
+//	// out.Accepted is deliberately not asserted here.
+//	_ = out
+//
+// left the whole package green. The scan already parsed an AST to find the
+// function NAMES, then fell back to text for the thing that mattered.
+//
+// It now requires the field to be READ IN A CONDITION. Comments are absent from
+// the tree when parsing without parser.ParseComments, so they cannot satisfy it,
+// and a bare `_ = out.Accepted` is not a test of anything.
 func TestEveryAllowPathTestAssertsAcceptance(t *testing.T) {
 	files, err := filepath.Glob("*_test.go")
 	if err != nil || len(files) == 0 {
@@ -55,9 +70,8 @@ func TestEveryAllowPathTestAssertsAcceptance(t *testing.T) {
 				continue
 			}
 			claimed++
-			body := string(src[fn.Body.Pos()-1 : fn.Body.End()-1])
-			if !strings.Contains(body, "out.Accepted") {
-				t.Errorf("%s: %s claims an allow-path but never reads out.Accepted — "+
+			if !assertsAcceptance(fn.Body) {
+				t.Errorf("%s: %s claims an allow-path but never TESTS the accepted field — "+
 					"a neighbouring rule's refusal would satisfy it",
 					file, fn.Name.Name)
 			}
@@ -80,3 +94,53 @@ func claimsAcceptance(name string) bool {
 	}
 	return false
 }
+
+// assertsAcceptance reports whether a body actually TESTS the accepted field.
+//
+// ⚠️ Reading it is not enough — `_ = out.Accepted` reads it. The field must
+// appear inside a CONDITION: an if, a for, a switch tag or case, or a boolean
+// operand. That is the difference between mentioning an outcome and asserting
+// one, and it is the whole distinction this file exists to enforce.
+func assertsAcceptance(body *ast.BlockStmt) bool {
+	tested := false
+
+	inCondition := func(n ast.Node) {
+		if tested || n == nil {
+			return
+		}
+		ast.Inspect(n, func(inner ast.Node) bool {
+			if sel, ok := inner.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == acceptedField {
+				tested = true
+			}
+			return !tested
+		})
+	}
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.IfStmt:
+			inCondition(stmt.Cond)
+		case *ast.ForStmt:
+			inCondition(stmt.Cond)
+		case *ast.SwitchStmt:
+			inCondition(stmt.Tag)
+		case *ast.CaseClause:
+			for _, expr := range stmt.List {
+				inCondition(expr)
+			}
+		case *ast.BinaryExpr:
+			// A helper call such as require.True(t, out.Accepted) has no
+			// if-statement of its own; the boolean expression is the assertion.
+			inCondition(stmt)
+		case *ast.UnaryExpr:
+			if stmt.Op == token.NOT {
+				inCondition(stmt.X)
+			}
+		}
+		return !tested
+	})
+	return tested
+}
+
+// acceptedField is the outcome field an allow-path test must test.
+const acceptedField = "Accepted"
