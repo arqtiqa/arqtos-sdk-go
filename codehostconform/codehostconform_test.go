@@ -19,6 +19,9 @@ import (
 const (
 	fixtureListable   = "listable-owner"
 	fixtureUnlistable = "absent-owner"
+	// A repository and ref whose protection the stub must NOT be able to read.
+	fixtureUnreadableRepo = "listable-owner/private-repo"
+	fixtureUnreadableRef  = "refs/heads/unreadable"
 )
 
 // stub is a codehost.CodeHost that passes every check, with one knob per check so a test
@@ -107,7 +110,16 @@ func (tokenMintingStub) RunnerToken(context.Context, string) (string, time.Time,
 // probe.
 type protectionInspectingStub struct{ *stub }
 
+// ⚠️ It distinguishes "not allowed to look" from "no rules here" — the two
+// answers that share a shape and mean opposite things. On the unreadable fixture
+// it returns a TYPED failure and a Protection whose lists cannot be read; a
+// caller that ignored the error therefore cannot conclude that nothing may
+// bypass the gate.
 func (protectionInspectingStub) InspectProtection(_ context.Context, _, ref string) (codehost.Protection, error) {
+	if ref == fixtureUnreadableRef {
+		return codehost.Protection{}, cerr.New(cerr.KindUnauthorized, "InspectProtection",
+			errors.New("the credential may not read this ref's protection"))
+	}
 	return codehost.Protection{
 		Ref:            ref,
 		RequiredChecks: codehost.EmptyList[codehost.RequiredCheck](),
@@ -137,6 +149,11 @@ func run(t *testing.T, c codehost.CodeHost, m manifest.Doc) codehostconform.Repo
 		Manifest:        m,
 		ListableOwner:   fixtureListable,
 		UnlistableOwner: fixtureUnlistable,
+		// Supplied unconditionally: a connector that does not implement the
+		// tier ignores them, and one that does must have them or its failure
+		// classification is never exercised.
+		UnreadableProtectionRepo: fixtureUnreadableRepo,
+		UnreadableProtectionRef:  fixtureUnreadableRef,
 	})
 	if err != nil {
 		t.Fatalf("the conformance run could not be carried out: %v", err)
@@ -427,5 +444,117 @@ func TestReport_Err_IsClassifiedAndNamesEveryFailure(t *testing.T) {
 	}
 	if rep.OK() {
 		t.Error("OK() reported true for a report with failures")
+	}
+}
+
+// ⚠️ THE DANGEROUS SHAPE THIS CHECK EXISTS FOR. A connector that answers
+// "no rules here" when it was simply not allowed to LOOK hands an assurance
+// probe the most flattering possible wrong answer: an unprotected ref reported
+// as a ref with nothing to bypass.
+type blindProtectionStub struct{ *stub }
+
+func (blindProtectionStub) InspectProtection(_ context.Context, _, ref string) (codehost.Protection, error) {
+	// Always succeeds, and always with resolved-empty lists.
+	return codehost.Protection{
+		Ref:            ref,
+		RequiredChecks: codehost.EmptyList[codehost.RequiredCheck](),
+		BypassActors:   codehost.EmptyList[codehost.BypassActor](),
+	}, nil
+}
+
+// Fails typed, but STILL hands back a readable bypass list — so a caller that
+// logged the error and carried on would read "nobody may bypass this gate" out
+// of a read that never happened.
+type leakyProtectionStub struct{ *stub }
+
+func (leakyProtectionStub) InspectProtection(_ context.Context, _, ref string) (codehost.Protection, error) {
+	return codehost.Protection{
+		Ref:            ref,
+		RequiredChecks: codehost.EmptyList[codehost.RequiredCheck](),
+		BypassActors:   codehost.EmptyList[codehost.BypassActor](),
+	}, cerr.New(cerr.KindUnauthorized, "InspectProtection", errors.New("not allowed"))
+}
+
+var (
+	_ codehost.ProtectionInspector = blindProtectionStub{}
+	_ codehost.ProtectionInspector = leakyProtectionStub{}
+)
+
+func TestConform_CatchesProtectionSucceedingOnAnUnreadableRef(t *testing.T) {
+	rep := run(t, blindProtectionStub{newStub()}, stubManifest(codehost.CapProtectionInspect))
+
+	detail, failedCheck := failed(rep, codehostconform.CheckProtectionFailClosed)
+	if !failedCheck {
+		t.Fatal("a connector that reports an unreadable ref as having no protection was accepted; " +
+			"an assurance probe built on it would report an unprotected ref for an unauthorized read")
+	}
+	if !strings.Contains(detail, "SUCCEEDED") {
+		t.Errorf("detail does not say the call succeeded when it must not have: %s", detail)
+	}
+}
+
+func TestConform_CatchesProtectionHandingBackAReadableListOnFailure(t *testing.T) {
+	rep := run(t, leakyProtectionStub{newStub()}, stubManifest(codehost.CapProtectionInspect))
+
+	detail, failedCheck := failed(rep, codehostconform.CheckProtectionFailClosed)
+	if !failedCheck {
+		t.Fatal("a connector that failed AND returned a readable bypass list was accepted; a caller " +
+			"that ignored the error would read the failure as 'nobody may bypass this gate'")
+	}
+	if !strings.Contains(detail, "readable bypass-actor list") {
+		t.Errorf("detail does not name the readable list: %s", detail)
+	}
+}
+
+func TestConform_AcceptsAProtectionInspectorThatFailsClosed(t *testing.T) {
+	rep := run(t, protectionInspectingStub{newStub()}, stubManifest(codehost.CapProtectionInspect))
+
+	if detail, failedCheck := failed(rep, codehostconform.CheckProtectionFailClosed); failedCheck {
+		t.Fatalf("a connector that fails typed and unreadably on an unreadable ref was rejected: %s", detail)
+	}
+}
+
+// ⚠️ A connector without the tier must not produce a green that examined
+// nothing. The check passes — there is genuinely nothing to drive — but its
+// detail must say so, or the report cannot be told apart from one where the
+// behaviour was verified.
+func TestConform_ProtectionCheckSaysWhenItWasNotExercised(t *testing.T) {
+	rep := run(t, newStub(), stubManifest())
+
+	var detail string
+	var found bool
+	for _, res := range rep.Results {
+		if res.Name == codehostconform.CheckProtectionFailClosed {
+			detail, found = res.Detail, true
+		}
+	}
+	if !found {
+		t.Fatal("the check is absent from the report for a connector without the tier; a missing check " +
+			"is indistinguishable from one that passed")
+	}
+	if !strings.Contains(detail, "NOT EXERCISED") {
+		t.Errorf("detail %q does not mark the check as not exercised, so a green reads as verified behaviour", detail)
+	}
+}
+
+// A connector that HAS the tier but whose run supplies no fixture must fail
+// rather than skip: the fixture nobody supplied would otherwise become the check
+// nobody runs.
+func TestConform_ProtectionCheckRefusesToSkipWhenTheTierIsPresent(t *testing.T) {
+	rep, err := codehostconform.Run(context.Background(), protectionInspectingStub{newStub()}, codehostconform.Options{
+		Manifest:        stubManifest(codehost.CapProtectionInspect),
+		ListableOwner:   fixtureListable,
+		UnlistableOwner: fixtureUnlistable,
+		// fixture deliberately omitted
+	})
+	if err != nil {
+		t.Fatalf("the run could not be carried out: %v", err)
+	}
+	detail, failedCheck := failed(rep, codehostconform.CheckProtectionFailClosed)
+	if !failedCheck {
+		t.Fatal("a run with the tier present and no fixture passed; the check was never exercised and said nothing")
+	}
+	if !strings.Contains(detail, "never exercised") {
+		t.Errorf("detail does not explain that the fixture is missing: %s", detail)
 	}
 }

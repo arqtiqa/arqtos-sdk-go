@@ -208,11 +208,44 @@ var _ codeci.CIController = ciControllingStub{}
 // for — and because that assertion must stay independent of CIController.
 type checkPublishingStub struct{ *stub }
 
-func (checkPublishingStub) PublishCheck(context.Context, string, codeci.CheckPublication) (codeci.CheckRun, error) {
-	return codeci.CheckRun{ID: "c1", Name: "arqtos/gate", Status: codeci.RunStatusSuccess}, nil
+// ⚠️ It VALIDATES FIRST, because that is part of the contract it is standing in
+// for. It did not, until check-publish/refuses-before-publishing was added and
+// failed it — a stub that implements an interface without honouring its
+// obligations makes every test using it weaker than it reads.
+func (checkPublishingStub) PublishCheck(_ context.Context, _ string, p codeci.CheckPublication) (codeci.CheckRun, error) {
+	if err := p.Validate(); err != nil {
+		return codeci.CheckRun{}, err
+	}
+	return codeci.CheckRun{ID: "c1", Name: p.Name, Status: p.Status}, nil
 }
 
 var _ codeci.CheckPublisher = checkPublishingStub{}
+
+// ⚠️ publishesAnythingStub accepts a publication it must refuse: no external id
+// and an unspecified status. Both failures are PERMANENT rather than noisy — an
+// unspecified status publishes a check no required-check rule can ever be
+// satisfied by, which blocks the change request forever with nothing in the log
+// to say why; and with no external id, a retry after an ambiguous first call
+// creates a SECOND check rather than updating the first.
+type publishesAnythingStub struct{ *stub }
+
+func (publishesAnythingStub) PublishCheck(_ context.Context, _ string, p codeci.CheckPublication) (codeci.CheckRun, error) {
+	return codeci.CheckRun{ID: "c1", Name: p.Name, Status: p.Status}, nil
+}
+
+// Refuses, but with the wrong kind: a caller cannot tell a bad request from an
+// unreachable host, and retrying the first is pointless while retrying the
+// second is correct.
+type publishRefusesUnclassifiedStub struct{ *stub }
+
+func (publishRefusesUnclassifiedStub) PublishCheck(context.Context, string, codeci.CheckPublication) (codeci.CheckRun, error) {
+	return codeci.CheckRun{}, cerr.New(cerr.KindUnavailable, "PublishCheck", errors.New("nope"))
+}
+
+var (
+	_ codeci.CheckPublisher = publishesAnythingStub{}
+	_ codeci.CheckPublisher = publishRefusesUnclassifiedStub{}
+)
 
 func stubManifest(caps ...connector.Capability) manifest.Doc {
 	return manifest.Doc{
@@ -765,6 +798,18 @@ func TestRun_AcceptsAClassifiedHealthFailure(t *testing.T) {
 // for each violation and cover more than one shape of it. What this table adds
 // is COVERAGE — that no check exists without one.
 var violators = map[string]func() (codeci.CodeCI, manifest.Doc){
+	// Publishes a publication it must refuse. The refusal is the whole contract
+	// here: validation happens BEFORE anything is published, so a conformance
+	// run never leaves a check run behind.
+	codeciconform.CheckPublishRefusal: func() (codeci.CodeCI, manifest.Doc) {
+		// ⚠️ The runtime capability is set as well as the manifest one. A stub
+		// that declared check_publish without reporting it would ALSO break
+		// capability honesty and optional-declared, and this table cannot
+		// attribute a catch to a check when one stub breaks three.
+		s := newStub()
+		s.caps = connector.Capabilities{codeci.CapCheckPublish}
+		return publishesAnythingStub{s}, stubManifest(codeci.CapCheckPublish)
+	},
 	// Reports the OPEN fixture as IssueStateUnspecified — the always-zero shape,
 	// a connector that returned a success without ever looking.
 	//
@@ -1243,5 +1288,67 @@ func TestCommentRefusesEmptyBody_PostedThenErroredIsCaught(t *testing.T) {
 	if !strings.Contains(detail, "comment id") {
 		t.Errorf("the detail must say a comment id came back, which is what proves something was posted.\n"+
 			"got: %s", detail)
+	}
+}
+
+func TestRun_CatchesAPublisherThatPublishesAnInvalidPublication(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapCheckPublish}
+	rep := run(t, publishesAnythingStub{s}, stubManifest(codeci.CapCheckPublish))
+
+	detail, failedCheck := failed(rep, codeciconform.CheckPublishRefusal)
+	if !failedCheck {
+		t.Fatal("a connector that published a publication with no external id and an unspecified status " +
+			"was accepted; that check blocks its change request permanently and no retry can update it")
+	}
+	if !strings.Contains(detail, "unspecified status") {
+		t.Errorf("detail does not explain the permanent block: %s", detail)
+	}
+}
+
+func TestRun_CatchesAPublisherRefusingWithTheWrongKind(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapCheckPublish}
+	rep := run(t, publishRefusesUnclassifiedStub{s}, stubManifest(codeci.CapCheckPublish))
+
+	detail, failedCheck := failed(rep, codeciconform.CheckPublishRefusal)
+	if !failedCheck {
+		t.Fatal("a connector refusing an invalid publication as unavailable was accepted; a caller cannot " +
+			"tell a bad request from an unreachable host, and only one of those is worth retrying")
+	}
+	if !strings.Contains(detail, "invalid") {
+		t.Errorf("detail does not name the kind it wanted: %s", detail)
+	}
+}
+
+func TestRun_AcceptsAPublisherThatValidatesFirst(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapCheckPublish}
+	rep := run(t, checkPublishingStub{s}, stubManifest(codeci.CapCheckPublish))
+
+	if detail, failedCheck := failed(rep, codeciconform.CheckPublishRefusal); failedCheck {
+		t.Fatalf("a connector that validates before publishing was rejected: %s", detail)
+	}
+}
+
+// ⚠️ A connector without the tier must not produce a green that examined
+// nothing: the detail has to say so, or the report cannot be told apart from one
+// where the behaviour was actually verified.
+func TestRun_PublishCheckSaysWhenItWasNotExercised(t *testing.T) {
+	rep := run(t, newStub(), stubManifest())
+
+	var detail string
+	var found bool
+	for _, res := range rep.Results {
+		if res.Name == codeciconform.CheckPublishRefusal {
+			detail, found = res.Detail, true
+		}
+	}
+	if !found {
+		t.Fatal("the check is absent for a connector without the tier; a missing check is " +
+			"indistinguishable from one that passed")
+	}
+	if !strings.Contains(detail, "NOT EXERCISED") {
+		t.Errorf("detail %q does not mark the check as not exercised", detail)
 	}
 }
