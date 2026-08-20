@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arqtiqa.github.io/arqtos/schema/witness.v1.schema.json",
+  "title": "Witness v1 — an append-only signature or ratification",
+  "description": "Witnesses sit OUTSIDE the signed body. ratified_at derives from the accepted witness and its time source; it is never authored on the act.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "act_body_id", "witness_kind", "principal", "key_id", "signature", "at", "time_source"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "witness" },
+    "act_body_id": { "type": "string", "minLength": 1 },
+    "witness_kind": { "type": "string", "enum": ["signature", "ratification"] },
+    "principal": { "type": "string", "minLength": 1 },
+    "key_id": {
+      "type": "string",
+      "description": "A verifier must establish whether this key was valid WHEN THE SIGNATURE WAS MADE. A signature without historical key status proves only that some key signed some bytes."
+    },
+    "signature": { "type": "string" },
+    "at": { "type": "string", "format": "date-time" },
+    "time_source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Required. A timestamp with no named authority cannot be replayed."
+    }
+  }
+}

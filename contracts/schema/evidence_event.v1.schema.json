@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arqtiqa.github.io/arqtos/schema/evidence_event.v1.schema.json",
+  "title": "EvidenceEvent v1 — one append-only fact",
+  "description": "A host receipt is an EVENT here, never an overwritable status field. An ambiguous attempt followed by a settled one leaves BOTH events; collapsing them deletes the ambiguity from replay, and the ambiguity is what an audit is looking for.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "event_kind", "act_body_id", "sequence", "accepted_time", "time_authority"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "evidence_event" },
+    "event_kind": { "type": "string", "enum": ["acceptance", "attempt", "observation", "receipt", "violation"] },
+    "act_body_id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "accepted_time": { "type": "string", "format": "date-time" },
+    "time_authority": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Predicates never evaluate now(); they evaluate accepted_time from this named authority. Anything else breaks replay."
+    },
+    "final_sha": {
+      "type": "string",
+      "description": "Bound at effect time, not decision time: the final commit does not exist before a squash or rebase merge."
+    },
+    "host_operation_id": { "type": "string" },
+    "detail": { "type": "object", "additionalProperties": { "type": "string" } }
+  }
+}

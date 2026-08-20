@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arqtiqa.github.io/arqtos/schema/actspec.v1.schema.json",
+  "title": "ActSpec v1 — the immutable signed intent",
+  "description": "One mandatory signed body per act kind. act_body_id is computed over the UNSIGNED body; witnesses live in a separate layer so a co-signer never changes the thing being identified.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "kind", "act_body_id", "act_kind", "repository_id",
+    "change_request_id", "head_sha", "base_constraint", "merge_method",
+    "candidate_tree_oid", "charter_digest", "charter_rule_id", "manifest",
+    "permit", "footprint", "nonce", "valid_until", "reducer_version"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "actspec" },
+    "act_body_id": { "type": "string", "minLength": 1 },
+    "act_kind": { "type": "string", "minLength": 1 },
+    "repository_id": { "type": "string", "minLength": 1 },
+    "change_request_id": { "type": "string" },
+    "head_sha": { "type": "string", "minLength": 1 },
+    "base_constraint": { "type": "string" },
+    "merge_method": { "type": "string" },
+    "candidate_tree_oid": { "type": "string" },
+    "charter_digest": { "type": "string" },
+    "charter_rule_id": { "type": "string" },
+    "manifest": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "content_digest"],
+        "properties": {
+          "path": { "type": "string" },
+          "content_digest": { "type": "string" }
+        }
+      }
+    },
+    "permit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer_act_body_id", "output_index"],
+      "description": "An outpoint. Derivation is not authority: a permit id with no accepted issuer output is counterfeit.",
+      "properties": {
+        "issuer_act_body_id": { "type": "string" },
+        "output_index": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "footprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reads", "writes", "namespace_roots"],
+      "properties": {
+        "reads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource_id", "expected_version"],
+            "properties": {
+              "resource_id": { "type": "string" },
+              "expected_version": { "type": "integer" }
+            }
+          }
+        },
+        "writes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource_id", "expected_version", "new_digest"],
+            "properties": {
+              "resource_id": { "type": "string" },
+              "expected_version": { "type": "integer" },
+              "new_digest": { "type": "string" }
+            }
+          }
+        },
+        "namespace_roots": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "nonce": { "type": "string", "minLength": 1 },
+    "valid_until": { "type": "string", "format": "date-time" },
+    "reducer_version": { "type": "string", "minLength": 1 }
+  }
+}
