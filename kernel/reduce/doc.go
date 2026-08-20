@@ -23,7 +23,9 @@
 //
 // # What it decides, and what it does not
 //
-// Reduce runs every rule it declares and ACCEPTS what none of them refused.
+// Reduce runs every rule it declares and ACCEPTS what none of them refused, so
+// the property a caller relies on is that adding a rule can only ever refuse
+// more — never widen what is admitted.
 // Today those rules are: the accepted prefix is a chain; its acceptance times do
 // not regress and come from one authority; a candidate is not already on the
 // tape; its permit was not already spent; and an independent OBSERVATION reports
