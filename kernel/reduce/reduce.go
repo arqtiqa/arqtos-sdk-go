@@ -190,6 +190,7 @@ var prefixRules = []rule{
 // candidateRules judge an act being offered against that tape.
 var candidateRules = []rule{
 	{"replay", replayRule},
+	{"lineage", lineageRule},
 	{"spend", spendRule},
 	{"tree", treeRule},
 }
@@ -277,6 +278,46 @@ func timeRule(in Input, head string) (Outcome, bool) {
 // ObservedTreeKey is the EvidenceEvent detail an observation reports the tree it
 // actually saw under.
 const ObservedTreeKey = "observed_tree_oid"
+
+// lineageRule refuses a permit that traces to no accepted act.
+//
+// ⭐ THIS IS AS FAR AS NON-AMPLIFICATION REACHES ON THE REDUCE PATH, and the
+// limit is a RECORD SHAPE, not an omission.
+//
+// A candidate carries contracts.PermitID — an OUTPOINT, {issuer_act_body_id,
+// output_index}. It does not carry the permit body, so this package has no scope
+// and no expiry to compare against the root grant. contracts.Grant.Attenuates
+// exists and is the one definition of non-amplification; the reducer simply has
+// nothing to hand it.
+//
+// So attenuation is checked where permits are ISSUED, and what the reducer adds
+// is LINEAGE: the outpoint must name an act that was actually accepted. That
+// closes authority conjured from nowhere — a permit citing an issuer nobody
+// admitted — without pretending to check scope.
+//
+// # ⚠️ The residual, stated because it is easy to read this rule as more than it is
+//
+// Lineage plus issuance-time attenuation is only as strong as the claim that
+// EVERY permit reached the tape through issuance. A permit whose issuer act is
+// on the tape but was never run through the issuer's attenuation check would
+// pass here. That is the "derivation is not authority" gap that permit outpoints
+// exist to narrow, and narrowing it fully needs the permit datum on the tape.
+func lineageRule(in Input, head string) (Outcome, bool) {
+	issuer := in.Candidate.Permit.IssuerActBodyID
+	if issuer == "" {
+		// spendRule names this case; leaving it there keeps one reason for it.
+		return Outcome{}, false
+	}
+	for _, entry := range in.Accepted {
+		if entry.ActBodyID == issuer {
+			return Outcome{}, false
+		}
+	}
+	out := refused("the candidate's permit is issued by act %s, which is not on the accepted tape; "+
+		"authority that traces to no accepted act was never granted", issuer)
+	out.Head = head
+	return out, true
+}
 
 // treeRule refuses a candidate observed against a tree its signed body does not
 // bind.
