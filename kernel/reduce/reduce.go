@@ -54,6 +54,20 @@ type Outcome struct {
 	// everything would satisfy the weaker assertion.
 	Reason string
 
+	// Rule names the rule that refused, and is empty on an acceptance.
+	//
+	// ⚠️ IT EXISTS SO A RULE CAN BE PROVED LIVE. The rule sets were previously
+	// guarded by their SIZE — len(candidateRules) == 4 — which a rule swapped
+	// for a no-op satisfies exactly, while making the reducer more permissive.
+	// That is the one direction the guard was written to prevent. A count is a
+	// proxy for a set, and a set of names is a proxy for a set of behaviours;
+	// this field is what lets a test assert the behaviour.
+	//
+	// It is also the honest answer to "why was this refused" in a report: the
+	// reason is prose, and prose is what a caller ends up pattern-matching when
+	// nothing structured is offered.
+	Rule string
+
 	// Head is the entry the decision was made relative to: the last entry of a
 	// verified accepted prefix.
 	//
@@ -160,6 +174,10 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 	// before all of them have run.
 	for _, r := range prefixRules {
 		if out, decided := r.apply(in, head); decided {
+			// ⚠️ STAMPED BY THE DISPATCHER, NEVER BY THE RULE. A rule that
+			// named itself could name another, and the attribution a report
+			// rests on would be the one thing not checked.
+			out.Rule = r.name
 			return out, nil
 		}
 	}
@@ -172,6 +190,7 @@ func Reduce(ctx context.Context, in Input) (Outcome, error) {
 
 	for _, r := range candidateRules {
 		if out, decided := r.apply(in, head); decided {
+			out.Rule = r.name
 			return out, nil
 		}
 	}
