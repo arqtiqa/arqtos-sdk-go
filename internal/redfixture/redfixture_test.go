@@ -1,7 +1,9 @@
 package redfixture_test
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/arqtiqa/arqtos-sdk-go/internal/redfixture"
@@ -126,4 +128,79 @@ func TestExpect_SkipsAStillRedFixture(t *testing.T) {
 		ft.Errorf("deliberately red, to show Expect skips rather than fails")
 	})
 	t.Fatal("Expect did not skip a still-red fixture")
+}
+
+// ⚠️ THE RACE THAT WAS DORMANT. A fixture body may be concurrent — the git
+// compare-and-swap fixture races four goroutines and calls Errorf from each —
+// and the recorder appended to one slice with no lock. It stayed hidden only
+// because that fixture is red: the store returns immediately, so the goroutines
+// never reach Errorf.
+//
+// The harness exists to make fixtures trustworthy. It cannot carry the class of
+// defect it was built to catch.
+func TestAssess_IsSafeUnderAConcurrentBody(t *testing.T) {
+	const writers = 8
+	const each = 25
+
+	var started sync.WaitGroup
+	started.Add(writers)
+
+	v := redfixture.Assess("a concurrent capability", func(ft redfixture.T) {
+		var wg sync.WaitGroup
+		for i := range writers {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				// ⚠️ A barrier, so the goroutines genuinely overlap inside the
+				// recorder. Without it they can serialise and the test would
+				// pass against the unlocked version — a concurrency test that
+				// does not race proves nothing.
+				started.Done()
+				started.Wait()
+				for j := range each {
+					ft.Errorf("writer %d failure %d", i, j)
+				}
+			}(i)
+		}
+		wg.Wait()
+	})
+
+	if !v.StillRed {
+		t.Fatal("a body that recorded failures was not reported as red")
+	}
+	// ⚠️ The COUNT is asserted. An unlocked append does not only race — it
+	// LOSES entries, and a lost failure is a fixture quietly reporting less
+	// than it found.
+	want := writers * each
+	if !strings.Contains(v.Message, fmt.Sprintf("%d assertion(s)", want)) {
+		t.Errorf("recorded a count other than %d; entries were lost:\n%s", want, v.Message)
+	}
+}
+
+// Fatal from one goroutine stops that goroutine and does not take the harness
+// with it — the same semantics testing.T has.
+func TestAssess_FatalInOneGoroutineDoesNotKillTheRest(t *testing.T) {
+	v := redfixture.Assess("a concurrent capability", func(ft redfixture.T) {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			defer func() { _ = recover() }() // the body's own goroutine owns its abort
+			ft.Fatalf("the store does not exist")
+		}()
+		go func() {
+			defer wg.Done()
+			ft.Errorf("and the other goroutine still recorded")
+		}()
+		wg.Wait()
+	})
+
+	if !v.StillRed {
+		t.Fatal("a concurrent body with failures was not reported as red")
+	}
+	for _, want := range []string{"the store does not exist", "and the other goroutine still recorded"} {
+		if !strings.Contains(v.Message, want) {
+			t.Errorf("message is missing %q:\n%s", want, v.Message)
+		}
+	}
 }

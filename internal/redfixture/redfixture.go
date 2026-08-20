@@ -37,6 +37,7 @@ package redfixture
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -57,14 +58,51 @@ type T interface {
 // abort unwinds a body that called Fatalf.
 type abort struct{}
 
-type recorder struct{ failures []string }
+// ⚠️ THE MUTEX IS LOAD-BEARING, and its absence was a DORMANT race.
+//
+// A fixture body may be concurrent — the git compare-and-swap fixture races
+// four goroutines and calls Errorf from each. Without this lock those append
+// to one slice unsynchronised, and the race would first fire on the day that
+// fixture is supposed to START JUDGING git: the worst possible moment for the
+// harness to be the thing that breaks.
+//
+// It stayed hidden because the fixture is red — GitRefStore returns
+// immediately, so the goroutines never reach Errorf. A harness that exists to
+// make fixtures trustworthy cannot carry the class of defect it was built to
+// catch.
+type recorder struct {
+	mu       sync.Mutex
+	failures []string
+}
 
-func (r *recorder) Helper()                   {}
-func (r *recorder) Logf(string, ...any)       {}
-func (r *recorder) Error(a ...any)            { r.failures = append(r.failures, fmt.Sprint(a...)) }
-func (r *recorder) Errorf(f string, a ...any) { r.failures = append(r.failures, fmt.Sprintf(f, a...)) }
-func (r *recorder) Fatal(a ...any)            { r.Error(a...); panic(abort{}) }
+func (r *recorder) Helper()             {}
+func (r *recorder) Logf(string, ...any) {}
+
+func (r *recorder) Error(a ...any) { r.record(fmt.Sprint(a...)) }
+
+func (r *recorder) Errorf(f string, a ...any) { r.record(fmt.Sprintf(f, a...)) }
+
+// ⚠️ Fatal and Fatalf abort the CALLING goroutine, which is all a panic can do.
+// In a concurrent body that stops one goroutine and leaves the others running —
+// the same semantics testing.T has, and the same reason a fixture body should
+// not rely on Fatal to stop its peers.
+func (r *recorder) Fatal(a ...any) { r.Error(a...); panic(abort{}) }
+
 func (r *recorder) Fatalf(f string, a ...any) { r.Errorf(f, a...); panic(abort{}) }
+
+func (r *recorder) record(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failures = append(r.failures, s)
+}
+
+// snapshot returns the recorded failures under the lock, so Assess reads a
+// consistent view even if a stray goroutine is still running.
+func (r *recorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.failures...)
+}
 
 // A Verdict is what [Assess] concluded about a fixture body.
 type Verdict struct {
@@ -106,7 +144,8 @@ func Assess(waitingFor string, body func(T)) Verdict {
 		body(r)
 	}()
 
-	if len(r.failures) == 0 {
+	failures := r.snapshot()
+	if len(failures) == 0 {
 		return Verdict{Message: fmt.Sprintf("RED FIXTURE IS NO LONGER RED.\n\n"+
 			"It is waiting for %s, and its assertions now all pass — either that capability has "+
 			"arrived, or the fixture never asserted anything.\n\n"+
@@ -117,7 +156,7 @@ func Assess(waitingFor string, body func(T)) Verdict {
 
 	return Verdict{StillRed: true, Message: fmt.Sprintf(
 		"still red, waiting for %s — %d assertion(s) failing:\n  - %s",
-		waitingFor, len(r.failures), strings.Join(r.failures, "\n  - "))}
+		waitingFor, len(failures), strings.Join(failures, "\n  - "))}
 }
 
 // Expect runs body and requires it to FAIL, because body describes behaviour
