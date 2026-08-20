@@ -1,6 +1,7 @@
 package contracts_test
 
 import (
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -268,5 +269,48 @@ func TestClockRollbackFixtureIsStillNeeded(t *testing.T) {
 	}
 	if examined == 0 {
 		t.Fatal("examined no source files, so this guard passed by looking at nothing")
+	}
+}
+
+// ⚠️ The name form is what reaches a record, and the record's digest is its
+// identity — so this round trip is not a convenience test, it is the encoding
+// the outsider reads.
+func TestClockProvenance_JSONRoundTripsByName(t *testing.T) {
+	for _, p := range contracts.ClockProvenances() {
+		raw, err := json.Marshal(p)
+		if err != nil {
+			t.Fatalf("Marshal(%s): %v", p, err)
+		}
+		if want := `"` + p.String() + `"`; string(raw) != want {
+			t.Errorf("Marshal(%s) = %s, want %s", p, raw, want)
+		}
+		var back contracts.ClockProvenance
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatalf("Unmarshal(%s): %v", raw, err)
+		}
+		if back != p {
+			t.Errorf("round trip changed %s into %s", p, back)
+		}
+	}
+}
+
+func TestClockProvenance_JSONRefusesANumberAndAnUnknownName(t *testing.T) {
+	for name, raw := range map[string]string{
+		"number":       `3`,
+		"unknown name": `"gps"`,
+		"null":         `null`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var p contracts.ClockProvenance
+			if err := json.Unmarshal([]byte(raw), &p); err == nil {
+				t.Fatalf("Unmarshal accepted %s as %s", raw, p)
+			}
+		})
+	}
+}
+
+func TestClockProvenance_MarshalRefusesAnOutOfVocabularyValue(t *testing.T) {
+	if raw, err := json.Marshal(contracts.ClockProvenance(99)); err == nil {
+		t.Fatalf("Marshal encoded an invalid provenance as %s", raw)
 	}
 }
