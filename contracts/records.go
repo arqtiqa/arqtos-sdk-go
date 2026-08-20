@@ -146,11 +146,15 @@ type Witness struct {
 
 	Signature string `json:"signature"`
 
-	// At and TimeSource record when, and on whose authority.
-	// ⚠️ TimeSource is required. A timestamp with no named authority cannot be
-	// replayed, because replay must not consult the current clock.
-	At         time.Time `json:"at"`
-	TimeSource string    `json:"time_source"`
+	// At is when the witness was made, WITH its authority and that authority's
+	// clock provenance.
+	//
+	// ⚠️ It is [AcceptedTime], not a bare time plus a name. keyhistory's whole
+	// question is "was this signature valid WHEN IT WAS MADE", and it is
+	// answered from this field — so a timestamp of unknown provenance answers
+	// it from a guess. A named authority alone does not distinguish a
+	// disciplined clock from a virtual machine that has been suspended.
+	At AcceptedTime `json:"at"`
 }
 
 // An EvidenceEventKind names what happened.

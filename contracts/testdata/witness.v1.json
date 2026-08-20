@@ -6,6 +6,11 @@
   "principal": "principal:operator",
   "key_id": "key:operator-2026-08",
   "signature": "base64:c2lnbmF0dXJlLXBsYWNlaG9sZGVy",
-  "at": "2026-08-20T09:30:00Z",
-  "time_source": "authority:host-clock"
+  "at": {
+    "at": "2026-08-20T09:30:00Z",
+    "authority": {
+      "name": "authority:host-clock",
+      "provenance": "synchronised"
+    }
+  }
 }

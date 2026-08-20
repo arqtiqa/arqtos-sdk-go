@@ -13,8 +13,7 @@
     "principal",
     "key_id",
     "signature",
-    "at",
-    "time_source"
+    "at"
   ],
   "properties": {
     "schema_version": {
@@ -49,13 +48,42 @@
       "type": "string"
     },
     "at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "time_source": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Required. A timestamp with no named authority cannot be replayed."
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "authority"
+      ],
+      "description": "When the witness was made, WITH its authority and that authority's clock provenance. keyhistory answers 'was this signature valid when it was made' from this field, so a bare timestamp answers it from a guess.",
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "provenance"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "unspecified",
+                "local",
+                "synchronised",
+                "attested"
+              ]
+            }
+          }
+        }
+      }
     }
   }
 }

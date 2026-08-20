@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arqtiqa/arqtos-sdk-go/contracts"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/canonical"
@@ -108,6 +109,81 @@ func TestEveryRecordType_CarriesNoNumericField(t *testing.T) {
 	// a number and this test would never look at it.
 	if marshalers == 0 {
 		t.Error("no type with its own MarshalJSON was examined, so that branch is untested")
+	}
+}
+
+// ⚠️ EVERY TIME A RECORD CARRIES MUST BE AcceptedTime, and this exists because
+// fixing them one at a time missed one. EvidenceEvent was moved onto the time
+// contract in the record-encoding change; Witness was left holding a bare
+// time.Time plus a string, and only an operator review caught it.
+//
+// A bare timestamp carries no clock provenance, so a reader cannot tell a
+// disciplined clock from a virtual machine that has been suspended — and
+// keyhistory answers "was this signature valid WHEN IT WAS MADE" from exactly
+// these fields.
+//
+// ⚠️ time.Time is allowed ONLY inside AcceptedTime itself, and in ValidUntil,
+// which is an expiry the signer chose rather than an observation of a clock.
+func TestNoRecordCarriesABareTimestamp(t *testing.T) {
+	timeType := reflect.TypeOf(time.Time{})
+	acceptedTime := reflect.TypeOf(contracts.AcceptedTime{})
+
+	// ⚠️ Keyed on the OWNING TYPE and field, not on a path string. A path is
+	// ambiguous — Grant.NotAfter.At and Witness.At.At both end in ".At" — and an
+	// allow-list that cannot be matched is an allow-list that fails on correct
+	// code, which is how this test failed on its first run.
+	//
+	// The one exception: ValidUntil is an expiry the SIGNER CHOSE, not an
+	// observation of a clock, so it has no provenance to carry.
+	allowed := map[string]bool{"ActSpec.ValidUntil": true}
+
+	found, bare := 0, 0
+	var walk func(typ reflect.Type, owner, field string, depth int)
+	walk = func(typ reflect.Type, owner, field string, depth int) {
+		if depth > 8 {
+			t.Fatalf("%s.%s: deeper than expected", owner, field)
+		}
+		switch typ.Kind() {
+		case reflect.Slice, reflect.Array, reflect.Pointer:
+			walk(typ.Elem(), owner, field, depth+1)
+		case reflect.Struct:
+			// AcceptedTime is the sanctioned carrier. Its own At is the point
+			// of it, so the walk stops here rather than reporting itself.
+			if typ == acceptedTime {
+				found++
+				return
+			}
+			if typ == timeType {
+				found++
+				if !allowed[owner+"."+field] {
+					bare++
+					t.Errorf("%s.%s is a bare time.Time. Use contracts.AcceptedTime, which carries the "+
+						"authority and its clock provenance — a timestamp of unknown provenance cannot "+
+						"answer whether a signature was valid when it was made.", owner, field)
+				}
+				return
+			}
+			for i := range typ.NumField() {
+				f := typ.Field(i)
+				walk(f.Type, typ.Name(), f.Name, depth+1)
+			}
+		}
+	}
+	for _, v := range []any{
+		contracts.ActSpec{}, contracts.Witness{}, contracts.EvidenceEvent{},
+		contracts.StatusView{}, contracts.RepositoryGenesis{}, contracts.Grant{},
+	} {
+		typ := reflect.TypeOf(v)
+		walk(typ, typ.Name(), "", 0)
+	}
+
+	// ⚠️ Count-asserted: a walk that found no time fields at all would report
+	// no bare ones and read exactly like a clean set.
+	if found < 4 {
+		t.Errorf("the walk found %d time-carrying field(s), which is too few — it is not reaching them", found)
+	}
+	if bare == 0 {
+		t.Logf("examined %d time-carrying field(s); none bare", found)
 	}
 }
 
