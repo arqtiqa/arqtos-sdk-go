@@ -117,6 +117,20 @@ const (
 	// a check that read "implemented" off the same signal as "declared" would
 	// agree with itself whatever the connector does.
 	CheckOptionalDeclared = "optional/declared-is-implemented"
+
+	// CheckPublishRefusal covers the optional CheckPublisher tier VALIDATING
+	// before it publishes anything.
+	//
+	// ⚠️ It is driven entirely through a REFUSAL, and never by publishing a real
+	// check run. That is the same discipline every other write check in this
+	// harness follows, and it is what keeps a conformance run safe to repeat
+	// against a live repository — a harness that published to prove it could
+	// publish would leave its evidence on someone's change request.
+	//
+	// The property is worth checking because the failure is permanent rather
+	// than noisy: a required check published in a state no rule recognises
+	// blocks the change request FOREVER, with nothing in the log to say why.
+	CheckPublishRefusal = "check-publish/refuses-before-publishing"
 	// CheckListsNoEmptySuccess covers ListPRs, GetDiff, ListBranches and
 	// GetCheckRuns, run against fixtures the connector MUST find something
 	// for, each coming back as a READABLE resolution carrying entries — never
@@ -431,6 +445,7 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 	checkClass(&rep, c)
 	checkCapabilityHonesty(&rep, c, opts.Manifest)
 	checkOptionalDeclared(&rep, c)
+	checkPublishRefusal(ctx, &rep, c, opts)
 	checkListsNoEmptySuccess(ctx, &rep, c, opts)
 	checkListFailClosed(ctx, &rep, c, opts)
 	checkMergeRefusesUnspecifiedMethod(ctx, &rep, c, opts)
@@ -1093,4 +1108,53 @@ func checkCloseIsIdempotent(ctx context.Context, rep *Report, c codeci.CodeCI, o
 		return
 	}
 	rep.add(CheckCloseIsIdempotent, true, fmt.Sprintf("re-closing %d succeeded", opts.ClosedIssue))
+}
+
+// checkPublishRefusal drives [codeci.CheckPublisher] with a publication that is
+// not publishable, and requires it to be refused — typed — before anything is
+// published.
+//
+// ⚠️ NOTHING IS EVER PUBLISHED BY THIS CHECK. The only call it makes carries an
+// invalid publication, so a conformant connector refuses it and an unconformant
+// one is caught by the refusal not arriving. A harness that published a real
+// check run to prove publishing works would leave its own evidence on a live
+// change request, and would have to be excluded from any repository anyone cared
+// about — which is how a conformance suite stops being run.
+func checkPublishRefusal(ctx context.Context, rep *Report, c codeci.CodeCI, opts Options) {
+	pub, ok := c.(codeci.CheckPublisher)
+	if !ok {
+		// ⚠️ NOT EXERCISED, and it says so. A pass whose detail cannot be told
+		// apart from "checked and correct" is the empty-success shape this
+		// harness exists to refuse.
+		rep.add(CheckPublishRefusal, true,
+			"NOT EXERCISED: this connector does not implement CheckPublisher, so there was nothing to drive")
+		return
+	}
+
+	// Invalid by construction: no external id and an unspecified status. Both
+	// are refusals the contract requires, and neither can result in a published
+	// check.
+	invalid := codeci.CheckPublication{
+		Name:    "arqtos/conformance-probe",
+		HeadSHA: "0000000000000000000000000000000000000000",
+		Status:  codeci.RunStatusUnspecified,
+	}
+
+	run, err := pub.PublishCheck(ctx, opts.Repo, invalid)
+	if err == nil {
+		rep.add(CheckPublishRefusal, false, fmt.Sprintf(
+			"PublishCheck accepted a publication with no external id and an unspecified status, and returned %q. "+
+				"An unspecified status publishes a check no required-check rule can ever be satisfied by, which "+
+				"blocks the change request permanently; and with no external id, a retry after an ambiguous call "+
+				"creates a second check rather than updating the first", run.Name))
+		return
+	}
+	if cerr.KindOf(err) != cerr.KindInvalid {
+		rep.add(CheckPublishRefusal, false, fmt.Sprintf(
+			"PublishCheck refused an invalid publication with %s; it must be %s so a caller can tell a bad "+
+				"request from a host that was unreachable — retrying the first is pointless and retrying the "+
+				"second is correct: %v", cerr.KindOf(err), cerr.KindInvalid, err))
+		return
+	}
+	rep.add(CheckPublishRefusal, true, "invalid publication refused with "+cerr.KindOf(err).String()+", nothing published")
 }

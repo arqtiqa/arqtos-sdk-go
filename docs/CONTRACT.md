@@ -1159,6 +1159,7 @@ if err := rep.Err(); err != nil {
 | `class/implements` | `Implements()` reports `connector.ClassCodeCI` |
 | `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
 | `optional/declared-is-implemented` | `ci_control` is declared exactly when `CIController` is implemented, and `check_publish` is declared exactly when `CheckPublisher` is implemented — "implemented" is a Go type assertion against the connector's own type, **never** derived from `Capabilities()` |
+| `check-publish/refuses-before-publishing` | `PublishCheck` refuses an invalid publication with `cerr.KindInvalid` **before publishing anything**. ⚠️ Driven entirely through a REFUSAL — the harness never publishes a real check run, so a conformance run stays safe to repeat against a live repository. The property is worth checking because its failure is PERMANENT rather than noisy: a check published with an unspecified status can never satisfy a required-check rule, so it blocks the change request forever with nothing in the log to say why; and with no `external_id`, a retry after an ambiguous call creates a second check instead of updating the first. A connector without the tier reports the check as **NOT EXERCISED** rather than as a pass. |
 | `lists/no-empty-success` | `ListPRs`, `ListBranches`, `GetCheckRuns` and `GetDiff` against the fixtures all resolve **readable, with entries** |
 | `lists/failure-is-typed-and-fail-closed` | `ListPRs(UnknownRepo)` and `GetDiff(Repo, UnknownPR)` each fail with a classified `cerr.Kind` **and** an unreadable resolution |
 | `merge/refuses-unspecified-method` | `MergePR(Repo, OpenPR, MergeMethodUnspecified)` is refused, **without merging** `OpenPR` |
@@ -1299,6 +1300,21 @@ for. The underlying `Items()` failure stays wrapped, so `errors.Is` still reache
 credential that cannot see a ruleset reads exactly like a ref with no ruleset, and
 the second is the answer that downgrades an assurance claim to nothing. A connector
 MUST distinguish them.
+
+⭐ **And that is CHECKED, not merely required.** `codehostconform`'s
+`protection/failure-is-typed` drives `InspectProtection` at a ref the connector must
+not be able to read and requires a **typed** failure that hands back nothing readable.
+A connector that succeeds there — reporting "no rules here" for "not allowed to
+look" — fails, and so does one that fails correctly but still returns a readable
+bypass-actor list, because a caller that logged the error and carried on would read
+that as *"nobody may bypass this gate"*.
+
+It is read-only by construction: the only call it makes is one that must fail. It
+needs `Options.UnreadableProtectionRepo` and `Options.UnreadableProtectionRef` when
+the tier is implemented, and a run that has the tier without the fixture **fails**
+rather than skipping — otherwise the fixture nobody supplies becomes the check
+nobody runs. A connector without the tier reports the check as **NOT EXERCISED**
+rather than as a pass, so a green cannot be mistaken for verified behaviour.
 
 ⚠️ `RequiredCheck.AppID` is the difference between a check that **gates** and one
 that **decorates**. An unpinned status context is matched by NAME, so any credential

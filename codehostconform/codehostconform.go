@@ -91,6 +91,17 @@ const (
 	CheckListFailClosed = "list/failure-is-typed-and-fail-closed"
 	// CheckHealth covers Health() answering: a status, or a classified failure.
 	CheckHealth = "health/answers"
+
+	// CheckProtectionFailClosed covers the optional ProtectionInspector tier
+	// behaving correctly on a ref it CANNOT read.
+	//
+	// ⚠️ This is the property the declared-is-implemented check cannot reach,
+	// and it is the one an assurance claim rests on: a credential that cannot
+	// SEE a ruleset reads exactly like a ref with NO ruleset, and the second is
+	// the answer that downgrades an assurance claim to nothing. A connector
+	// that returned an empty Protection for an unauthorized read would report
+	// "no rules here" for "I was not allowed to look".
+	CheckProtectionFailClosed = "protection/failure-is-typed"
 )
 
 // Options are the fixtures a conformance run needs. Every field is required: a
@@ -112,6 +123,19 @@ type Options struct {
 	// fail-closed check, which cannot be run against a connector that never
 	// fails.
 	UnlistableOwner string
+
+	// UnreadableProtectionRepo and UnreadableProtectionRef name a repository
+	// and ref whose protection this connector MUST NOT be able to read —
+	// absent, or outside what its credential may see.
+	//
+	// ⚠️ Required ONLY when the connector implements
+	// [codehost.ProtectionInspector]. They are optional on the Options struct
+	// so that adding this check breaks no existing caller, and a run that has
+	// the tier but not the fixture is a configuration ERROR rather than a
+	// silently skipped check — otherwise the fixture nobody supplied becomes
+	// the check nobody runs.
+	UnreadableProtectionRepo string
+	UnreadableProtectionRef  string
 }
 
 // A Result is the outcome of a single named check.
@@ -231,6 +255,7 @@ func Run(ctx context.Context, c codehost.CodeHost, opts Options) (Report, error)
 	checkListNoEmptySuccess(ctx, &rep, c, opts)
 	checkListFailClosed(ctx, &rep, c, opts)
 	checkHealth(ctx, &rep, c)
+	checkProtectionFailClosed(ctx, &rep, c, opts)
 
 	return rep, nil
 }
@@ -397,4 +422,63 @@ func checkHealth(ctx context.Context, rep *Report, c codehost.CodeHost) {
 		rep.add(CheckHealth, false, fmt.Sprintf(
 			"Health() reported status %d, which is outside the SDK's vocabulary", int(h.Status)))
 	}
+}
+
+// checkProtectionFailClosed drives [codehost.ProtectionInspector] at a ref it
+// must not be able to read, and requires a TYPED failure that hands back nothing
+// readable.
+//
+// ⚠️ Why this check exists at all, given the tier is already checked for being
+// declared-when-implemented: that check proves the operation EXISTS. This one
+// proves it distinguishes "no rules" from "not allowed to look", which are the
+// same shape and opposite meanings. An assurance probe built on a connector that
+// conflates them would report an unprotected ref for an unauthorized read — the
+// most dangerous wrong answer this contract can produce.
+//
+// It is READ-ONLY by construction: it inspects a ref it cannot read, so a
+// conformance run stays safe to repeat against a live estate.
+func checkProtectionFailClosed(ctx context.Context, rep *Report, c codehost.CodeHost, opts Options) {
+	insp, ok := c.(codehost.ProtectionInspector)
+	if !ok {
+		// ⚠️ NOT EXERCISED, and it says so. A pass whose detail does not
+		// distinguish "checked and correct" from "nothing to check" is the
+		// empty-success shape this whole harness exists to refuse.
+		rep.add(CheckProtectionFailClosed, true,
+			"NOT EXERCISED: this connector does not implement ProtectionInspector, so there was nothing to drive")
+		return
+	}
+
+	if opts.UnreadableProtectionRepo == "" || opts.UnreadableProtectionRef == "" {
+		rep.add(CheckProtectionFailClosed, false,
+			"this connector implements ProtectionInspector but Options.UnreadableProtectionRepo/Ref are empty, "+
+				"so its failure classification is never exercised — supply a repository and ref it must not be able to read")
+		return
+	}
+
+	p, err := insp.InspectProtection(ctx, opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef)
+	if err == nil {
+		rep.add(CheckProtectionFailClosed, false, fmt.Sprintf(
+			"InspectProtection(%s, %s) SUCCEEDED on a ref the fixtures say it must not read",
+			opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef))
+		return
+	}
+	if !cerr.Classified(err) {
+		rep.add(CheckProtectionFailClosed, false, fmt.Sprintf(
+			"InspectProtection(%s, %s) failed with an unclassified error, so a host cannot tell "+
+				"'not allowed to look' from 'no such ref': %v",
+			opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef, err))
+		return
+	}
+	// ⚠️ THE HALF THAT MATTERS. A connector may fail correctly AND still hand
+	// back a Protection whose lists read as empty — and a caller that logged the
+	// error and carried on would then conclude that nothing may bypass the gate.
+	if _, ierr := p.BypassActors.Items(); ierr == nil {
+		rep.add(CheckProtectionFailClosed, false, fmt.Sprintf(
+			"InspectProtection(%s, %s) failed with %s and STILL returned a readable bypass-actor list; "+
+				"a caller that ignored the error would read the failure as 'nobody may bypass this gate'",
+			opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef, cerr.KindOf(err)))
+		return
+	}
+	rep.add(CheckProtectionFailClosed, true, fmt.Sprintf("%s %s -> %s, protection unreadable",
+		opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef, cerr.KindOf(err)))
 }
