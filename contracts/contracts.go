@@ -3,9 +3,18 @@ package contracts
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 )
+
+// ErrInvalidTime is a recorded time that cannot be used in the replay path —
+// unnamed authority, unstated clock provenance, or no time at all.
+//
+// ⚠️ Its own sentinel rather than a generic invalid-input error, because the
+// remedy is specific: record the authority and its provenance at acceptance. A
+// caller told only "invalid" will look at the timestamp.
+var ErrInvalidTime = errors.New("contracts: recorded time is unusable")
 
 // SchemaVersion is the version every record kind in this package carries.
 //
