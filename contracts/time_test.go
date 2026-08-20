@@ -207,70 +207,20 @@ func TestNothingInThisPackageReadsTheCurrentClock(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RED FIXTURE — clock rollback
+// Clock rollback lives in kernel/reduce
 // ---------------------------------------------------------------------------
-
-// ⚠️ THIS FIXTURE IS RED ON PURPOSE, and it is skipped rather than failing so
-// that CI stays green on a tree whose gap is KNOWN and NAMED. The build sequence
-// puts the fixture before the implementation deliberately: a detection written
-// after the mechanism is a test shaped to whatever the mechanism happened to do.
 //
-// What it is waiting for: acceptance-time monotonicity. An authority whose clock
-// goes BACKWARDS between two accepted acts must be detectable — a later act
-// carrying an earlier time is either a rolled-back clock or a reordered chain,
-// and both are findings rather than noise.
+// ⚠️ It USED to be an empty t.Skip here, guarded by a canary watching this
+// package for an export containing "Rollback" or "Monotonic" — a signal that
+// could never fire, because what the fixture waits for is the REDUCER.
 //
-// ⚠️ It cannot be written yet because the reducer does not exist: detection is a
-// property of the accepted sequence, not of a pair of values, and the sequence is
-// the reducer's. Both land together.
-func TestClockRollbackIsDetected(t *testing.T) {
-	t.Skip("RED FIXTURE — waiting on the reducer. A later accepted act carrying an EARLIER time from " +
-		"the same authority must be reported as a rollback. Detection is a property of the accepted " +
-		"sequence, so it lands with the reducer; see TestClockRollbackFixtureIsStillNeeded, which fails " +
-		"once the capability exists so this skip cannot outlive its reason.")
-}
-
-// ⚠️ THE GUARD ON THE SKIP ABOVE. A skipped test nobody removes is a permanent
-// hole that reads as coverage, so this fails the moment the capability it waits
-// for appears — forcing the fixture to be written and the skip deleted in the
-// same change.
+// Detection is a property of the accepted SEQUENCE, not of a pair of values, so
+// the fixture belongs where a sequence exists. It is now
+// TestReduce_RejectsAClockRollback in kernel/reduce, with a real body that fails
+// for a named reason rather than a skip that could not fail at all.
 //
-// It is deliberately a NEGATIVE assertion about the package's own surface: the
-// day something here can order accepted times across a sequence, the fixture is
-// writable and this test says so.
-func TestClockRollbackFixtureIsStillNeeded(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("reading the package directory: %v", err)
-	}
-	fset := token.NewFileSet()
-	examined := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, filepath.Join(".", name), nil, 0)
-		if err != nil {
-			t.Fatalf("parsing %s: %v", name, err)
-		}
-		examined++
-		for _, d := range f.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if !ok || !fn.Name.IsExported() {
-				continue
-			}
-			if strings.Contains(fn.Name.Name, "Rollback") || strings.Contains(fn.Name.Name, "Monotonic") {
-				t.Errorf("%s declares %s: the capability the clock-rollback fixture waits for now exists, "+
-					"so the fixture must be WRITTEN and its skip removed in this change. A skipped test "+
-					"that outlives its reason is a hole that reads as coverage.", name, fn.Name.Name)
-			}
-		}
-	}
-	if examined == 0 {
-		t.Fatal("examined no source files, so this guard passed by looking at nothing")
-	}
-}
+// What this package owns is the pair comparison that rests on:
+// [AcceptedTime.NotBefore], and the refusal to compare two authorities.
 
 // ⚠️ The name form is what reaches a record, and the record's digest is its
 // identity — so this round trip is not a convenience test, it is the encoding

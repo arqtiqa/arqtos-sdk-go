@@ -46,11 +46,15 @@ import (
 // ⚠️ "kernel/tapeformat" came out the same way, on the change that gave it the
 // entry shape, the chain check and the stream reader. The guard went red naming
 // all 11 exported identifiers; the tests landed with them.
+// ⚠️ "kernel/reduce" came out when it gained the reducer SEAM — Reduce, Input,
+// Outcome and ErrNotImplemented. The reducer itself is still unbuilt, and that
+// is precisely why the seam had to land: the kill-gate fixtures beside it had no
+// function to call, so they were empty t.Skip placeholders that could not fail.
+// The seam is what let them become assertions. See internal/redfixture.
 var skeletonPackages = []string{
 	"kernel",
 	"kernel/keyhistory",
 	"kernel/predicate",
-	"kernel/reduce",
 }
 
 // exportedDecls returns the exported top-level identifiers declared in dir.

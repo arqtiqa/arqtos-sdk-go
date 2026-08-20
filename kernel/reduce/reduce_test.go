@@ -1,16 +1,17 @@
 package reduce_test
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arqtiqa/arqtos-sdk-go/contracts"
+	"github.com/arqtiqa/arqtos-sdk-go/internal/redfixture"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/canonical"
+	"github.com/arqtiqa/arqtos-sdk-go/kernel/reduce"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/tapeformat"
 )
 
@@ -242,89 +243,148 @@ func TestFixtureDAG_TheTwoRejectionCandidatesAreDistinct(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// THE THREE RED FIXTURES
+// THE KILL GATES
 // ---------------------------------------------------------------------------
-
-// ⚠️ RED ON PURPOSE, skipped so CI stays green on a tree whose gap is KNOWN.
 //
-// Replaying from zero, the genesis act must be ACCEPTED, and the state that
-// results must name the root grant and the root keys. This is the only one of
-// the three that is an acceptance rather than a rejection — and it has to be
-// here, because a reducer that rejected everything would satisfy the other two.
-func TestReduce_AcceptsRepositoryGenesis(t *testing.T) {
-	t.Skip("RED FIXTURE — waiting on the reducer. Replaying testdata/dag from zero must ACCEPT the " +
-		"genesis act and produce state naming its root grant and root keys. It is the acceptance case " +
-		"on purpose: a reducer that refused every input would pass the two rejection fixtures below. " +
-		"See TestReduceFixturesAreStillNeeded.")
-}
-
-// ⚠️ RED ON PURPOSE. The candidate spends a permit the accepted prefix has
-// already spent — proved a real double-spend, green, above. It must be REJECTED,
-// and the rejection must name the earlier spend: an act refused with "no" and no
-// reason cannot be reconciled against the tape by anyone auditing it.
-func TestReduce_RejectsAPermitDoubleSpend(t *testing.T) {
-	t.Skip("RED FIXTURE — waiting on the reducer. testdata/dag/candidates/double-spend.json spends a " +
-		"permit already spent by the accepted prefix, and must be REJECTED with a reason naming the " +
-		"earlier spend. Asserting only that it was refused would pass against a reducer that refuses " +
-		"everything, which is why the assertion is on the reason.")
-}
-
-// ⚠️ RED ON PURPOSE. The candidate's signed body binds one tree and the
-// observation reports another — proved a real swap, green, above. Every
-// signature is valid and the act is internally coherent; only the reducer
-// comparing bound against observed catches it.
-func TestReduce_RejectsATreeSwap(t *testing.T) {
-	t.Skip("RED FIXTURE — waiting on the reducer. testdata/dag/candidates/tree-swap.json binds tree A " +
-		"and is observed against tree B, and must be REJECTED with a reason naming the mismatch. This " +
-		"is the W2 kill gate: if a tree swap is not caught here, the design's central claim does not hold.")
-}
-
-// ⚠️ THE GUARD ON ALL THREE SKIPS. A skipped test nobody removes is a permanent
-// hole that reads as coverage, so this fails the moment the reducer exists —
-// forcing the three fixtures to be written and the skips deleted in the same
-// change.
+// ⚠️ Each of these has a REAL BODY that runs, and redfixture.Expect requires it
+// to fail. An empty body fails Expect; a body that starts passing fails Expect
+// and demands promotion. That is the difference between these and what shipped
+// in W1 — t.Skip lines with nothing after them, tests that could not fail and
+// therefore guarded nothing.
 //
-// It reads the package's own source rather than calling anything, because there
-// is nothing to call: kernel/reduce exports nothing, by design, until it does.
-func TestReduceFixturesAreStillNeeded(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("reading the package directory: %v", err)
+// Every one asserts the REASON, never merely that an error occurred. A reducer
+// that refused every input would satisfy the weaker assertion, and would be
+// exactly as wrong as one that accepted everything.
+
+func input(t *testing.T) reduce.Input {
+	t.Helper()
+	return reduce.Input{
+		Genesis:  read[contracts.RepositoryGenesis](t, "genesis.json"),
+		Accepted: acceptedTape(t),
+		Acts:     acceptedActs(t),
 	}
-	fset := token.NewFileSet()
-	examined := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, name, nil, 0)
+}
+
+// Replaying from zero must ACCEPT the genesis act, and the resulting state must
+// name the authority it established.
+//
+// ⚠️ This is the only one of the four that is an acceptance, and it has to be
+// here: a reducer that refused everything would pass the three rejections.
+func TestReduce_AcceptsRepositoryGenesis(t *testing.T) {
+	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
+		in := input(t)
+		in.Accepted = in.Accepted[:1] // the genesis entry alone
+		in.Acts = nil
+
+		out, err := reduce.Reduce(context.Background(), in)
 		if err != nil {
-			t.Fatalf("parsing %s: %v", name, err)
+			ft.Fatalf("reducing the genesis act returned %v; it must be judged, not deferred", err)
 		}
-		examined++
-		for _, d := range f.Decls {
-			switch decl := d.(type) {
-			case *ast.FuncDecl:
-				if decl.Name.IsExported() {
-					t.Errorf("%s exports %s: the reducer exists, so the three fixtures above must be "+
-						"WRITTEN and their skips removed in this change.", name, decl.Name.Name)
-				}
-			case *ast.GenDecl:
-				for _, spec := range decl.Specs {
-					if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.IsExported() {
-						t.Errorf("%s exports type %s: the reducer exists, so the three fixtures above "+
-							"must be WRITTEN and their skips removed in this change.", name, ts.Name.Name)
-					}
-				}
+		if !out.Accepted {
+			ft.Fatalf("the genesis act was refused: %s", out.Reason)
+		}
+		if len(out.RootKeys) != len(in.Genesis.RootKeys) {
+			ft.Errorf("the outcome names %d root keys and the genesis act establishes %d — an accepted "+
+				"genesis that establishes no authority has been waved through rather than reduced",
+				len(out.RootKeys), len(in.Genesis.RootKeys))
+		}
+		if out.RootGrant.Scope.Subjects == nil {
+			ft.Errorf("the outcome carries no root grant, so nothing below it could be checked for amplification")
+		}
+	})
+}
+
+// The candidate spends a permit the accepted prefix has already spent — proved a
+// real double-spend, green, above. The refusal must NAME the earlier spend.
+func TestReduce_RejectsAPermitDoubleSpend(t *testing.T) {
+	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
+		candidate := read[contracts.ActSpec](t, "candidates/double-spend.json")
+		in := input(t)
+		in.Candidate = &candidate
+
+		out, err := reduce.Reduce(context.Background(), in)
+		if err != nil {
+			ft.Fatalf("reducing a double-spend returned %v; it must be judged, not deferred", err)
+		}
+		if out.Accepted {
+			ft.Fatal("a permit already spent by the accepted prefix was spent again")
+		}
+		// ⚠️ The REASON, not the refusal. A reducer that refuses everything
+		// satisfies "not accepted" and is useless.
+		var spentBy string
+		for id, a := range in.Acts {
+			if a.Permit == candidate.Permit {
+				spentBy = id
 			}
 		}
-	}
-	// ⚠️ Count-asserted: a rename that made this walk examine nothing would
-	// report no reducer and read exactly like a pass.
-	if examined == 0 {
-		t.Fatal("examined no source files, so this guard passed by looking at nothing")
-	}
+		if !strings.Contains(out.Reason, spentBy) {
+			ft.Errorf("the refusal %q does not name the earlier spend (%s), so nobody auditing the tape "+
+				"could reconcile it", out.Reason, spentBy)
+		}
+	})
+}
+
+// The candidate's body binds one tree and the observation reports another —
+// proved a real swap, green, above. Every signature is valid and the act is
+// internally coherent; only the reducer comparing bound against observed catches
+// it. This is the W2 kill gate.
+func TestReduce_RejectsATreeSwap(t *testing.T) {
+	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
+		candidate := read[contracts.ActSpec](t, "candidates/tree-swap.json")
+		observation := read[contracts.EvidenceEvent](t, "candidates/tree-swap-observation.json")
+		in := input(t)
+		in.Candidate = &candidate
+		in.Observations = []contracts.EvidenceEvent{observation}
+
+		out, err := reduce.Reduce(context.Background(), in)
+		if err != nil {
+			ft.Fatalf("reducing a tree swap returned %v; it must be judged, not deferred", err)
+		}
+		if out.Accepted {
+			ft.Fatal("an act observed against a tree its signed body does not bind was accepted — if a " +
+				"tree swap is not caught here, the design's central claim does not hold")
+		}
+		observed := observation.Detail["observed_tree_oid"]
+		if !strings.Contains(out.Reason, candidate.CandidateTreeOID) || !strings.Contains(out.Reason, observed) {
+			ft.Errorf("the refusal %q does not name both the bound tree (%s) and the observed one (%s)",
+				out.Reason, candidate.CandidateTreeOID, observed)
+		}
+	})
+}
+
+// ⚠️ CLOCK ROLLBACK, and it lives HERE rather than in contracts because
+// detection is a property of the accepted SEQUENCE, not of a pair of values.
+// It was previously an empty skip in contracts/time_test.go, guarded by a canary
+// watching for a `contracts` export containing "Rollback" — a signal that could
+// never fire, because what it waits for is the reducer.
+func TestReduce_RejectsAClockRollback(t *testing.T) {
+	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
+		in := input(t)
+		if len(in.Accepted) < 2 {
+			ft.Fatalf("the fixture tape holds %d entries; a rollback needs two", len(in.Accepted))
+		}
+
+		// The second entry's acceptance time moves BACKWARDS, from the same
+		// authority — so the two are comparable and the regression is real
+		// rather than an artefact of comparing two clocks.
+		rolled := append([]tapeformat.Entry(nil), in.Accepted...)
+		rolled[1].AcceptedAt = contracts.AcceptedTime{
+			At:        rolled[0].AcceptedAt.At.Add(-time.Hour),
+			Authority: rolled[0].AcceptedAt.Authority,
+		}
+		in.Accepted = rolled
+
+		out, err := reduce.Reduce(context.Background(), in)
+		if err != nil {
+			ft.Fatalf("reducing a rolled-back tape returned %v; it must be judged, not deferred", err)
+		}
+		if out.Accepted {
+			ft.Fatal("a tape whose acceptance times run backwards under one authority was accepted")
+		}
+		if !strings.Contains(strings.ToLower(out.Reason), "time") {
+			ft.Errorf("the refusal %q does not name the time regression", out.Reason)
+		}
+	})
 }
 
 // The fixture set is committed and complete. A file deleted or renamed would
