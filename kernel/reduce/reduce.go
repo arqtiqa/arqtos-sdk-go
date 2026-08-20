@@ -3,19 +3,20 @@ package reduce
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/arqtiqa/arqtos-sdk-go/contracts"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/tapeformat"
 )
 
-// ErrNotImplemented is returned by [Reduce] for every input in this build.
+// ErrUndigestible is returned when an input cannot be encoded at all.
 //
-// ⚠️ It exists so a caller can distinguish "this build cannot decide" from "this
-// act is inadmissible" — two conclusions with opposite responses, which a
-// generic failure would collapse. The fixtures depend on the distinction: a
-// fixture asserting "the candidate is refused" would PASS against a function
-// that refuses everything, which is why they assert the REASON.
-var ErrNotImplemented = errors.New("reduce: the reducer is not implemented in this build")
+// ⚠️ IT IS NOT A REFUSAL. A refusal is a DECISION and comes back as an
+// [Outcome] with a reason; an error means the reducer could not decide, which
+// is a different thing with a different response. Collapsing them would let a
+// caller read "we could not read this" as "this is inadmissible", and the two
+// lead to opposite recoveries.
+var ErrUndigestible = errors.New("reduce: an input cannot be canonically encoded")
 
 // An Input is what a reduction is computed over.
 //
@@ -23,7 +24,7 @@ var ErrNotImplemented = errors.New("reduce: the reducer is not implemented in th
 // beyond naming these five things. What is SETTLED is that reduction returns an
 // [Outcome] carrying a REASON — that is what the kill-gate fixtures assert, and
 // it is what makes a refusal reconcilable against the tape by someone auditing
-// it. How the inputs are carried is decided when the reducer is built.
+// it.
 type Input struct {
 	// Genesis is the ledger bootstrap the chain traces to.
 	Genesis contracts.RepositoryGenesis
@@ -53,24 +54,76 @@ type Outcome struct {
 	// everything would satisfy the weaker assertion.
 	Reason string
 
-	// RootKeys and RootGrant are the authority the genesis act established,
-	// carried out so an accepted genesis can be checked to have established
-	// something rather than merely to have been waved through.
+	// RootKeys and RootGrant are the authority the genesis act established.
+	//
+	// ⚠️ Carried out so an accepted genesis can be shown to have ESTABLISHED
+	// something rather than merely to have been waved through — an acceptance
+	// that names no authority is indistinguishable from a reducer that returns
+	// true.
 	RootKeys  []contracts.RootKey
 	RootGrant contracts.Grant
 }
 
+// refused builds a refusal. It exists so no code path can produce one without
+// saying why.
+func refused(format string, args ...any) Outcome {
+	return Outcome{Reason: fmt.Sprintf(format, args...)}
+}
+
 // Reduce judges a candidate against the accepted tape.
 //
-// ⚠️ In this build it decides nothing and returns [ErrNotImplemented] for every
-// input. That inability is deliberate and load-bearing, exactly as it is in the
-// public verifier: before the reducer exists, the one behaviour this function
-// must not have is the ability to report a verdict — a caller that got one would
-// be told an act was admissible by code that never looked at it.
+// ⚠️ IT NEVER RETURNS AN ERROR FOR A DECIDABLE INPUT. A refusal is a decision:
+// Outcome{Accepted:false, Reason:…} with a nil error. An error means the reducer
+// could not decide at all, which today is only an input that cannot be encoded.
 //
-// The reducer that implements this is separate, deliberate work, and the
-// fixtures beside it were written first so it has to satisfy a check it did not
-// author.
+// ⚠️ AND IT REFUSES BY DEFAULT. An act no rule admits is refused, never accepted
+// — so a rule that has not been written yet cannot let something through, and
+// each rule added replaces a general refusal with a specific one.
+//
+// # Purity
+//
+// No filesystem, no environment, no clock, no network, and it returns rather
+// than invokes at any depth. A reducer that read the wall clock would produce a
+// different answer on replay than it did at acceptance, which is the one thing
+// replay exists to detect. A test in this package walks its own source and fails
+// on any such access.
 func Reduce(ctx context.Context, in Input) (Outcome, error) {
-	return Outcome{}, ErrNotImplemented
+	if err := in.Genesis.Validate(); err != nil {
+		return refused("the genesis act is unusable: %v", err), nil
+	}
+	genesisID, err := in.Genesis.ID()
+	if err != nil {
+		return Outcome{}, fmt.Errorf("%w: the genesis act: %w", ErrUndigestible, err)
+	}
+
+	if len(in.Accepted) == 0 {
+		return refused("the tape is empty; genesis is an entry on it, not an absence"), nil
+	}
+
+	// ⚠️ The tape must BEGIN at the genesis act, and the comparison is against
+	// the act's own digest rather than a recorded id. The two live under
+	// different domain tags, so an act body id is not interchangeable with a
+	// genesis id — a tape that started at one would be a chain rooted in
+	// something nothing vouches for.
+	if got := in.Accepted[0].ActBodyID; got != genesisID {
+		return refused("the tape begins at %s and the genesis act digests to %s; a chain must be "+
+			"rooted in the genesis it claims", got, genesisID), nil
+	}
+
+	// Replaying the bootstrap alone: the act is accepted, and the authority it
+	// establishes is carried out.
+	if len(in.Accepted) == 1 && in.Candidate == nil {
+		return Outcome{
+			Accepted: true,
+			// ⚠️ COPIED, not aliased. An outcome sharing the caller's backing
+			// array lets a mutation of one silently change the other, which is
+			// exactly the defect that made a golden fixture drift earlier in
+			// this project.
+			RootKeys:  append([]contracts.RootKey(nil), in.Genesis.RootKeys...),
+			RootGrant: in.Genesis.RootGrant,
+		}, nil
+	}
+
+	return refused("no rule in this build admits this input; %d accepted entr(y/ies), candidate=%v",
+		len(in.Accepted), in.Candidate != nil), nil
 }

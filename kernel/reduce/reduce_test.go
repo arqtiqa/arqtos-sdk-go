@@ -265,33 +265,122 @@ func input(t *testing.T) reduce.Input {
 	}
 }
 
-// Replaying from zero must ACCEPT the genesis act, and the resulting state must
-// name the authority it established.
+// Replaying from zero ACCEPTS the genesis act, and the resulting state names the
+// authority it established.
 //
-// ⚠️ This is the only one of the four that is an acceptance, and it has to be
+// ⚠️ PROMOTED from a red fixture. The assertions below are UNEDITED — the same
+// ones written before the reducer existed, now taking *testing.T directly
+// because redfixture.Expect requires its body to fail and this one no longer
+// does. That is the promotion the harness demands, and editing the assertions
+// to fit the implementation would be the one thing it exists to prevent.
+//
+// ⚠️ It is the only one of the four that is an acceptance, and it has to be
 // here: a reducer that refused everything would pass the three rejections.
 func TestReduce_AcceptsRepositoryGenesis(t *testing.T) {
-	redfixture.Expect(t, "the reducer", func(ft redfixture.T) {
-		in := input(t)
-		in.Accepted = in.Accepted[:1] // the genesis entry alone
-		in.Acts = nil
+	in := input(t)
+	in.Accepted = in.Accepted[:1] // the genesis entry alone
+	in.Acts = nil
 
-		out, err := reduce.Reduce(context.Background(), in)
-		if err != nil {
-			ft.Fatalf("reducing the genesis act returned %v; it must be judged, not deferred", err)
-		}
-		if !out.Accepted {
-			ft.Fatalf("the genesis act was refused: %s", out.Reason)
-		}
-		if len(out.RootKeys) != len(in.Genesis.RootKeys) {
-			ft.Errorf("the outcome names %d root keys and the genesis act establishes %d — an accepted "+
-				"genesis that establishes no authority has been waved through rather than reduced",
-				len(out.RootKeys), len(in.Genesis.RootKeys))
-		}
-		if out.RootGrant.Scope.Subjects == nil {
-			ft.Errorf("the outcome carries no root grant, so nothing below it could be checked for amplification")
-		}
-	})
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("reducing the genesis act returned %v; it must be judged, not deferred", err)
+	}
+	if !out.Accepted {
+		t.Fatalf("the genesis act was refused: %s", out.Reason)
+	}
+	if len(out.RootKeys) != len(in.Genesis.RootKeys) {
+		t.Errorf("the outcome names %d root keys and the genesis act establishes %d — an accepted "+
+			"genesis that establishes no authority has been waved through rather than reduced",
+			len(out.RootKeys), len(in.Genesis.RootKeys))
+	}
+	if out.RootGrant.Scope.Subjects == nil {
+		t.Errorf("the outcome carries no root grant, so nothing below it could be checked for amplification")
+	}
+}
+
+// ⚠️ The outcome must not ALIAS the caller's slice. A struct copy shares a
+// slice's backing array, so a caller mutating one would silently change the
+// other — the defect that made a golden fixture drift earlier in this project,
+// and worse here because the aliased value is the root authority.
+func TestReduce_TheOutcomeDoesNotAliasTheGenesisKeys(t *testing.T) {
+	in := input(t)
+	in.Accepted = in.Accepted[:1]
+	in.Acts = nil
+
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil || !out.Accepted {
+		t.Fatalf("the genesis act was not accepted: %v %s", err, out.Reason)
+	}
+	if len(out.RootKeys) == 0 {
+		t.Fatal("no root keys to check")
+	}
+	out.RootKeys[0].KeyID = "mutated-through-the-outcome"
+	if in.Genesis.RootKeys[0].KeyID == "mutated-through-the-outcome" {
+		t.Fatal("the outcome shares the genesis act's backing array")
+	}
+}
+
+// Every way the bootstrap can be unusable, refused as a DECISION with a reason —
+// never as an error, and never by accident.
+func TestReduce_RefusesAnUnusableBootstrap(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(*reduce.Input)
+		names  string
+	}{
+		"the genesis act does not validate": {
+			func(in *reduce.Input) { in.Genesis.RootKeys = nil },
+			"genesis act is unusable",
+		},
+		"the tape is empty": {
+			func(in *reduce.Input) { in.Accepted = nil },
+			"tape is empty",
+		},
+		"the tape does not begin at the genesis act": {
+			func(in *reduce.Input) { in.Accepted[0].ActBodyID = "sha256:" + strings.Repeat("f", 64) },
+			"rooted in the genesis it claims",
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			in := input(t)
+			in.Accepted = append([]tapeformat.Entry(nil), in.Accepted[:1]...)
+			in.Acts = nil
+			c.mutate(&in)
+
+			out, err := reduce.Reduce(context.Background(), in)
+			// ⚠️ A refusal is a DECISION. An error would mean the reducer could
+			// not decide, which is a different thing with a different response.
+			if err != nil {
+				t.Fatalf("a decidable input returned an error: %v", err)
+			}
+			if out.Accepted {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(out.Reason, c.names) {
+				t.Errorf("the refusal %q does not name the problem (%q)", out.Reason, c.names)
+			}
+		})
+	}
+	if len(cases) != 3 {
+		t.Fatalf("checked %d ways the bootstrap can be unusable, want 3", len(cases))
+	}
+}
+
+// ⚠️ REFUSE BY DEFAULT. A rule that has not been written yet must not let
+// anything through — so an input no rule admits is refused, with a reason
+// saying so, rather than accepted or errored.
+func TestReduce_RefusesWhatNoRuleAdmits(t *testing.T) {
+	in := input(t) // two accepted entries, no candidate: no rule covers this yet
+	out, err := reduce.Reduce(context.Background(), in)
+	if err != nil {
+		t.Fatalf("returned an error rather than a decision: %v", err)
+	}
+	if out.Accepted {
+		t.Fatal("an input no rule admits was ACCEPTED — the default must be refusal")
+	}
+	if out.Reason == "" {
+		t.Error("refused without a reason")
+	}
 }
 
 // The candidate spends a permit the accepted prefix has already spent — proved a
