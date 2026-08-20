@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/arqtiqa/arqtos-sdk-go/contracts"
+	"github.com/arqtiqa/arqtos-sdk-go/kernel/canonical"
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/tapeformat"
 )
 
@@ -92,7 +93,7 @@ func acceptedActs(t *testing.T) map[string]contracts.ActSpec {
 func TestFixtureDAG_TapeReadsAndVerifies(t *testing.T) {
 	entries := acceptedTape(t)
 	if len(entries) != 2 {
-		t.Fatalf("the accepted prefix holds %d entries, want 2", len(entries))
+		t.Fatalf("the accepted prefix holds %d entries, want 2 (the genesis act and one merge)", len(entries))
 	}
 	if err := tapeformat.VerifyChain(entries); err != nil {
 		t.Fatalf("the fixture tape is not a chain: %v", err)
@@ -104,13 +105,48 @@ func TestFixtureDAG_TapeReadsAndVerifies(t *testing.T) {
 func TestFixtureDAG_EveryAcceptedEntryHasItsAct(t *testing.T) {
 	entries := acceptedTape(t)
 	acts := acceptedActs(t)
-	if len(acts) != len(entries) {
-		t.Fatalf("the tape holds %d entries and %d acts are committed", len(entries), len(acts))
+
+	// ⚠️ Entry 0 is the GENESIS ACT and deliberately has no ActSpec. The
+	// previous fixture reused the genesis id as an ActSpec.act_body_id, which
+	// asserts that a digest under DomainGenesis and one under DomainActBody are
+	// interchangeable — exactly what domain separation exists to prevent.
+	if len(acts) != len(entries)-1 {
+		t.Fatalf("the tape holds %d entries and %d ActSpecs are committed; entry 0 is the genesis act "+
+			"and has none", len(entries), len(acts))
 	}
-	for i, e := range entries {
+	for i, e := range entries[1:] {
 		if _, ok := acts[e.ActBodyID]; !ok {
-			t.Errorf("entry %d records act %s, which is not committed", i, e.ActBodyID)
+			t.Errorf("entry %d records act %s, which is not committed", i+1, e.ActBodyID)
 		}
+	}
+}
+
+// ⭐ THE BINDING THE FIXTURE PREVIOUSLY DID NOT HAVE. Every committed act's
+// act_body_id is re-derived from the act itself and compared. Before this, the
+// ids were LITERALS — so nothing tied the DAG to the encoding it claims to use,
+// and the public act type could not be canonically encoded at all.
+func TestFixtureDAG_EveryActIDIsTheActsOwnDigest(t *testing.T) {
+	acts := acceptedActs(t)
+	for _, name := range []string{"candidates/double-spend.json", "candidates/tree-swap.json"} {
+		a := read[contracts.ActSpec](t, name)
+		acts[a.ActBodyID] = a
+	}
+
+	checked := 0
+	for id, a := range acts {
+		unsealed := a
+		unsealed.ActBodyID = ""
+		got, err := canonical.ActBodyID(unsealed)
+		if err != nil {
+			t.Fatalf("act %s cannot be canonically encoded: %v", id, err)
+		}
+		if got != id {
+			t.Errorf("act carries id %s but digests to %s — the id is a literal, not a digest", id, got)
+		}
+		checked++
+	}
+	if checked != 3 {
+		t.Fatalf("checked %d acts, want 3", checked)
 	}
 }
 
@@ -129,6 +165,13 @@ func TestFixtureDAG_TheFirstEntryIsTheGenesisAct(t *testing.T) {
 	if got := acceptedTape(t)[0].ActBodyID; got != id {
 		t.Fatalf("the tape's first entry is act %s; the genesis document digests to %s", got, id)
 	}
+
+	// ⚠️ And no ActSpec claims that id. Domain tags exist so a genesis digest
+	// and an act-body digest are not interchangeable; a fixture that used one
+	// as the other would assert they are.
+	if _, ok := acceptedActs(t)[id]; ok {
+		t.Error("an ActSpec carries the genesis act's id — that id is a digest under a different domain tag")
+	}
 }
 
 // ⚠️ THE DOUBLE-SPEND FIXTURE IS A REAL DOUBLE-SPEND. If the candidate's permit
@@ -141,9 +184,6 @@ func TestFixtureDAG_TheDoubleSpendCandidateReusesASpentPermit(t *testing.T) {
 
 	var spentBy string
 	for _, a := range acts {
-		if a.ActKind == "repository_genesis" {
-			continue
-		}
 		if a.Permit == candidate.Permit {
 			spentBy = a.ActBodyID
 		}
@@ -157,7 +197,7 @@ func TestFixtureDAG_TheDoubleSpendCandidateReusesASpentPermit(t *testing.T) {
 	if candidate.Permit.IssuerActBodyID == "" {
 		t.Fatal("the candidate names no permit at all")
 	}
-	t.Logf("permit %s#%d is already spent by %s", candidate.Permit.IssuerActBodyID, candidate.Permit.OutputIndex, spentBy)
+	t.Logf("permit %s#%s is already spent by %s", candidate.Permit.IssuerActBodyID, candidate.Permit.OutputIndex, spentBy)
 }
 
 // ⚠️ THE TREE-SWAP FIXTURE IS A REAL SWAP: the act binds one tree and the
@@ -291,7 +331,6 @@ func TestReduceFixturesAreStillNeeded(t *testing.T) {
 // otherwise leave the tests above exercising a smaller DAG than they name.
 func TestFixtureDAG_IsCommittedAndComplete(t *testing.T) {
 	want := []string{
-		"accepted/act-0-genesis.json",
 		"accepted/act-1-spend.json",
 		"candidates/double-spend.json",
 		"candidates/tree-swap-observation.json",
@@ -337,7 +376,6 @@ func TestFixtureDAG_EveryRecordDecodesStrictly(t *testing.T) {
 		fn   func(*testing.T, string)
 	}{
 		{"genesis.json", func(t *testing.T, p string) { _ = read[contracts.RepositoryGenesis](t, p) }},
-		{"accepted/act-0-genesis.json", func(t *testing.T, p string) { _ = read[contracts.ActSpec](t, p) }},
 		{"accepted/act-1-spend.json", func(t *testing.T, p string) { _ = read[contracts.ActSpec](t, p) }},
 		{"candidates/double-spend.json", func(t *testing.T, p string) { _ = read[contracts.ActSpec](t, p) }},
 		{"candidates/tree-swap.json", func(t *testing.T, p string) { _ = read[contracts.ActSpec](t, p) }},
@@ -346,7 +384,7 @@ func TestFixtureDAG_EveryRecordDecodesStrictly(t *testing.T) {
 		t.Run(f.path, func(t *testing.T) { f.fn(t, f.path) })
 		checked++
 	}
-	if checked != 6 {
-		t.Fatalf("decoded %d records, want 6 — the tape is checked separately by its own reader", checked)
+	if checked != 5 {
+		t.Fatalf("decoded %d records, want 5 — the tape is checked separately by its own reader", checked)
 	}
 }

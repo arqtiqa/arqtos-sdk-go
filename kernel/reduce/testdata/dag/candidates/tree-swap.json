@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": "1",
   "kind": "actspec",
-  "act_body_id": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "act_body_id": "sha256:00d48a7261addfc44b11e4afb6ad777bb8fb20b617e08c2e5d6a7f5923cfa309",
   "act_kind": "merge_change_request",
   "repository_id": "github.com/arqtiqa/arqtos-core",
   "change_request_id": "cr-3",
@@ -19,19 +19,19 @@
   ],
   "permit": {
     "issuer_act_body_id": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-    "output_index": 1
+    "output_index": "1"
   },
   "footprint": {
     "reads": [
       {
         "resource_id": "charter:main",
-        "expected_version": 1
+        "expected_version": "1"
       }
     ],
     "writes": [
       {
         "resource_id": "ref:refs/heads/main",
-        "expected_version": 3,
+        "expected_version": "3",
         "new_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
       }
     ],

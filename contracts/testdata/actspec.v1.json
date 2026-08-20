@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": "1",
   "kind": "actspec",
   "act_body_id": "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
   "act_kind": "governed_merge",
@@ -19,19 +19,19 @@
   ],
   "permit": {
     "issuer_act_body_id": "sha256:1110000000000000000000000000000000000000000000000000000000000003",
-    "output_index": 0
+    "output_index": "0"
   },
   "footprint": {
     "reads": [
       {
         "resource_id": "charter:example/governed",
-        "expected_version": 7
+        "expected_version": "7"
       }
     ],
     "writes": [
       {
         "resource_id": "ref:refs/heads/main",
-        "expected_version": 41,
+        "expected_version": "41",
         "new_digest": "sha256:2220000000000000000000000000000000000000000000000000000000000004"
       }
     ],

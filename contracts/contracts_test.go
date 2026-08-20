@@ -27,7 +27,7 @@ var goldens = map[contracts.Kind]struct {
 	value   any
 }{
 	contracts.KindActSpec: {"actspec.v1.json", "actspec.v1.schema.json", contracts.ActSpec{
-		SchemaVersion:    contracts.SchemaVersion,
+		SchemaVersion:    contracts.SchemaVersionNumber,
 		Kind:             contracts.KindActSpec,
 		ActBodyID:        "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
 		ActKind:          "governed_merge",
@@ -44,11 +44,11 @@ var goldens = map[contracts.Kind]struct {
 		},
 		Permit: contracts.PermitID{
 			IssuerActBodyID: "sha256:1110000000000000000000000000000000000000000000000000000000000003",
-			OutputIndex:     0,
+			OutputIndex:     contracts.FromInt(0),
 		},
 		Footprint: contracts.Footprint{
-			Reads:          []contracts.ResourceRead{{ResourceID: "charter:example/governed", ExpectedVersion: 7}},
-			Writes:         []contracts.ResourceWrite{{ResourceID: "ref:refs/heads/main", ExpectedVersion: 41, NewDigest: "sha256:2220000000000000000000000000000000000000000000000000000000000004"}},
+			Reads:          []contracts.ResourceRead{{ResourceID: "charter:example/governed", ExpectedVersion: contracts.FromInt(7)}},
+			Writes:         []contracts.ResourceWrite{{ResourceID: "ref:refs/heads/main", ExpectedVersion: contracts.FromInt(41), NewDigest: "sha256:2220000000000000000000000000000000000000000000000000000000000004"}},
 			NamespaceRoots: []string{"lane:docs"},
 		},
 		Nonce:          "01a01578-ec47-7209-9200-cac2a1f75c7f",
@@ -57,7 +57,7 @@ var goldens = map[contracts.Kind]struct {
 	}},
 
 	contracts.KindWitness: {"witness.v1.json", "witness.v1.schema.json", contracts.Witness{
-		SchemaVersion: contracts.SchemaVersion,
+		SchemaVersion: contracts.SchemaVersionNumber,
 		Kind:          contracts.KindWitness,
 		ActBodyID:     "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
 		WitnessKind:   contracts.WitnessRatification,
@@ -69,13 +69,18 @@ var goldens = map[contracts.Kind]struct {
 	}},
 
 	contracts.KindEvidenceEvent: {"evidence_event.v1.json", "evidence_event.v1.schema.json", contracts.EvidenceEvent{
-		SchemaVersion: contracts.SchemaVersion,
+		SchemaVersion: contracts.SchemaVersionNumber,
 		Kind:          contracts.KindEvidenceEvent,
 		EventKind:     contracts.EventReceipt,
 		ActBodyID:     "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
-		Sequence:      42,
-		AcceptedTime:  time.Date(2026, 8, 20, 9, 31, 0, 0, time.UTC),
-		TimeAuthority: "authority:host-clock",
+		Sequence:      contracts.FromInt(42),
+		AcceptedTime: contracts.AcceptedTime{
+			At: time.Date(2026, 8, 20, 9, 31, 0, 0, time.UTC),
+			Authority: contracts.TimeAuthority{
+				Name:       "authority:host-clock",
+				Provenance: contracts.ClockSynchronised,
+			},
+		},
 		// ⚠️ Bound at effect time. The final commit does not exist before a
 		// squash merge, which is why binding it at decision time was
 		// unimplementable.
@@ -85,9 +90,9 @@ var goldens = map[contracts.Kind]struct {
 	}},
 
 	contracts.KindStatusView: {"status_view.v1.json", "status_view.v1.schema.json", contracts.StatusView{
-		SchemaVersion:          contracts.SchemaVersion,
+		SchemaVersion:          contracts.SchemaVersionNumber,
 		Kind:                   contracts.KindStatusView,
-		RebuiltThroughSequence: 42,
+		RebuiltThroughSequence: contracts.FromInt(42),
 		Entries: []contracts.StatusEntry{{
 			ActBodyID:      "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
 			State:          "settled",
@@ -268,8 +273,16 @@ func TestEveryKind_CarriesItsSchemaVersion(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s has no schema_version", g.fixture)
 			}
-			if int(v.(float64)) != contracts.SchemaVersion {
-				t.Errorf("%s carries schema_version %v, want %d", g.fixture, v, contracts.SchemaVersion)
+			// ⚠️ A STRING, not a number. The canonical encoding forbids JSON
+			// numbers, so a fixture carrying schema_version as one would be a
+			// document this package's own encoder refuses.
+			str, ok := v.(string)
+			if !ok {
+				t.Fatalf("%s carries schema_version as %T; it must be a string — the canonical encoding "+
+					"forbids JSON numbers, so a numeric value here cannot be digested", g.fixture, v)
+			}
+			if contracts.Number(str) != contracts.SchemaVersionNumber {
+				t.Errorf("%s carries schema_version %q, want %q", g.fixture, str, contracts.SchemaVersionNumber)
 			}
 			if m["kind"] != string(kind) {
 				t.Errorf("%s carries kind %v, want %q", g.fixture, m["kind"], kind)

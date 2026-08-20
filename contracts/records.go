@@ -15,7 +15,7 @@ import "time"
 // the issuer's act body id rather than a self-describing hash.
 type PermitID struct {
 	IssuerActBodyID string `json:"issuer_act_body_id"`
-	OutputIndex     int    `json:"output_index"`
+	OutputIndex     Number `json:"output_index"`
 }
 
 // A ManifestEntry is one exact path and the digest of its content.
@@ -37,14 +37,14 @@ type ManifestEntry struct {
 // it is no claim.
 type ResourceRead struct {
 	ResourceID      string `json:"resource_id"`
-	ExpectedVersion int64  `json:"expected_version"`
+	ExpectedVersion Number `json:"expected_version"`
 }
 
 // A ResourceWrite declares a resource the act changes, the version it expects to
 // replace, and the digest it intends to produce.
 type ResourceWrite struct {
 	ResourceID      string `json:"resource_id"`
-	ExpectedVersion int64  `json:"expected_version"`
+	ExpectedVersion Number `json:"expected_version"`
 	NewDigest       string `json:"new_digest"`
 }
 
@@ -67,8 +67,8 @@ type Footprint struct {
 // signature would change the act's identity, and a co-signer could rename an act
 // by co-signing it.
 type ActSpec struct {
-	SchemaVersion int  `json:"schema_version"`
-	Kind          Kind `json:"kind"`
+	SchemaVersion Number `json:"schema_version"`
+	Kind          Kind   `json:"kind"`
 
 	// ActBodyID identifies this act: the digest over the unsigned immutable body.
 	ActBodyID string `json:"act_body_id"`
@@ -129,8 +129,8 @@ const (
 
 // A Witness is one append-only signature or ratification over an act body.
 type Witness struct {
-	SchemaVersion int  `json:"schema_version"`
-	Kind          Kind `json:"kind"`
+	SchemaVersion Number `json:"schema_version"`
+	Kind          Kind   `json:"kind"`
 
 	// ActBodyID is what this witness is about.
 	ActBodyID   string      `json:"act_body_id"`
@@ -177,22 +177,25 @@ const (
 // them into a current status deletes the ambiguity from replay, and the
 // ambiguity is the case an audit is looking for.
 type EvidenceEvent struct {
-	SchemaVersion int  `json:"schema_version"`
-	Kind          Kind `json:"kind"`
+	SchemaVersion Number `json:"schema_version"`
+	Kind          Kind   `json:"kind"`
 
 	EventKind EvidenceEventKind `json:"event_kind"`
 	ActBodyID string            `json:"act_body_id"`
 
 	// Sequence is the accepted order. It is the key a mirrored chain is keyed
 	// by, and it never renumbers.
-	Sequence int64 `json:"sequence"`
+	Sequence Number `json:"sequence"`
 
-	// AcceptedTime comes from a NAMED time authority with its clock provenance.
-	// ⚠️ Predicates never evaluate "now" — they evaluate this. Anything else
-	// breaks replay, because the same inputs would produce a different answer
-	// on a different day.
-	AcceptedTime  time.Time `json:"accepted_time"`
-	TimeAuthority string    `json:"time_authority"`
+	// AcceptedTime is the recorded acceptance time WITH its authority and that
+	// authority's clock provenance.
+	//
+	// ⚠️ It is [AcceptedTime], not a bare time plus a name. A string authority
+	// carries no provenance, so a reader could not tell a disciplined clock from
+	// a virtual machine that has been suspended — and a clock-rollback check
+	// written against observations would have nothing to evaluate. Predicates
+	// never evaluate "now"; they evaluate this.
+	AcceptedTime AcceptedTime `json:"accepted_time"`
 
 	// FinalSHA is the actual merged revision, bound at effect time rather than
 	// at decision time — the final commit does not exist before a squash or
@@ -225,12 +228,12 @@ type StatusEntry struct {
 // that property is what stops a projection quietly becoming a second source of
 // truth.
 type StatusView struct {
-	SchemaVersion int  `json:"schema_version"`
-	Kind          Kind `json:"kind"`
+	SchemaVersion Number `json:"schema_version"`
+	Kind          Kind   `json:"kind"`
 
 	// RebuiltThroughSequence is the accepted sequence this projection covers.
 	// A reader comparing two projections compares this, not their build times.
-	RebuiltThroughSequence int64 `json:"rebuilt_through_sequence"`
+	RebuiltThroughSequence Number `json:"rebuilt_through_sequence"`
 
 	Entries []StatusEntry `json:"entries"`
 }

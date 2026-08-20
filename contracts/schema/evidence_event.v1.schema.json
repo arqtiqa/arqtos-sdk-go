@@ -1,28 +1,97 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://arqtiqa.github.io/arqtos/schema/evidence_event.v1.schema.json",
-  "title": "EvidenceEvent v1 — one append-only fact",
+  "title": "EvidenceEvent v1 \u2014 one append-only fact",
   "description": "A host receipt is an EVENT here, never an overwritable status field. An ambiguous attempt followed by a settled one leaves BOTH events; collapsing them deletes the ambiguity from replay, and the ambiguity is what an audit is looking for.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "kind", "event_kind", "act_body_id", "sequence", "accepted_time", "time_authority"],
+  "required": [
+    "schema_version",
+    "kind",
+    "event_kind",
+    "act_body_id",
+    "sequence",
+    "accepted_time"
+  ],
   "properties": {
-    "schema_version": { "type": "integer", "const": 1 },
-    "kind": { "type": "string", "const": "evidence_event" },
-    "event_kind": { "type": "string", "enum": ["acceptance", "attempt", "observation", "receipt", "violation"] },
-    "act_body_id": { "type": "string", "minLength": 1 },
-    "sequence": { "type": "integer", "minimum": 0 },
-    "accepted_time": { "type": "string", "format": "date-time" },
-    "time_authority": {
+    "schema_version": {
       "type": "string",
-      "minLength": 1,
-      "description": "Predicates never evaluate now(); they evaluate accepted_time from this named authority. Anything else breaks replay."
+      "const": "1",
+      "description": "An integer carried as its canonical decimal string. The canonical encoding forbids JSON numbers."
+    },
+    "kind": {
+      "type": "string",
+      "const": "evidence_event"
+    },
+    "event_kind": {
+      "type": "string",
+      "enum": [
+        "acceptance",
+        "attempt",
+        "observation",
+        "receipt",
+        "violation"
+      ]
+    },
+    "act_body_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "string",
+      "pattern": "^(0|-?[1-9][0-9]*)$",
+      "description": "An integer carried as its canonical decimal string. The canonical encoding forbids JSON numbers."
+    },
+    "accepted_time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "authority"
+      ],
+      "description": "The recorded acceptance time WITH its authority and that authority's clock provenance. A bare timestamp plus a name carries no provenance.",
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "provenance"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "unspecified",
+                "local",
+                "synchronised",
+                "attested"
+              ]
+            }
+          }
+        }
+      }
     },
     "final_sha": {
       "type": "string",
       "description": "Bound at effect time, not decision time: the final commit does not exist before a squash or rebase merge."
     },
-    "host_operation_id": { "type": "string" },
-    "detail": { "type": "object", "additionalProperties": { "type": "string" } }
+    "host_operation_id": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
   }
 }

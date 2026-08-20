@@ -1,11 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": "1",
   "kind": "evidence_event",
   "event_kind": "receipt",
   "act_body_id": "sha256:0f7c3a91d2b4e5f60718293a4b5c6d7e8f9012345678abcdef0123456789abcd",
-  "sequence": 42,
-  "accepted_time": "2026-08-20T09:31:00Z",
-  "time_authority": "authority:host-clock",
+  "sequence": "42",
+  "accepted_time": {
+    "at": "2026-08-20T09:31:00Z",
+    "authority": {
+      "name": "authority:host-clock",
+      "provenance": "synchronised"
+    }
+  },
   "final_sha": "7f8e9d0c1b2a3948576675849302f1e0d9c8b7a6",
   "host_operation_id": "host-op:merge-9931",
   "detail": {
