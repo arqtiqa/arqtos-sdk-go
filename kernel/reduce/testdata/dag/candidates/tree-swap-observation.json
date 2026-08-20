@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kind": "evidence_event",
+  "event_kind": "observation",
+  "act_body_id": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "sequence": 3,
+  "accepted_time": "2026-08-20T00:03:00Z",
+  "time_authority": "authority:acceptor",
+  "detail": {
+    "observed_tree_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

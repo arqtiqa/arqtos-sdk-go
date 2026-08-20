@@ -1,0 +1,40 @@
+{
+  "schema_version": "1",
+  "repository": {
+    "authority": "github.com",
+    "path": "arqtiqa/arqtos-core"
+  },
+  "root_keys": [
+    {
+      "key_id": "root-1",
+      "algorithm": "ed25519",
+      "public_key": "cm9vdC1rZXktMS1tYXRlcmlhbA=="
+    }
+  ],
+  "charter_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "root_grant": {
+    "scope": {
+      "subjects": [
+        "**"
+      ],
+      "actions": [
+        "*"
+      ]
+    },
+    "unbounded": true,
+    "not_after": {
+      "at": "0001-01-01T00:00:00Z",
+      "authority": {
+        "name": "",
+        "provenance": "unspecified"
+      }
+    }
+  },
+  "accepted_at": {
+    "at": "2026-08-20T00:00:00Z",
+    "authority": {
+      "name": "authority:acceptor",
+      "provenance": "synchronised"
+    }
+  }
+}
