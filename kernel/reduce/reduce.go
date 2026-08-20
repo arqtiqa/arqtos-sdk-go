@@ -84,9 +84,21 @@ func refused(format string, args ...any) Outcome {
 // Outcome{Accepted:false, Reason:…} with a nil error. An error means the reducer
 // could not decide at all, which today is only an input that cannot be encoded.
 //
-// ⚠️ AND IT REFUSES BY DEFAULT. An act no rule admits is refused, never accepted
-// — so a rule that has not been written yet cannot let something through, and
-// each rule added replaces a general refusal with a specific one.
+// ⚠️ IT ACCEPTS WHAT NO RULE REFUSED. Every declared rule runs; if none decides,
+// the candidate is admitted. So the property a caller can rely on is not that
+// the reducer is cautious by default — it is that ADDING A RULE CAN ONLY EVER
+// REFUSE MORE. A new rule narrows what is admitted and can never widen it.
+//
+// ⚠️ This paragraph asserted the opposite — a cautious default under which an
+// act no rule admitted was rejected — for a week after the behaviour changed.
+// That was true while rules were missing, and it is the semantics that let the
+// reducer admit nothing but genesis. The package overview was corrected and this
+// comment was not, and `go doc reduce.Reduce` prints THIS one.
+//
+// docagreement_test.go now fails if either document carries the retired claim.
+// ⚠️ It matches a literal phrase, so this note deliberately does not QUOTE that
+// phrase — a check forbidding a string trips on the text explaining why it is
+// forbidden, which is a trap this repo has now walked into three times.
 //
 // # Purity
 //
