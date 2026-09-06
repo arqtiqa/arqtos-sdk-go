@@ -61,13 +61,12 @@ verify:
 # staticcheck catches what `go vet` does not, and this module is the contract
 # external developers compile against. Installed on demand rather than assumed
 # to be on PATH.
-STATICCHECK_VERSION ?= latest
-
+# The pin in go.mod, never a PATH binary and never @latest. Installing @latest
+# ran v0.8.1 where go.mod pins v0.7.0, so `make ci` and CI could disagree about
+# what staticcheck says — the toolchain-discipline failure arqtos-core retired
+# at its own #148.
 staticcheck:
-	@command -v staticcheck >/dev/null 2>&1 || \
-		$(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
-	@sc="$$(command -v staticcheck || echo "$$($(GO) env GOPATH)/bin/staticcheck")"; \
-	"$$sc" ./...
+	$(GO) tool staticcheck ./...
 
 # go.mod / go.sum must already be tidy: a dependency that nothing imports is
 # removed by the next tidy, which would silently drop it from the module.
