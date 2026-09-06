@@ -85,10 +85,13 @@ const (
 	DomainCharter Domain = "arqtos.charter.v1"
 	// DomainGenesis is the repository-genesis act — the ledger bootstrap.
 	DomainGenesis Domain = "arqtos.genesis.v1"
+	// DomainResolvedConfig is a resolved workspace configuration, whose digest
+	// is the result_digest a session pins (dcn-arq-00013).
+	DomainResolvedConfig Domain = "arqtos.resolved-config.v1"
 )
 
 var domains = []Domain{
-	DomainActBody, DomainWitness, DomainEvidenceEvent, DomainCharter, DomainGenesis,
+	DomainActBody, DomainWitness, DomainEvidenceEvent, DomainCharter, DomainGenesis, DomainResolvedConfig,
 }
 
 // Domains returns the closed set of domain tags, as a copy.
