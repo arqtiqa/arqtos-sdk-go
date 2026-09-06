@@ -17,10 +17,10 @@ func listedOnce(t *testing.T, d canonical.Domain) {
 	}
 }
 
-// A resolved workspace configuration is digested under its own domain, so its
-// result_digest can never be presented as an act, a witness or a charter
-// (arqtos-sdk-go#142).
-func TestDomainResolvedConfig_IsListedOnceAndSeparatesFromTheOthers(t *testing.T) {
+// A resolved workspace configuration is digested under its own domain
+// (arqtos-sdk-go#142); TestDigest_SeparatesDomains carries its separation from
+// every other member.
+func TestDomainResolvedConfig_IsListedOnce(t *testing.T) {
 	if canonical.DomainResolvedConfig != "arqtos.resolved-config.v1" {
 		t.Fatalf("DomainResolvedConfig = %q", canonical.DomainResolvedConfig)
 	}
@@ -28,23 +28,6 @@ func TestDomainResolvedConfig_IsListedOnceAndSeparatesFromTheOthers(t *testing.T
 		t.Fatal("DomainResolvedConfig is declared but not Valid(); Digest would refuse it")
 	}
 	listedOnce(t, canonical.DomainResolvedConfig)
-	body := map[string]any{"result": "1"}
-	mine, err := canonical.Digest(canonical.DomainResolvedConfig, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, d := range canonical.Domains() {
-		if d == canonical.DomainResolvedConfig {
-			continue
-		}
-		other, err := canonical.Digest(d, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if other == mine {
-			t.Errorf("a resolved configuration digests identically under %s", d)
-		}
-	}
 }
 
 // A governed configuration record or projection body is digested under its
