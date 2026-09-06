@@ -36,7 +36,8 @@
 // # ⚠️ Skeleton
 //
 // ⚠️ NOT UNIFORMLY, any more. kernel/canonical is IMPLEMENTED: the encoding is
-// decided, its domain tags are fixed and its vectors are committed, because
+// decided, its domain set is closed and grows only by a ratified record, its
+// vectors are committed, because
 // every other package here digests through it and could not be built against a
 // moving target. The rest are declared and documented; their semantics are not
 // implemented. The build sequence puts the encoding's committed test vectors

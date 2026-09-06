@@ -1,68 +1,46 @@
 package canonical_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/arqtiqa/arqtos-sdk-go/kernel/canonical"
 )
 
-// A resolved workspace configuration is digested under its own domain, so its
-// result_digest can never be presented as an act, a witness or a charter
-// (arqtos-sdk-go#142).
-func TestDomainResolvedConfig_IsTheSixthMemberAndSeparatesFromTheOthers(t *testing.T) {
+// listedOnce fails unless Domains() carries d exactly once; the set's size is
+// not asserted, since it grows by ratified record.
+func listedOnce(t *testing.T, d canonical.Domain) {
+	t.Helper()
+	ds := canonical.Domains()
+	if i := slices.Index(ds, d); i < 0 || slices.Contains(ds[i+1:], d) {
+		t.Fatalf("Domains() does not list %s exactly once: %v", d, ds)
+	}
+}
+
+// A resolved workspace configuration is digested under its own domain
+// (arqtos-sdk-go#142); TestDigest_SeparatesDomains carries its separation from
+// every other member.
+func TestDomainResolvedConfig_IsListedOnce(t *testing.T) {
 	if canonical.DomainResolvedConfig != "arqtos.resolved-config.v1" {
 		t.Fatalf("DomainResolvedConfig = %q", canonical.DomainResolvedConfig)
 	}
 	if !canonical.DomainResolvedConfig.Valid() {
 		t.Fatal("DomainResolvedConfig is declared but not Valid(); Digest would refuse it")
 	}
-	members := 0
-	for _, d := range canonical.Domains() {
-		if d == canonical.DomainResolvedConfig {
-			members++
-		}
-	}
-	if members != 1 || len(canonical.Domains()) != 7 {
-		t.Fatalf("Domains() lists the resolved-config domain %d time(s) among %d; want once among seven", members, len(canonical.Domains()))
-	}
-	body := map[string]any{"result": "1"}
-	mine, err := canonical.Digest(canonical.DomainResolvedConfig, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, d := range canonical.Domains() {
-		if d == canonical.DomainResolvedConfig {
-			continue
-		}
-		other, err := canonical.Digest(d, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if other == mine {
-			t.Errorf("a resolved configuration digests identically under %s", d)
-		}
-	}
+	listedOnce(t, canonical.DomainResolvedConfig)
 }
 
 // A governed configuration record or projection body is digested under its
 // own domain, so a body_digest can never be presented as a resolved artifact
 // or as any kernel record (arqtos-sdk-go#144, dcn-arq-00015).
-func TestDomainConfigBody_IsTheSeventhMemberAndSeparatesFromTheResolvedArtifact(t *testing.T) {
+func TestDomainConfigBody_IsListedOnceAndSeparatesFromTheResolvedArtifact(t *testing.T) {
 	if canonical.DomainConfigBody != "arqtos.config-body.v1" {
 		t.Fatalf("DomainConfigBody = %q", canonical.DomainConfigBody)
 	}
 	if !canonical.DomainConfigBody.Valid() {
 		t.Fatal("DomainConfigBody is declared but not Valid(); Digest would refuse it")
 	}
-	members := 0
-	for _, d := range canonical.Domains() {
-		if d == canonical.DomainConfigBody {
-			members++
-		}
-	}
-	if members != 1 || len(canonical.Domains()) != 7 {
-		t.Fatalf("Domains() lists the config-body domain %d time(s) among %d; want once among seven", members, len(canonical.Domains()))
-	}
+	listedOnce(t, canonical.DomainConfigBody)
 	body := map[string]any{"record_id": "ws_1", "slug": "platform"}
 	mine, err := canonical.Digest(canonical.DomainConfigBody, body)
 	if err != nil {
