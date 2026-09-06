@@ -88,10 +88,13 @@ const (
 	// DomainResolvedConfig is a resolved workspace configuration, whose digest
 	// is the result_digest a session pins (dcn-arq-00013).
 	DomainResolvedConfig Domain = "arqtos.resolved-config.v1"
+	// DomainConfigBody is the body of a governed configuration record or
+	// projection, whose digest is the body_digest in its stamp (dcn-arq-00015).
+	DomainConfigBody Domain = "arqtos.config-body.v1"
 )
 
 var domains = []Domain{
-	DomainActBody, DomainWitness, DomainEvidenceEvent, DomainCharter, DomainGenesis, DomainResolvedConfig,
+	DomainActBody, DomainWitness, DomainEvidenceEvent, DomainCharter, DomainGenesis, DomainResolvedConfig, DomainConfigBody,
 }
 
 // Domains returns the closed set of domain tags, as a copy.
