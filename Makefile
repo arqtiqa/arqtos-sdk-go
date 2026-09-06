@@ -59,12 +59,10 @@ verify:
 	$(GO) mod download && $(GO) mod verify
 
 # staticcheck catches what `go vet` does not, and this module is the contract
-# external developers compile against. Installed on demand rather than assumed
-# to be on PATH.
-# The pin in go.mod, never a PATH binary and never @latest. Installing @latest
-# ran v0.8.1 where go.mod pins v0.7.0, so `make ci` and CI could disagree about
-# what staticcheck says — the toolchain-discipline failure arqtos-core retired
-# at its own #148.
+# external developers compile against. The pin in go.mod, never a PATH binary
+# and never @latest: installing @latest ran v0.8.1 where go.mod pins v0.7.0, so
+# `make ci` and CI could disagree about what staticcheck says — the
+# toolchain-discipline failure retired at arqtos-core#148.
 staticcheck:
 	$(GO) tool staticcheck ./...
 
