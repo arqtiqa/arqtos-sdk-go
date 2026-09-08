@@ -1,4 +1,12 @@
 GO ?= go
+# gofmt is not a `go tool` and publishes no module to pin, so it is taken from
+# the toolchain the `go` directive and GOTOOLCHAIN select, never from PATH. Every
+# Go-running command here, in scripts/ and in .github/scripts/ is pinned by a file
+# the tool reads (go and go tool cover by the toolchain, staticcheck by go.mod's
+# tool directive, gofmt by GOROOT); the shell utilities those files resolve from
+# PATH carry no pin by design: bash, awk, cat, cp, diff, dirname, grep, mktemp,
+# rm, sed, sort. Make's own SHELL is /bin/sh, an absolute path.
+GOFMT := $(shell $(GO) env GOROOT)/bin/gofmt
 
 # The targets here are the same gates .github/workflows/ci.yml runs, so a green
 # `make ci` locally means the same thing as a green run on the branch.
@@ -31,7 +39,7 @@ lint: fmt-check vet
 # depended on it. If you have muscle memory from before, `make fmt` now
 # rewrites your tree instead of failing — use `make fmt-check` to verify.
 fmt:
-	$(GO)fmt -w .
+	$(GOFMT) -w .
 
 # ⚠️ The gofmt trap has TWO halves and both are load-bearing (ADR-ARQ-J-02):
 #   1. `gofmt -l` EXITS 0 while listing files, so the exit code alone gates
@@ -41,7 +49,7 @@ fmt:
 #      CLEAN — the same defect class as arqtos-cli#1092, where "rule failed"
 #      collapsed into "no match" and a broken scan reported clean.
 fmt-check:
-	@out=$$($(GO)fmt -l . 2>/tmp/gofmt.err); status=$$?; \
+	@out=$$($(GOFMT) -l . 2>/tmp/gofmt.err); status=$$?; \
 	if [ $$status -ne 0 ]; then \
 	  echo "gofmt could not parse the tree (exit $$status) — this is NOT a passing format check"; \
 	  cat /tmp/gofmt.err >&2; exit 1; \
