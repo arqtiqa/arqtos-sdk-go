@@ -79,11 +79,25 @@ jobs:
       - name: staticcheck
         run: go tool staticcheck ./...
 
+      # The vulnerability gate, the same pinned binary and the same script
+      # make ci runs; its rule and its remedy line are in the script's head.
+      # The selftest pins a throwaway copy to a known-vulnerable x/net and
+      # requires the gate to fail naming the advisory, and hands it a
+      # scanner that prints nothing and requires a refusal, so a gate that
+      # stops looking turns this step red.
+      - name: govulncheck
+        run: make vulncheck
+      - name: the vulnerability gate is not vacuous
+        run: make vulncheck-selftest
+
       # A dependency nothing imports is dropped by the next `go mod tidy`, so
       # this is what proves the MCP SDK dependency is genuinely used rather
       # than a require line awaiting deletion. Repo-invariant, not
-      # OS-dependent, so it runs once rather than per matrix leg — and it is
-      # the only step that reaches the module proxy a second time.
+      # OS-dependent, so it runs once rather than per matrix leg.
+      # Two steps reach the module proxy a second time: this one, for
+      # anything tidy would add, and the vulnerability selftest before it,
+      # whose throwaway pin fetches module versions absent from go.sum that
+      # the cache cannot hold.
       - name: go.mod is tidy
         if: matrix.os == 'ubuntu-latest'
         run: make tidy-check

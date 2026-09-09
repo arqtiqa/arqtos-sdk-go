@@ -2,15 +2,16 @@ GO ?= go
 # gofmt is not a `go tool` and publishes no module to pin, so it is taken from
 # the toolchain the `go` directive and GOTOOLCHAIN select, never from PATH. Every
 # Go-running command here, in scripts/ and in .github/scripts/ is pinned by a file
-# the tool reads (go and go tool cover by the toolchain, staticcheck by go.mod's
-# tool directive, gofmt by GOROOT); the shell utilities those files resolve from
-# PATH carry no pin by design: bash, awk, cat, cp, diff, dirname, grep, mktemp,
-# rm, sed, sort. Make's own SHELL is /bin/sh, an absolute path.
+# the tool reads (go and go tool cover by the toolchain, staticcheck and govulncheck
+# by go.mod's tool directives, gofmt by GOROOT); the shell utilities those files
+# resolve from PATH carry no pin by design, measured over the three locations:
+# awk, bash, cat, chmod, cp, diff, dirname, git, grep, mkdir, mktemp, paste, rm,
+# sed, sort, tail, tar, tr, wc. Make's own SHELL is /bin/sh, an absolute path.
 GOFMT := $(shell $(GO) env GOROOT)/bin/gofmt
 
 # The targets here are the same gates .github/workflows/ci.yml runs, so a green
 # `make ci` locally means the same thing as a green run on the branch.
-.PHONY: all build test test-cover cover-gate lint fmt vet staticcheck verify tidy-check ip-isolation ci
+.PHONY: all build test test-cover cover-gate lint fmt vet staticcheck vulncheck vulncheck-selftest verify tidy-check ip-isolation ci
 
 all: build lint test
 
@@ -74,6 +75,17 @@ verify:
 staticcheck:
 	$(GO) tool staticcheck ./...
 
+# The vulnerability gate (#153): govulncheck pinned by go.mod's tool directive,
+# the same binary the workflow runs; the rule it applies is in the script's head.
+vulncheck:
+	@GO=$(GO) bash .github/scripts/vulncheck.sh
+
+# The gate's falsifiers: a throwaway copy pinned to a known-vulnerable x/net must
+# fail the gate naming the advisory, and a scanner that prints nothing must fail
+# it, or the gate is not looking.
+vulncheck-selftest:
+	@GO=$(GO) bash .github/scripts/vulncheck-selftest.sh
+
 # go.mod / go.sum must already be tidy: a dependency that nothing imports is
 # removed by the next tidy, which would silently drop it from the module.
 #
@@ -96,4 +108,4 @@ test-cover:
 cover-gate: test-cover
 	@bash .github/scripts/coverage-gate.sh $(COVERPROFILE)
 
-ci: verify build ip-isolation lint staticcheck tidy-check cover-gate
+ci: verify build ip-isolation lint staticcheck vulncheck vulncheck-selftest tidy-check cover-gate
