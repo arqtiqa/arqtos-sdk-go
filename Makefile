@@ -1,13 +1,25 @@
 GO ?= go
+# The toolchain is go.mod's toolchain line, exported so every recipe and every
+# script below runs under exactly it. The directive alone is a floor: a newer
+# local toolchain is selected over it, so the pin is a pin only through
+# GOTOOLCHAIN, and a go.mod without the line is refused here (#156).
+GOTOOLCHAIN := $(shell awk '/^toolchain /{print $$2; exit}' go.mod)
+ifeq ($(GOTOOLCHAIN),)
+$(error go.mod carries no toolchain line; the module's toolchain is pinned there)
+endif
+export GOTOOLCHAIN
 # gofmt is not a `go tool` and publishes no module to pin, so it is taken from
-# the toolchain the `go` directive and GOTOOLCHAIN select, never from PATH. Every
-# Go-running command here, in scripts/ and in .github/scripts/ is pinned by a file
-# the tool reads (go and go tool cover by the toolchain, staticcheck and govulncheck
-# by go.mod's tool directives, gofmt by GOROOT); the shell utilities those files
+# the toolchain go.mod's toolchain line pins through GOTOOLCHAIN, never from PATH.
+# Every Go-running command here, in scripts/ and in .github/scripts/ is pinned by a
+# file the tool reads (go and go tool cover by the toolchain line, staticcheck and
+# govulncheck by go.mod's tool directives, gofmt by GOROOT); the shell utilities those files
 # resolve from PATH carry no pin by design, measured over the three locations:
-# awk, bash, cat, chmod, cp, diff, dirname, git, grep, mkdir, mktemp, paste, rm,
-# sed, sort, tail, tar, tr, wc. Make's own SHELL is /bin/sh, an absolute path.
-GOFMT := $(shell $(GO) env GOROOT)/bin/gofmt
+# awk, bash, cat, chmod, cp, diff, dirname, env, git, grep, head, make, mkdir,
+# mktemp, paste, rm, sed, sort, tail, tar, tr, wc. Make's own SHELL is /bin/sh,
+# an absolute path.
+# export reaches recipes, not $(shell), so the pin is passed here by hand or
+# gofmt would come from whatever toolchain the shell finds.
+GOFMT := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) $(GO) env GOROOT)/bin/gofmt
 
 # The targets here are the same gates .github/workflows/ci.yml runs, so a green
 # `make ci` locally means the same thing as a green run on the branch.
@@ -75,14 +87,16 @@ verify:
 staticcheck:
 	$(GO) tool staticcheck ./...
 
-# The vulnerability gate (#153): govulncheck pinned by go.mod's tool directive,
-# the same binary the workflow runs; the rule it applies is in the script's head.
+# The vulnerability gate (#153, #156): govulncheck pinned by go.mod's tool
+# directive, the same binary the workflow runs, judging against the toolchain
+# line's pin; the rules it applies are in the script's head.
 vulncheck:
 	@GO=$(GO) bash .github/scripts/vulncheck.sh
 
 # The gate's falsifiers: a throwaway copy pinned to a known-vulnerable x/net must
-# fail the gate naming the advisory, and a scanner that prints nothing must fail
-# it, or the gate is not looking.
+# fail the gate naming the advisory; a scanner that prints nothing, a scan the pin
+# did not govern, a pin past the ceiling and a go.mod without the line must each
+# fail; a toolchain pseudo-module is classed with the standard library.
 vulncheck-selftest:
 	@GO=$(GO) bash .github/scripts/vulncheck-selftest.sh
 

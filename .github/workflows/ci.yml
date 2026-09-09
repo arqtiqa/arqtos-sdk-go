@@ -30,6 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # setup-go reads go.mod's toolchain line, and make exports the same line
+      # as GOTOOLCHAIN, so every step runs under the pinned toolchain exactly,
+      # whatever the runner image ships (#156).
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
