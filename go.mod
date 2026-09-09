@@ -2,6 +2,8 @@ module github.com/arqtiqa/arqtos-sdk-go
 
 go 1.26
 
+toolchain go1.26.8
+
 require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/modelcontextprotocol/go-sdk v1.6.0
