@@ -47,7 +47,7 @@ func tidy(dir string) ([]byte, error) {
 func run(args []string, stdout, stderr io.Writer, tidyFn tidyFunc) int {
 	fs := flag.NewFlagSet("create-arqtos-connector", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	name := fs.String("name", "", "connector name, e.g. okta-roster (required; becomes connector.yml's name)")
+	name := fs.String("name", "", "connector name, e.g. okta-roster (required; becomes connector.yaml's name)")
 	module := fs.String("module", "", "Go module path for the generated project, e.g. github.com/you/okta-roster-connector (required)")
 	out := fs.String("out", "", "output directory (default: ./<name>-connector)")
 	if err := fs.Parse(args); err != nil {

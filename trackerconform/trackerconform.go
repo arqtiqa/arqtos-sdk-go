@@ -305,7 +305,7 @@ const (
 // another board. Each of those would let a check pass while observing
 // something other than the property it names.
 type Options struct {
-	// Manifest is the connector.yml this connector ships — what its author
+	// Manifest is the connector.yaml this connector ships — what its author
 	// wrote and what a host reads. The run compares it against the running
 	// connector rather than trusting either alone.
 	Manifest manifest.Doc

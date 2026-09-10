@@ -337,7 +337,7 @@ func TestItemRef_String(t *testing.T) {
 // this deliberately does not restate it: a duplicated assertion is one that
 // cannot be observed to fail on its own.
 //
-// The contents matter because manifest.Doc.Validate closes a connector.yml
+// The contents matter because manifest.Doc.Validate closes a connector.yaml
 // against exactly this set, so a capability missing here cannot be declared at
 // all — and one present here is declarable by every third party. Adding or
 // removing one is a contract change, and this is what makes it one.
@@ -365,7 +365,7 @@ func TestKnownCapabilities_IsTheClosedSet(t *testing.T) {
 }
 
 // TestCapabilityWireNamesArePinned: these strings are what an external author
-// writes in a connector.yml and what a host matches on. Renaming one silently
+// writes in a connector.yaml and what a host matches on. Renaming one silently
 // unregisters every connector that declared it, and this repo is public for
 // third parties to encode against exactly these spellings.
 func TestCapabilityWireNamesArePinned(t *testing.T) {

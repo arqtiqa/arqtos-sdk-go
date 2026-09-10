@@ -249,7 +249,7 @@ const (
 // a check that cannot be driven is not skipped, because a report that is
 // green because nothing looked is the failure this harness exists to avoid.
 type Options struct {
-	// Manifest is the connector.yml this connector ships.
+	// Manifest is the connector.yaml this connector ships.
 	Manifest manifest.Doc
 
 	// Repo is a repository (fullName, "<owner>/<name>") this connector MUST

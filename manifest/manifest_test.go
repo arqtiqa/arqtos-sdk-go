@@ -268,7 +268,7 @@ func TestValidateAcceptsEveryPublishedCapability(t *testing.T) {
 }
 
 // TestParsedManifestWithABadCapabilityFailsValidate walks the path an actual
-// connector author takes — a connector.yml on disk — rather than a hand-built
+// connector author takes — a connector.yaml on disk — rather than a hand-built
 // Doc. Parse is strict about unknown FIELDS and says nothing about unknown
 // VALUES, so the capability list is exactly where a bad string gets in.
 func TestParsedManifestWithABadCapabilityFailsValidate(t *testing.T) {
@@ -327,7 +327,7 @@ func TestEveryKnownClassHasARegisteredCapabilityVocabulary(t *testing.T) {
 		}
 		if err := d.Validate(); err == nil {
 			t.Fatalf("class %q accepts an arbitrary capability: its vocabulary is not registered in classCapabilities, "+
-				"so a misspelling in a connector.yml reaches the host as an undeclared capability", c)
+				"so a misspelling in a connector.yaml reaches the host as an undeclared capability", c)
 		}
 	}
 }
@@ -375,7 +375,7 @@ func TestRosterManifestValidatesItsOwnVocabularyAndRefusesAnotherClasses(t *test
 }
 
 // TestRosterManifestFromAFile walks the path an external connector author
-// actually takes: a connector.yml on disk, parsed strictly, then validated.
+// actually takes: a connector.yaml on disk, parsed strictly, then validated.
 func TestRosterManifestFromAFile(t *testing.T) {
 	d, err := manifest.Parse([]byte(`
 name: placeholder-roster

@@ -25,7 +25,7 @@
 //	}
 //
 // ⚠️ Options.Manifest takes the manifest the connector SHIPS, parsed from its
-// connector.yml — not a [manifest.Doc] built in the test. Those two can
+// connector.yaml — not a [manifest.Doc] built in the test. Those two can
 // disagree, and when they do this run is green while the file a host actually
 // reads is wrong. This package deliberately does no file I/O, so honouring that
 // is the caller's job.
@@ -108,7 +108,7 @@ const (
 // check that cannot be driven is not skipped, because a report that is green
 // because nothing looked is the failure this harness exists to avoid.
 type Options struct {
-	// Manifest is the connector.yml this connector ships — what its author
+	// Manifest is the connector.yaml this connector ships — what its author
 	// wrote and what a host reads. The run compares it against the running
 	// connector rather than trusting either alone.
 	Manifest manifest.Doc

@@ -26,7 +26,7 @@
 //     failed or partial read fall through to Resolved/EmptyRoster.
 //  2. Capabilities() must be HONEST, and honesty can only be checked from two
 //     INDEPENDENT signals. Capabilities() below is a hardcoded literal, not a
-//     read of connector.yml or of anything Capabilities() itself returns —
+//     read of connector.yaml or of anything Capabilities() itself returns —
 //     see its doc comment for why deriving one from the other makes
 //     rosterconform's capability-honesty check agree with itself no matter
 //     what this binary actually does.
@@ -37,7 +37,7 @@
 // arqtos-sdk-go's plugin/roster.go) — a dispensed out-of-process stub never
 // satisfies roster.Watcher, whatever a provider declares. So this binary
 // cannot declare watch: Capabilities() below does not return it, and
-// connector.yml does not list it. Do not add it to either. A host without
+// connector.yaml does not list it. Do not add it to either. A host without
 // CapWatch already polls on its own reconcile interval — that is the
 // capability's own documented fallback, not a degraded connector.
 //
@@ -95,9 +95,9 @@ const (
 	fixtureSuspended = "{{.SuspendedPrincipal}}"
 	fixtureMachine   = "{{.MachinePrincipal}}"
 
-	// minHostVersion is what THIS connector's connector.yml declares as
+	// minHostVersion is what THIS connector's connector.yaml declares as
 	// min_host_version. Keep the two in sync by hand — see the comment on
-	// that field in connector.yml.
+	// that field in connector.yaml.
 	minHostVersion = "{{.MinHostVersion}}"
 )
 
@@ -143,7 +143,7 @@ func (p *{{.StructName}}) ListPrincipals(_ context.Context) (roster.Resolution[r
 		{
 			// A machine identity: no mailbox, and that is not an error.
 			// Reporting one requires roster.CapMachinePrincipals, declared
-			// in Capabilities below AND in connector.yml. Delete this
+			// in Capabilities below AND in connector.yaml. Delete this
 			// principal (and the capability, in both places) if
 			// {{.ConnectorName}} has no separate machine-identity concept.
 			ID: fixtureMachine, Handle: "placeholder-service-identity",
@@ -220,18 +220,18 @@ func (p *{{.StructName}}) ListMemberships(_ context.Context, groupID string) (ro
 func (p *{{.StructName}}) Implements() connector.Class { return connector.ClassRoster }
 
 // Capabilities declares what THIS BINARY actually implements — hardcoded,
-// never derived from connector.yml, from a shared variable, or from anything
+// never derived from connector.yaml, from a shared variable, or from anything
 // Capabilities() itself returns.
 //
-// This is mistake #2. If Capabilities() read connector.yml and echoed it
-// back, the two would always agree by construction: a stale connector.yml
+// This is mistake #2. If Capabilities() read connector.yaml and echoed it
+// back, the two would always agree by construction: a stale connector.yaml
 // claiming a capability nobody wrote code for would pass
 // rosterconform's capability-honesty check every single time, because
 // "declared" and "implemented" would be reading the same signal twice. This
 // SDK has shipped that exact bug once already, in an earlier connector
 // class's out-of-process harness. Add or remove a capability HERE only when
 // you add or remove the code that does it, and make the SAME edit by hand in
-// connector.yml — the check exists precisely to catch the moment those two
+// connector.yaml — the check exists precisely to catch the moment those two
 // drift apart.
 //
 // roster.CapWatch is deliberately absent: see the package comment above for

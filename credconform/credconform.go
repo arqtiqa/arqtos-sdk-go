@@ -121,7 +121,7 @@ const (
 // a check that cannot be driven is not skipped, because a report that is
 // green because nothing looked is the failure this package exists to avoid.
 type Options struct {
-	// Manifest is the connector.yml this connector ships. It is what an
+	// Manifest is the connector.yaml this connector ships. It is what an
 	// external author encodes and what a host reads, so the run compares it
 	// against the running connector rather than trusting either alone.
 	Manifest manifest.Doc

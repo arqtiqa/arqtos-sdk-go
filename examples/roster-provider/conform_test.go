@@ -10,7 +10,7 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/rosterconform"
 )
 
-// referenceManifest is the connector.yml this provider ships — the file a host
+// referenceManifest is the connector.yaml this provider ships — the file a host
 // reads BEFORE it launches anything. It lives here so the manifest, the served
 // directory and both conformance runs in this directory are one source.
 func referenceManifest() manifest.Doc {

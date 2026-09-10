@@ -87,7 +87,7 @@ func AuthenticatorPluginMap(impl authenticator.Authenticator) map[string]goplugi
 //
 // It takes the negotiation inputs rather than leaving them optional, because
 // this is the only host-side entry point: name is what a contract fault will be
-// attributed to, provider is the connector.yml the host READ before launching
+// attributed to, provider is the connector.yaml the host READ before launching
 // anything, and hostVersion is the contract version this host implements.
 func AuthenticatorHostPluginMap(name string, provider manifest.Doc, hostVersion string) map[string]goplugin.Plugin {
 	return map[string]goplugin.Plugin{
@@ -107,7 +107,7 @@ type AuthenticatorPlugin struct {
 	// Name is the host's name for the provider being dialled.
 	Name string
 
-	// ProviderManifest is the provider's connector.yml as the host read it, and
+	// ProviderManifest is the provider's connector.yaml as the host read it, and
 	// HostVersion is the contract version this host implements. Together they
 	// are the min_host_version negotiation.
 	ProviderManifest manifest.Doc
