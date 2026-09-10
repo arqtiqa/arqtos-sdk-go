@@ -136,7 +136,7 @@ const (
 // skips, and a check that skipped is reported by nothing — which is the same
 // defect this harness exists to catch, one level up.
 type Options struct {
-	// Manifest is the connector.yml as the host read it.
+	// Manifest is the connector.yaml as the host read it.
 	Manifest manifest.Doc
 	// ValidCode is an authorization code that completes successfully and
 	// resolves to ExpectedPrincipalID.

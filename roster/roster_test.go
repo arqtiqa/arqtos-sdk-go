@@ -100,7 +100,7 @@ func TestKnownCapabilitiesIsTheClosedVocabularyAndIsCopied(t *testing.T) {
 }
 
 // TestCapabilityWireNamesArePinned: these strings are what an external author
-// writes in a connector.yml and what a host matches on. Renaming one silently
+// writes in a connector.yaml and what a host matches on. Renaming one silently
 // unregisters every connector that declared it, and the repo went public for
 // third parties to encode against exactly these spellings.
 func TestCapabilityWireNamesArePinned(t *testing.T) {

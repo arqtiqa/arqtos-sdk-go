@@ -88,7 +88,7 @@ func RosterPluginMap(impl roster.Roster) map[string]goplugin.Plugin {
 //
 // It takes the negotiation inputs rather than leaving them optional, because
 // this is the only host-side entry point: name is what a contract fault will
-// be attributed to, provider is the connector.yml the host READ before
+// be attributed to, provider is the connector.yaml the host READ before
 // launching anything, and hostVersion is the contract version this host
 // implements. Dispensing refuses a provider whose min_host_version this host
 // does not satisfy — see [RosterPlugin.GRPCClient].
@@ -113,7 +113,7 @@ type RosterPlugin struct {
 	// call.
 	Name string
 
-	// ProviderManifest is the provider's connector.yml as the host read it,
+	// ProviderManifest is the provider's connector.yaml as the host read it,
 	// and HostVersion is the contract version this host implements. Together
 	// they are the min_host_version negotiation, and GRPCClient refuses to
 	// dispense without both — see its doc for why that is fail-closed rather

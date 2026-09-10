@@ -63,7 +63,7 @@ func TestGenerateWritesExpectedFiles(t *testing.T) {
 	if err := Generate(target, validOptions()); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	want := []string{"go.mod", "main.go", "connector.yml", "conform_test.go"}
+	want := []string{"go.mod", "main.go", "connector.yaml", "conform_test.go"}
 	for _, f := range want {
 		p := filepath.Join(target, f)
 		info, err := os.Stat(p)
@@ -209,7 +209,7 @@ func TestGeneratedProjectNamesNoPrivateSetup(t *testing.T) {
 	}
 }
 
-// TestGeneratedManifestValidatesAndExcludesWatch proves connector.yml is a
+// TestGeneratedManifestValidatesAndExcludesWatch proves connector.yaml is a
 // real, parseable manifest.Doc that validates against the Roster class, and
 // that it never declares CapWatch — CapWatch has no RPC on the Track-B wire,
 // so an out-of-process provider that declared it would fail
@@ -220,31 +220,31 @@ func TestGeneratedManifestValidatesAndExcludesWatch(t *testing.T) {
 	if err := Generate(dir, opts); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "connector.yml"))
+	b, err := os.ReadFile(filepath.Join(dir, "connector.yaml"))
 	if err != nil {
-		t.Fatalf("reading connector.yml: %v", err)
+		t.Fatalf("reading connector.yaml: %v", err)
 	}
 	doc, err := manifest.Parse(b)
 	if err != nil {
-		t.Fatalf("connector.yml does not parse: %v", err)
+		t.Fatalf("connector.yaml does not parse: %v", err)
 	}
 	if err := doc.Validate(); err != nil {
-		t.Fatalf("connector.yml does not validate: %v", err)
+		t.Fatalf("connector.yaml does not validate: %v", err)
 	}
 	if doc.Name != opts.Name {
-		t.Fatalf("connector.yml name = %q, want %q", doc.Name, opts.Name)
+		t.Fatalf("connector.yaml name = %q, want %q", doc.Name, opts.Name)
 	}
 	if doc.Implements != connector.ClassRoster {
-		t.Fatalf("connector.yml implements = %q, want %q", doc.Implements, connector.ClassRoster)
+		t.Fatalf("connector.yaml implements = %q, want %q", doc.Implements, connector.ClassRoster)
 	}
 	if doc.Kind != manifest.KindProvider {
-		t.Fatalf("connector.yml kind = %q, want %q", doc.Kind, manifest.KindProvider)
+		t.Fatalf("connector.yaml kind = %q, want %q", doc.Kind, manifest.KindProvider)
 	}
 	if doc.MinHostVersion == "" {
-		t.Fatal("connector.yml must declare min_host_version for kind: provider")
+		t.Fatal("connector.yaml must declare min_host_version for kind: provider")
 	}
 	if doc.Declares(roster.CapWatch) {
-		t.Fatal("the generated connector.yml declares watch, which has no RPC on the Track-B wire and can never be honoured out-of-process")
+		t.Fatal("the generated connector.yaml declares watch, which has no RPC on the Track-B wire and can never be honoured out-of-process")
 	}
 }
 
@@ -283,7 +283,7 @@ func TestGenerateIsDeterministic(t *testing.T) {
 	if err := Generate(filepath.Join(dir2, "c"), opts); err != nil {
 		t.Fatalf("Generate #2: %v", err)
 	}
-	for _, f := range []string{"go.mod", "main.go", "connector.yml", "conform_test.go"} {
+	for _, f := range []string{"go.mod", "main.go", "connector.yaml", "conform_test.go"} {
 		a, err := os.ReadFile(filepath.Join(dir1, "c", f))
 		if err != nil {
 			t.Fatalf("reading run #1 %s: %v", f, err)

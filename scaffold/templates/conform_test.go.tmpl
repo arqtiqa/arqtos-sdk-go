@@ -9,21 +9,21 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/rosterconform"
 )
 
-// connectorYAML embeds the connector.yml this binary actually ships, so this
+// connectorYAML embeds the connector.yaml this binary actually ships, so this
 // test and the running binary can never read two different manifests.
 //
-//go:embed connector.yml
+//go:embed connector.yaml
 var connectorYAML []byte
 
-// thisManifest parses and validates connector.yml.
+// thisManifest parses and validates connector.yaml.
 func thisManifest(t *testing.T) manifest.Doc {
 	t.Helper()
 	doc, err := manifest.Parse(connectorYAML)
 	if err != nil {
-		t.Fatalf("connector.yml does not parse: %v", err)
+		t.Fatalf("connector.yaml does not parse: %v", err)
 	}
 	if err := doc.Validate(); err != nil {
-		t.Fatalf("connector.yml does not validate: %v", err)
+		t.Fatalf("connector.yaml does not validate: %v", err)
 	}
 	return doc
 }
@@ -54,7 +54,7 @@ func TestConformantInProcess(t *testing.T) {
 }
 
 // TestManifestValidates covers what a host checks before it loads anything:
-// connector.yml parses, implements Roster, declares only capabilities in the
+// connector.yaml parses, implements Roster, declares only capabilities in the
 // Roster vocabulary, and states min_host_version (required for kind: provider).
 func TestManifestValidates(t *testing.T) {
 	_ = thisManifest(t)

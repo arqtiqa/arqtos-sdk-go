@@ -1,4 +1,4 @@
-// Package manifest is the connector manifest schema (a connector.yml a connector
+// Package manifest is the connector manifest schema (a connector.yaml a connector
 // author ships alongside their code) declaring the connector's name, the
 // connector-class it Implements, its runtime Kind (declarative | provider |
 // native), capabilities/supports, its refs-only Auth wiring, and — for

@@ -15,7 +15,7 @@ import (
 )
 
 // hostContractVersion is the contract version the "host" in these tests
-// implements — newer than the generated connector.yml's min_host_version, so
+// implements — newer than the generated connector.yaml's min_host_version, so
 // the negotiation passes.
 const hostContractVersion = "0.4.0"
 
@@ -59,13 +59,13 @@ func buildConnector(t *testing.T, dir string) string {
 
 func loadManifest(t *testing.T, dir string) manifest.Doc {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(dir, "connector.yml"))
+	b, err := os.ReadFile(filepath.Join(dir, "connector.yaml"))
 	if err != nil {
-		t.Fatalf("reading connector.yml: %v", err)
+		t.Fatalf("reading connector.yaml: %v", err)
 	}
 	doc, err := manifest.Parse(b)
 	if err != nil {
-		t.Fatalf("connector.yml does not parse: %v", err)
+		t.Fatalf("connector.yaml does not parse: %v", err)
 	}
 	return doc
 }
@@ -127,7 +127,7 @@ func TestScaffoldedConnectorInProcessTestPasses(t *testing.T) {
 }
 
 // TestDishonestManifestFailsOutOfProcessConformance is the "tests must bite"
-// proof for mistake #2 (Capabilities() honesty): a connector.yml hand-edited
+// proof for mistake #2 (Capabilities() honesty): a connector.yaml hand-edited
 // to drop a capability the running binary still reports MUST fail
 // rosterconform, not pass it. If this test ever went green, the
 // capability-honesty check the generated skeleton exists to demonstrate
@@ -140,7 +140,7 @@ func TestDishonestManifestFailsOutOfProcessConformance(t *testing.T) {
 	// The generated main.go's Capabilities() reports BOTH
 	// transitive_membership and machine_principals (see its template). Drop
 	// the second from the manifest ONLY — exactly the mistake of editing
-	// connector.yml without touching the code that backs it.
+	// connector.yaml without touching the code that backs it.
 	if len(doc.Capabilities) != 2 {
 		t.Fatalf("expected the generated manifest to declare exactly 2 capabilities, got %v", doc.Capabilities)
 	}
@@ -177,7 +177,7 @@ func TestDishonestManifestFailsOutOfProcessConformance(t *testing.T) {
 }
 
 // TestWatchDeclaredWithoutImplementationFailsConformance is the "tests must
-// bite" proof for the CapWatch trap: hand-adding "watch" to connector.yml —
+// bite" proof for the CapWatch trap: hand-adding "watch" to connector.yaml —
 // exactly the mistake the package comment in main.go warns against — must
 // fail rosterconform, because an out-of-process provider has no RPC to
 // honour it with however its manifest reads.

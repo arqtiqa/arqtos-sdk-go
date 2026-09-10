@@ -16,7 +16,7 @@
 //
 // [Generate] writes a complete, buildable project: a go.mod pinned to a real
 // published arqtos-sdk-go tag, a main.go that implements roster.Roster
-// against a fixed placeholder directory, a connector.yml manifest, and an
+// against a fixed placeholder directory, a connector.yaml manifest, and an
 // in-process conformance test. Build it and it passes rosterconform
 // immediately. A skeleton that failed its own conformance harness on
 // generation would teach exactly the wrong lesson to the one audience this
@@ -79,7 +79,7 @@ const (
 	// FixtureMachinePrincipalID is a non-human identity.
 	FixtureMachinePrincipalID = "example-directory-principal-machine"
 	// FixtureMinHostVersion is the min_host_version the generated
-	// connector.yml (and main.go's matching constant) declare.
+	// connector.yaml (and main.go's matching constant) declare.
 	FixtureMinHostVersion = "0.1.0"
 )
 
@@ -87,7 +87,7 @@ const (
 var templateFS embed.FS
 
 // nameRE restricts Options.Name to a plain identifier-shaped string: it
-// becomes a YAML scalar (connector.yml's name:) and is embedded verbatim
+// becomes a YAML scalar (connector.yaml's name:) and is embedded verbatim
 // into generated Go doc comments, so restricting the input domain removes
 // any need for a YAML or comment escaper rather than adding one.
 var nameRE = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
@@ -99,7 +99,7 @@ var moduleRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_./-]*$`)
 
 // Options are the inputs to [Generate].
 type Options struct {
-	// Name is the connector's name: it becomes connector.yml's `name:`
+	// Name is the connector's name: it becomes connector.yaml's `name:`
 	// field and appears in generated doc comments. Lower-kebab-case is
 	// conventional (e.g. "okta-roster"), and required: letters, digits,
 	// hyphen and underscore only, starting with a letter.
@@ -188,7 +188,7 @@ var generatedFiles = []struct {
 }{
 	{"go.mod.tmpl", "go.mod"},
 	{"main.go.tmpl", "main.go"},
-	{"connector.yml.tmpl", "connector.yml"},
+	{"connector.yaml.tmpl", "connector.yaml"},
 	{"conform_test.go.tmpl", "conform_test.go"},
 }
 
