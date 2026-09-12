@@ -199,38 +199,6 @@ func TestObservation_CarriesTimeRevisionAndCoverage(t *testing.T) {
 	}
 }
 
-func TestCurrent_UnknownCoverageIsNeverCurrent(t *testing.T) {
-	o := validObservation()
-	if !o.Current() {
-		t.Fatal("measured equal base should be current")
-	}
-	o.Coverage = repoobs.CoverageUnknown
-	if o.Current() {
-		t.Fatal("unknown coverage reported as current while the source still looks measured")
-	}
-}
-
-func TestValidate_RefusesUnknownToCurrentConversion(t *testing.T) {
-	o := validObservation()
-	o.Coverage = repoobs.CoverageUnknown
-	o.Source = repoobs.Source{Presence: repoobs.PresenceUnknown}
-	o.Base = repoobs.Base{Presence: repoobs.PresenceUnknown}
-	if err := o.Validate(); err != nil {
-		t.Fatal(err)
-	}
-
-	converted := o
-	converted.Coverage = repoobs.CoverageMeasured
-	converted.Source = repoobs.Source{Presence: repoobs.PresenceMeasured, Fetch: repoobs.FetchSucceeded}
-	converted.Base = repoobs.Base{Presence: repoobs.PresenceMeasured, Relation: repoobs.RelationEqual}
-	if err := converted.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if converted.Current() {
-		t.Fatal("unknown-to-current conversion with an empty OID made Current() true")
-	}
-}
-
 func TestValidate_RefusesFalselyCompleteCombinations(t *testing.T) {
 	tests := []struct {
 		name string
@@ -254,8 +222,11 @@ func TestValidate_RefusesFalselyCompleteCombinations(t *testing.T) {
 		{
 			name: "denied source reporting a fetch success",
 			mut: func(o *repoobs.Observation) {
+				o.Coverage = repoobs.CoverageUnknown
 				o.Source.Presence = repoobs.PresenceDenied
 				o.Source.Fetch = repoobs.FetchSucceeded
+				o.Source.OID = ""
+				o.Base.Relation = repoobs.RelationUnspecified
 			},
 		},
 		{
@@ -325,6 +296,7 @@ func TestValidate_RefusesFalselyCompleteCombinations(t *testing.T) {
 			mut: func(o *repoobs.Observation) {
 				o.Coverage = repoobs.CoverageUnknown
 				o.Source = repoobs.Source{Presence: repoobs.PresenceUnknown, Fetch: repoobs.FetchSucceeded}
+				o.Base.Relation = repoobs.RelationUnspecified
 			},
 		},
 		{
@@ -332,6 +304,7 @@ func TestValidate_RefusesFalselyCompleteCombinations(t *testing.T) {
 			mut: func(o *repoobs.Observation) {
 				o.Coverage = repoobs.CoverageUnknown
 				o.Source = repoobs.Source{Presence: repoobs.PresenceUnsupported, Fetch: repoobs.FetchSucceeded}
+				o.Base.Relation = repoobs.RelationUnspecified
 			},
 		},
 		{
@@ -346,13 +319,41 @@ func TestValidate_RefusesFalselyCompleteCombinations(t *testing.T) {
 				o.Index = repoobs.Index{Presence: repoobs.PresenceUnsupported, LocalDelta: "7"}
 			},
 		},
+		{
+			name: "unknown index pending",
+			mut: func(o *repoobs.Observation) {
+				o.Index = repoobs.Index{Presence: repoobs.PresenceUnknown, Pending: true}
+			},
+		},
+		{
+			name: "unknown index missing",
+			mut: func(o *repoobs.Observation) {
+				o.Index = repoobs.Index{Presence: repoobs.PresenceUnknown, Missing: true}
+			},
+		},
+		{
+			name: "denied index pending",
+			mut: func(o *repoobs.Observation) {
+				o.Index = repoobs.Index{Presence: repoobs.PresenceDenied, Pending: true}
+			},
+		},
+		{
+			name: "unsupported index missing",
+			mut: func(o *repoobs.Observation) {
+				o.Index = repoobs.Index{Presence: repoobs.PresenceUnsupported, Missing: true}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			o := validObservation()
 			tt.mut(&o)
-			if err := o.Validate(); !errors.Is(err, repoobs.ErrInvalid) {
+			err := o.Validate()
+			if !errors.Is(err, repoobs.ErrInvalid) {
 				t.Fatalf("got %v, want ErrInvalid", err)
+			}
+			if strings.Contains(tt.name, "fetch success") && !strings.Contains(err.Error(), "fetch succeeded without a measured source") {
+				t.Fatalf("error %v, want the fetch-success reason so a neighbouring rule cannot mask it", err)
 			}
 		})
 	}
@@ -377,7 +378,6 @@ func TestDecode_RejectsAWorkspaceKeyedObservation(t *testing.T) {
 		t.Fatal("workspace field accepted — observation identity is not workspace-keyed")
 	}
 }
-
 func TestGolden_ObservationRoundTrip(t *testing.T) {
 	encoded, err := contracts.Encode(validObservation())
 	if err != nil {

@@ -150,7 +150,7 @@ func (o Observation) Validate() error {
 	if o.Local.Presence != PresenceMeasured && (o.Local.Staged || o.Local.Unstaged || o.Local.Untracked || o.Local.Unpublished) {
 		problems = append(problems, "local work flags set without a measured presence")
 	}
-	if o.Index.Presence != PresenceMeasured && (o.Index.BaseProfile != "" || o.Index.LocalDelta != "") {
+	if o.Index.Presence != PresenceMeasured && (o.Index.BaseProfile != "" || o.Index.LocalDelta != "" || o.Index.Pending || o.Index.Missing) {
 		problems = append(problems, "index generation without a measured presence")
 	}
 
