@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,20 +29,20 @@ func measuredSource() repoobs.Source {
 
 func validObservation() repoobs.Observation {
 	return repoobs.Observation{
-		SchemaVersion:         repoobs.SchemaVersion,
-		ResourceID:            "resource:repo/governed",
-		SourceIdentity:        "src:host/acme-platform-main",
-		TrustDomain:           "td_isolate_acme",
-		SourceRef:             "refs/heads/main",
-		SourceRevision:        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ObservedAt:            observedAt(),
-		ObservationRevision:   "obs:1",
-		Coverage:              repoobs.CoverageMeasured,
-		Source:                measuredSource(),
-		Base:                  repoobs.Base{Presence: repoobs.PresenceMeasured, Relation: repoobs.RelationEqual},
-		Local:                 repoobs.Local{Presence: repoobs.PresenceMeasured},
-		Durability:            repoobs.Draft{Presence: repoobs.PresenceMeasured, Level: repoobs.DurabilityLocalGit},
-		Index:                 repoobs.Index{Presence: repoobs.PresenceMeasured, BaseProfile: "profile:v1", LocalDelta: "0"},
+		SchemaVersion:       repoobs.SchemaVersion,
+		ResourceID:          "resource:repo/governed",
+		SourceIdentity:      "src:host/acme-platform-main",
+		TrustDomain:         "td_isolate_acme",
+		SourceRef:           "refs/heads/main",
+		SourceRevision:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ObservedAt:          observedAt(),
+		ObservationRevision: "obs:1",
+		Coverage:            repoobs.CoverageMeasured,
+		Source:              measuredSource(),
+		Base:                repoobs.Base{Presence: repoobs.PresenceMeasured, Relation: repoobs.RelationEqual},
+		Local:               repoobs.Local{Presence: repoobs.PresenceMeasured},
+		Durability:          repoobs.Draft{Presence: repoobs.PresenceMeasured, Level: repoobs.DurabilityLocalGit},
+		Index:               repoobs.Index{Presence: repoobs.PresenceMeasured, BaseProfile: "profile:v1", LocalDelta: "0"},
 	}
 }
 
@@ -51,6 +52,20 @@ func TestSchemaVersion_IsIdentifiedForConsumers(t *testing.T) {
 	}
 	if repoobs.PayloadType != "repo_observation" {
 		t.Fatalf("PayloadType = %q, want repo_observation so a WorkEvent envelope can name this grain", repoobs.PayloadType)
+	}
+}
+
+func TestREADME_NamesTheContractVersion(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(raw)
+	if !strings.Contains(doc, "[`repoobs`](repoobs/)") {
+		t.Fatal("README does not list the repoobs package")
+	}
+	if !strings.Contains(doc, "`SchemaVersion` 1") {
+		t.Fatal("README does not identify repoobs SchemaVersion 1")
 	}
 }
 
@@ -255,19 +270,19 @@ func TestValidate_RefusesFalselyCompleteCombinations(t *testing.T) {
 		},
 		{
 			name: "missing resource_id",
-			mut: func(o *repoobs.Observation) { o.ResourceID = "" },
+			mut:  func(o *repoobs.Observation) { o.ResourceID = "" },
 		},
 		{
 			name: "missing source identity",
-			mut: func(o *repoobs.Observation) { o.SourceIdentity = "" },
+			mut:  func(o *repoobs.Observation) { o.SourceIdentity = "" },
 		},
 		{
 			name: "missing trust domain",
-			mut: func(o *repoobs.Observation) { o.TrustDomain = "" },
+			mut:  func(o *repoobs.Observation) { o.TrustDomain = "" },
 		},
 		{
 			name: "wrong schema version",
-			mut: func(o *repoobs.Observation) { o.SchemaVersion = 0 },
+			mut:  func(o *repoobs.Observation) { o.SchemaVersion = 0 },
 		},
 	}
 	for _, tt := range tests {
