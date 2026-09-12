@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "org": "org:example",
+  "event_id": "evt:01a01578-ec47-7209-9200-cac2a1f75c7f",
+  "event_type": "model_call",
+  "work_id": "work:cr-41",
+  "resource_id": "resource:repo/governed",
+  "occurred_at": "2026-08-20T09:30:00Z",
+  "observed_at": "2026-08-20T09:30:12Z",
+  "time_source": "authority:host-clock",
+  "source_system": "arqtos-core",
+  "source_native_id": "call-8891",
+  "dedupe_key": "arqtos-core:call-8891",
+  "actor": {
+    "model": "some-provider/some-model-2026-08"
+  },
+  "audience": "audience:org",
+  "payload_type": "usage_fact"
+}
