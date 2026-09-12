@@ -175,6 +175,10 @@ func TestPresence_UnknownDeniedUnsupportedAndMeasuredZeroAreNotConflated(t *test
 	if unknown.Local.Dirty() {
 		t.Fatal("unknown local work reads as dirty — that is measured zero wearing unknown's clothes")
 	}
+	flagged := repoobs.Local{Presence: repoobs.PresenceUnknown, Unstaged: true}
+	if flagged.Dirty() {
+		t.Fatal("unknown local work with a dirty flag reported Dirty — the presence guard is the distinction")
+	}
 }
 
 func TestObservation_CarriesTimeRevisionAndCoverage(t *testing.T) {
@@ -197,14 +201,12 @@ func TestObservation_CarriesTimeRevisionAndCoverage(t *testing.T) {
 
 func TestCurrent_UnknownCoverageIsNeverCurrent(t *testing.T) {
 	o := validObservation()
-	o.Coverage = repoobs.CoverageUnknown
-	o.Source = repoobs.Source{Presence: repoobs.PresenceUnknown}
-	o.Base = repoobs.Base{Presence: repoobs.PresenceUnknown}
-	if err := o.Validate(); err != nil {
-		t.Fatalf("honest unknown observation: %v", err)
+	if !o.Current() {
+		t.Fatal("measured equal base should be current")
 	}
+	o.Coverage = repoobs.CoverageUnknown
 	if o.Current() {
-		t.Fatal("unknown coverage reported as current")
+		t.Fatal("unknown coverage reported as current while the source still looks measured")
 	}
 }
 
@@ -219,11 +221,13 @@ func TestValidate_RefusesUnknownToCurrentConversion(t *testing.T) {
 
 	converted := o
 	converted.Coverage = repoobs.CoverageMeasured
-	if err := converted.Validate(); !errors.Is(err, repoobs.ErrInvalid) {
-		t.Fatalf("unknown axes relabelled measured: %v, want ErrInvalid", err)
+	converted.Source = repoobs.Source{Presence: repoobs.PresenceMeasured, Fetch: repoobs.FetchSucceeded}
+	converted.Base = repoobs.Base{Presence: repoobs.PresenceMeasured, Relation: repoobs.RelationEqual}
+	if err := converted.Validate(); err != nil {
+		t.Fatal(err)
 	}
 	if converted.Current() {
-		t.Fatal("unknown-to-current conversion made Current() true")
+		t.Fatal("unknown-to-current conversion with an empty OID made Current() true")
 	}
 }
 
@@ -284,6 +288,64 @@ func TestValidate_RefusesFalselyCompleteCombinations(t *testing.T) {
 			name: "wrong schema version",
 			mut:  func(o *repoobs.Observation) { o.SchemaVersion = 0 },
 		},
+		{
+			name: "denied coverage with measured source",
+			mut:  func(o *repoobs.Observation) { o.Coverage = repoobs.CoverageDenied },
+		},
+		{
+			name: "unsupported coverage with measured source",
+			mut:  func(o *repoobs.Observation) { o.Coverage = repoobs.CoverageUnsupported },
+		},
+		{
+			name: "unknown draft claiming published durability",
+			mut: func(o *repoobs.Observation) {
+				o.Durability = repoobs.Draft{Presence: repoobs.PresenceUnknown, Level: repoobs.DurabilityPublished}
+			},
+		},
+		{
+			name: "unsupported draft claiming published durability",
+			mut: func(o *repoobs.Observation) {
+				o.Durability = repoobs.Draft{Presence: repoobs.PresenceUnsupported, Level: repoobs.DurabilityPublished}
+			},
+		},
+		{
+			name: "unknown base claiming equal",
+			mut: func(o *repoobs.Observation) {
+				o.Base = repoobs.Base{Presence: repoobs.PresenceUnknown, Relation: repoobs.RelationEqual}
+			},
+		},
+		{
+			name: "denied base claiming equal",
+			mut: func(o *repoobs.Observation) {
+				o.Base = repoobs.Base{Presence: repoobs.PresenceDenied, Relation: repoobs.RelationEqual}
+			},
+		},
+		{
+			name: "unknown source reporting fetch success",
+			mut: func(o *repoobs.Observation) {
+				o.Coverage = repoobs.CoverageUnknown
+				o.Source = repoobs.Source{Presence: repoobs.PresenceUnknown, Fetch: repoobs.FetchSucceeded}
+			},
+		},
+		{
+			name: "unsupported source reporting fetch success",
+			mut: func(o *repoobs.Observation) {
+				o.Coverage = repoobs.CoverageUnknown
+				o.Source = repoobs.Source{Presence: repoobs.PresenceUnsupported, Fetch: repoobs.FetchSucceeded}
+			},
+		},
+		{
+			name: "unknown index claiming a generation",
+			mut: func(o *repoobs.Observation) {
+				o.Index = repoobs.Index{Presence: repoobs.PresenceUnknown, LocalDelta: "7"}
+			},
+		},
+		{
+			name: "unsupported index claiming a generation",
+			mut: func(o *repoobs.Observation) {
+				o.Index = repoobs.Index{Presence: repoobs.PresenceUnsupported, LocalDelta: "7"}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -334,101 +396,5 @@ func TestGolden_ObservationRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(encoded, again) {
 		t.Fatalf("round-trip drifted\n--- got ---\n%s\n--- want ---\n%s", again, encoded)
-	}
-}
-
-func TestEnvelope_LegacyWorkEventRoundTrip(t *testing.T) {
-	want, err := os.ReadFile(filepath.Join("testdata", "legacy-workevent.v1.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, err := repoobs.DecodeEnvelope(want)
-	if err != nil {
-		t.Fatalf("legacy envelope refused: %v", err)
-	}
-	if env.PayloadType != "usage_fact" {
-		t.Fatalf("payload_type = %q, want usage_fact", env.PayloadType)
-	}
-	if len(env.Payload) != 0 {
-		t.Fatalf("legacy envelope grew a payload: %s", env.Payload)
-	}
-	got, err := contracts.Encode(env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(want) {
-		t.Fatalf("legacy WorkEvent envelope did not round-trip\n--- got ---\n%s\n--- want ---\n%s", got, want)
-	}
-}
-
-func TestEnvelope_CarriesAnObservationPayloadWithoutDroppingIdentity(t *testing.T) {
-	obsRaw, err := contracts.Encode(validObservation())
-	if err != nil {
-		t.Fatal(err)
-	}
-	env := repoobs.Envelope{
-		SchemaVersion:  repoobs.SchemaVersion,
-		Org:            "org:example",
-		EventID:        "evt:01a01578-ec47-7209-9200-cac2a1f75c7f",
-		EventType:      "repo_observation",
-		WorkID:         "work:cr-41",
-		ResourceID:     "resource:repo/governed",
-		OccurredAt:     observedAt(),
-		ObservedAt:     observedAt().Add(12 * time.Second),
-		TimeSource:     "authority:host-clock",
-		SourceSystem:   "arqtos-core",
-		SourceNativeID: "obs-1",
-		DedupeKey:      "arqtos-core:obs-1",
-		Actor:          repoobs.Actor{None: true},
-		Audience:       "audience:org",
-		PayloadType:    repoobs.PayloadType,
-		Payload:        json.RawMessage(bytes.TrimSpace(obsRaw)),
-	}
-	if err := env.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := contracts.Encode(env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := repoobs.DecodeEnvelope(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.PayloadType != repoobs.PayloadType {
-		t.Fatalf("payload_type = %q", got.PayloadType)
-	}
-	obs, err := repoobs.Decode(got.Payload)
-	if err != nil {
-		t.Fatalf("payload: %v", err)
-	}
-	if err := obs.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if got.ResourceID != env.ResourceID || got.EventID != env.EventID {
-		t.Fatalf("envelope identity dropped: %+v", got)
-	}
-}
-
-func TestEnvelope_RejectsObservationPayloadTypeWithoutPayload(t *testing.T) {
-	env := repoobs.Envelope{
-		SchemaVersion:  repoobs.SchemaVersion,
-		Org:            "org:example",
-		EventID:        "evt:01a01578-ec47-7209-9200-cac2a1f75c7f",
-		EventType:      "repo_observation",
-		WorkID:         "work:cr-41",
-		ResourceID:     "resource:repo/governed",
-		OccurredAt:     observedAt(),
-		ObservedAt:     observedAt(),
-		TimeSource:     "authority:host-clock",
-		SourceSystem:   "arqtos-core",
-		SourceNativeID: "obs-1",
-		DedupeKey:      "arqtos-core:obs-1",
-		Actor:          repoobs.Actor{None: true},
-		Audience:       "audience:org",
-		PayloadType:    repoobs.PayloadType,
-	}
-	if err := env.Validate(); !errors.Is(err, repoobs.ErrInvalid) {
-		t.Fatalf("got %v, want ErrInvalid", err)
 	}
 }

@@ -94,11 +94,12 @@ func Decode(data []byte) (Observation, error) {
 	return contracts.Decode[Observation](data)
 }
 
-// Current reports a measured source whose pinned base equals that observation.
+// Current reports measured coverage, a successful fetch of a named OID, and an equal base.
 func (o Observation) Current() bool {
 	return o.Coverage == CoverageMeasured &&
 		o.Source.Presence == PresenceMeasured &&
 		o.Source.Fetch == FetchSucceeded &&
+		o.Source.OID != "" &&
 		o.Base.Presence == PresenceMeasured &&
 		o.Base.Relation == RelationEqual
 }
@@ -134,20 +135,23 @@ func (o Observation) Validate() error {
 	if o.Coverage == CoverageMeasured && o.Source.Presence != PresenceMeasured {
 		problems = append(problems, "measured coverage with an unmeasured source")
 	}
-	if o.Coverage == CoverageUnknown && o.Source.Presence == PresenceMeasured {
-		problems = append(problems, "unknown coverage with a measured source")
+	if o.Coverage != CoverageMeasured && o.Source.Presence == PresenceMeasured {
+		problems = append(problems, "non-measured coverage with a measured source")
 	}
-	if o.Source.Presence != PresenceMeasured && o.Base.Presence == PresenceMeasured && o.Base.Relation.Stated() {
-		problems = append(problems, "base relation stated against an unobserved source")
+	if o.Source.Fetch == FetchSucceeded && o.Source.Presence != PresenceMeasured {
+		problems = append(problems, "fetch succeeded without a measured source")
 	}
-	if o.Source.Presence == PresenceDenied && o.Source.Fetch == FetchSucceeded {
-		problems = append(problems, "denied source reporting a successful fetch")
+	if o.Base.Relation.Stated() && (o.Source.Presence != PresenceMeasured || o.Base.Presence != PresenceMeasured) {
+		problems = append(problems, "base relation stated without a measured source and base")
+	}
+	if o.Durability.Level != DurabilityUnspecified && o.Durability.Presence != PresenceMeasured {
+		problems = append(problems, "durability level stated without a measured presence")
 	}
 	if o.Local.Presence != PresenceMeasured && (o.Local.Staged || o.Local.Unstaged || o.Local.Untracked || o.Local.Unpublished) {
 		problems = append(problems, "local work flags set without a measured presence")
 	}
-	if o.Index.Presence == PresenceDenied && (o.Index.BaseProfile != "" || o.Index.LocalDelta != "") {
-		problems = append(problems, "denied index claiming a searchable generation")
+	if o.Index.Presence != PresenceMeasured && (o.Index.BaseProfile != "" || o.Index.LocalDelta != "") {
+		problems = append(problems, "index generation without a measured presence")
 	}
 
 	if len(problems) == 0 {
