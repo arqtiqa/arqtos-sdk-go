@@ -1,0 +1,30 @@
+# Sanitized representative of a published catalogue skill.yml.
+# Generic names and globs only — no private paths, credentials, or customer data.
+name: example-discipline
+version: 1.2.0
+visibility: public
+description: "Discipline for reviewing a published skill contract as bytes, without walking a tree or emitting a client-native surface."
+capability_class: tooling-discipline
+mount_priority: 7
+fine_tune:
+  eligible: true
+  required_corpus_classes:
+    - published_style_guide
+  retune_triggers:
+    - schema_version_bump
+adjacent_skills:
+  - example-adjacent
+sensitivity_required:
+  max_classification: confidential
+audit_tier: enhanced
+cool_down_turns: 20
+churn_class: medium
+paths:
+  - "**/*.go"
+  - "**/testdata/**"
+pinned: true
+structure: rubric
+triggers:
+  - example skill
+  - catalogue contract
+fine_tune_compatible: true

@@ -1,0 +1,3 @@
+name: example-discipline
+description: "A catalogue skill whose adjacent_skills is not a list."
+adjacent_skills: example-adjacent

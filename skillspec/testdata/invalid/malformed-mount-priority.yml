@@ -1,0 +1,3 @@
+name: example-discipline
+description: "A catalogue skill with a mount_priority outside 1-10."
+mount_priority: 11

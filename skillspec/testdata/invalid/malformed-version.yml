@@ -1,0 +1,3 @@
+name: example-discipline
+description: "A catalogue skill whose version is not X.Y.Z."
+version: latest
