@@ -91,10 +91,13 @@ const (
 	// DomainConfigBody is the body of a governed configuration record or
 	// projection, whose digest is the body_digest in its stamp (dcn-arq-00015).
 	DomainConfigBody Domain = "arqtos.config-body.v1"
+	// DomainSessionResolution is an immutable SessionResolution, whose digest
+	// a live Run pins (doc-arq-00117 §5).
+	DomainSessionResolution Domain = "arqtos.session-resolution.v1"
 )
 
 var domains = []Domain{
-	DomainActBody, DomainWitness, DomainEvidenceEvent, DomainCharter, DomainGenesis, DomainResolvedConfig, DomainConfigBody,
+	DomainActBody, DomainWitness, DomainEvidenceEvent, DomainCharter, DomainGenesis, DomainResolvedConfig, DomainConfigBody, DomainSessionResolution,
 }
 
 // Domains returns the closed set of domain tags, as a copy.

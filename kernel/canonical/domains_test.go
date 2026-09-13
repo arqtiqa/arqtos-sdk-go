@@ -54,3 +54,25 @@ func TestDomainConfigBody_IsListedOnceAndSeparatesFromTheResolvedArtifact(t *tes
 		t.Fatal("a record body and a resolved artifact with the same fields share one identity")
 	}
 }
+
+func TestDomainSessionResolution_IsListedOnceAndSeparatesFromResolvedConfig(t *testing.T) {
+	if canonical.DomainSessionResolution != "arqtos.session-resolution.v1" {
+		t.Fatalf("DomainSessionResolution = %q", canonical.DomainSessionResolution)
+	}
+	if !canonical.DomainSessionResolution.Valid() {
+		t.Fatal("DomainSessionResolution is declared but not Valid(); Digest would refuse it")
+	}
+	listedOnce(t, canonical.DomainSessionResolution)
+	body := map[string]any{"session_id": "ses_1", "skill_pack": "arqtos-base"}
+	mine, err := canonical.Digest(canonical.DomainSessionResolution, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := canonical.Digest(canonical.DomainResolvedConfig, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mine == resolved {
+		t.Fatal("a session resolution and a resolved config with the same fields share one identity")
+	}
+}
