@@ -1,0 +1,3 @@
+name: example-discipline
+description: "A catalogue skill whose fine_tune is not a mapping."
+fine_tune: yes

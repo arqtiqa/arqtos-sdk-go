@@ -1,0 +1,3 @@
+name: example-discipline
+description: "A catalogue skill with sensitivity_required but no max_classification."
+sensitivity_required: {}

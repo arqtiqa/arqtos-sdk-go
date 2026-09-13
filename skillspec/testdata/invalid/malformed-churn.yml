@@ -1,0 +1,3 @@
+name: example-discipline
+description: "A catalogue skill with an unknown churn_class."
+churn_class: extreme

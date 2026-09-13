@@ -1,0 +1,4 @@
+name: example-discipline
+description: "A catalogue skill whose capability_class is not a string."
+capability_class:
+  - tooling-discipline

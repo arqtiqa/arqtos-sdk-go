@@ -1,0 +1,4 @@
+name: example-discipline
+description: "A catalogue skill with an unknown max_classification."
+sensitivity_required:
+  max_classification: secret
