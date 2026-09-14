@@ -10,15 +10,23 @@ first-party or third-party.
 ## Refs-only in
 
 A `CredentialLoader` method never accepts raw credential material as an
-argument. Every input that identifies "which secret" is a
+argument **when identifying which secret to resolve**. Every input that
+identifies "which secret" is a
 [`ref.Ref`](../ref/ref.go) — an `op://<vault>/<item>/<field>` reference — never the
-secret value itself. This is enforced structurally: no contract method in this
-SDK takes anything but a `ref.Ref` (or a `Lease`, which is a handle, not
-material) as its "which secret" argument.
+secret value itself. This is enforced structurally: `Resolve` / `List` /
+`Lease` take a `ref.Ref` (or a `Lease`, which is a handle, not material).
 
-If you find yourself wanting to pass a secret value *into* a connector method,
-that is a sign the design is wrong — plumb a `ref.Ref` through instead and let
-the connector resolve it.
+**`BindAuth` is the one inbound material path**, and it is not a "which secret"
+argument. The host supplies the connector's own outward-auth bootstrap — a
+token, or `client_id` + `client_secret`, same API — over the authenticated
+provider channel. That set MUST NOT arrive via argv, an inherited environment,
+a log line, or a persisted payload. `credential.CheckBootstrap` refuses a
+missing or duplicate key by **field name** and never embeds material.
+`Bootstrap.String()` / `GoString()` redact; `Zero()` wipes.
+
+If you find yourself wanting to pass a secret value *into* `Resolve`, that is a
+sign the design is wrong — plumb a `ref.Ref` through instead and let the
+connector resolve it. Do not "fix" a missing bootstrap key by reading `os.Getenv`.
 
 ## `Material` redacted + wiped
 
@@ -79,18 +87,26 @@ Nothing a `CredentialLoader` resolves outlives the session that requested it:
 ## Host-side PERMAFROST audit of every action
 
 Every `CredentialLoader` action — `Resolve`, `List`, `Lease`, `Renew`,
-`Revoke` — is audited on the host side (PERMAFROST), independent of whether
-the underlying backing store keeps its own access log. A connector does not
-need to implement its own audit trail to satisfy this contract, but it MUST
-NOT do anything that would prevent the host from attributing an action to the
-request that caused it — e.g. it must not batch, cache, or reorder calls in a
-way that decouples a resolve from the request that triggered it.
+`Revoke`, and `BindAuth` when declared — is audited on the host side
+(PERMAFROST), independent of whether the underlying backing store keeps its
+own access log. A connector does not need to implement its own audit trail to
+satisfy this contract, but it MUST NOT do anything that would prevent the
+host from attributing an action to the request that caused it — e.g. it must
+not batch, cache, or reorder calls in a way that decouples a resolve from the
+request that triggered it.
 
-## Secrets never cross the boundary except as the resolved value the host requested
+## Secret material on the connector/host boundary
 
-The only secret material that ever crosses the connector/host boundary is the
-`*Material` returned from a `Resolve` or `Lease` call the host itself made,
-for the exact `ref.Ref` (or `Lease`) it asked about. A connector must not:
+Two paths carry secret bytes, and only those two:
+
+1. **Outbound** — the `*Material` returned from a `Resolve` or `Lease` the
+   host itself made, for the exact `ref.Ref` (or `Lease`) it asked about.
+2. **Inbound bootstrap** — `BindAuth`, the host supplying the connector's own
+   outward-auth key set (see [Refs-only in](#refs-only-in)). Those bytes are
+   not a resolved secret and MUST NOT be logged, persisted, or copied into
+   argv or the process environment.
+
+A connector must not:
 
 - return material for a ref other than the one requested,
 - return material the host did not ask for (e.g. bundling adjacent secrets
@@ -102,10 +118,10 @@ for the exact `ref.Ref` (or `Lease`) it asked about. A connector must not:
 
 ## Track-B: error strings cross the wire verbatim
 
-Over the Track-B gRPC transport, only `Material` is treated as sensitive and
-handled specially: it crosses the wire as the redacted-on-format
-`credential.Material` the host itself asked for (see `Material` redacted +
-wiped, above), never logged or serialized as a bare string en route.
+Over the Track-B gRPC transport, outbound `Material` and inbound `BindAuth`
+bootstrap entries are treated as sensitive: they cross as the
+redacted-on-format `credential.Material` / `credential.Bootstrap` types,
+never logged or serialized as a bare string en route.
 
 A provider's **error messages do not get that treatment**. `transport.ErrToStatus`
 preserves `err.Error()` verbatim into the gRPC status message it sends back

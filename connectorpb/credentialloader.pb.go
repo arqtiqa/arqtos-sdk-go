@@ -779,6 +779,145 @@ func (*RevokeResponse) Descriptor() ([]byte, []int) {
 	return file_credentialloader_proto_rawDescGZIP(), []int{13}
 }
 
+// BindAuthRequest carries host-supplied bootstrap material for the
+// connector's own outward authentication. It is not a secret the host is
+// asking to resolve — those stay refs-only. Token and two-key profiles use
+// this same message: the required names are the profile, not a second RPC.
+//
+// Keys MUST NOT be logged, written to argv, copied into the process
+// environment, or persisted. Empty `value` bytes are still a present key.
+type BindAuthRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Keys          []*BootstrapEntry      `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BindAuthRequest) Reset() {
+	*x = BindAuthRequest{}
+	mi := &file_credentialloader_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BindAuthRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BindAuthRequest) ProtoMessage() {}
+
+func (x *BindAuthRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_credentialloader_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BindAuthRequest.ProtoReflect.Descriptor instead.
+func (*BindAuthRequest) Descriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *BindAuthRequest) GetKeys() []*BootstrapEntry {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+type BootstrapEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootstrapEntry) Reset() {
+	*x = BootstrapEntry{}
+	mi := &file_credentialloader_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootstrapEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootstrapEntry) ProtoMessage() {}
+
+func (x *BootstrapEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_credentialloader_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootstrapEntry.ProtoReflect.Descriptor instead.
+func (*BootstrapEntry) Descriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *BootstrapEntry) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *BootstrapEntry) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+type BindAuthResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BindAuthResponse) Reset() {
+	*x = BindAuthResponse{}
+	mi := &file_credentialloader_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BindAuthResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BindAuthResponse) ProtoMessage() {}
+
+func (x *BindAuthResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_credentialloader_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BindAuthResponse.ProtoReflect.Descriptor instead.
+func (*BindAuthResponse) Descriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{16}
+}
+
 // ResolveBatchRequest asks for many references in ONE call.
 type ResolveBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -789,7 +928,7 @@ type ResolveBatchRequest struct {
 
 func (x *ResolveBatchRequest) Reset() {
 	*x = ResolveBatchRequest{}
-	mi := &file_credentialloader_proto_msgTypes[14]
+	mi := &file_credentialloader_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +940,7 @@ func (x *ResolveBatchRequest) String() string {
 func (*ResolveBatchRequest) ProtoMessage() {}
 
 func (x *ResolveBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[14]
+	mi := &file_credentialloader_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +953,7 @@ func (x *ResolveBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBatchRequest.ProtoReflect.Descriptor instead.
 func (*ResolveBatchRequest) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{14}
+	return file_credentialloader_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ResolveBatchRequest) GetRefs() []*Ref {
@@ -847,7 +986,7 @@ type ResolveBatchResult struct {
 
 func (x *ResolveBatchResult) Reset() {
 	*x = ResolveBatchResult{}
-	mi := &file_credentialloader_proto_msgTypes[15]
+	mi := &file_credentialloader_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -859,7 +998,7 @@ func (x *ResolveBatchResult) String() string {
 func (*ResolveBatchResult) ProtoMessage() {}
 
 func (x *ResolveBatchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[15]
+	mi := &file_credentialloader_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -872,7 +1011,7 @@ func (x *ResolveBatchResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBatchResult.ProtoReflect.Descriptor instead.
 func (*ResolveBatchResult) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{15}
+	return file_credentialloader_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ResolveBatchResult) GetRef() *Ref {
@@ -910,7 +1049,7 @@ type ResolveBatchResponse struct {
 
 func (x *ResolveBatchResponse) Reset() {
 	*x = ResolveBatchResponse{}
-	mi := &file_credentialloader_proto_msgTypes[16]
+	mi := &file_credentialloader_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -922,7 +1061,7 @@ func (x *ResolveBatchResponse) String() string {
 func (*ResolveBatchResponse) ProtoMessage() {}
 
 func (x *ResolveBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_credentialloader_proto_msgTypes[16]
+	mi := &file_credentialloader_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -935,7 +1074,7 @@ func (x *ResolveBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBatchResponse.ProtoReflect.Descriptor instead.
 func (*ResolveBatchResponse) Descriptor() ([]byte, []int) {
-	return file_credentialloader_proto_rawDescGZIP(), []int{16}
+	return file_credentialloader_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ResolveBatchResponse) GetResults() []*ResolveBatchResult {
@@ -985,7 +1124,13 @@ const file_credentialloader_proto_rawDesc = "" +
 	"\x05lease\x18\x01 \x01(\v2\x13.connector.v1.LeaseR\x05lease\":\n" +
 	"\rRevokeRequest\x12)\n" +
 	"\x05lease\x18\x01 \x01(\v2\x13.connector.v1.LeaseR\x05lease\"\x10\n" +
-	"\x0eRevokeResponse\"<\n" +
+	"\x0eRevokeResponse\"C\n" +
+	"\x0fBindAuthRequest\x120\n" +
+	"\x04keys\x18\x01 \x03(\v2\x1c.connector.v1.BootstrapEntryR\x04keys\":\n" +
+	"\x0eBootstrapEntry\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"\x12\n" +
+	"\x10BindAuthResponse\"<\n" +
 	"\x13ResolveBatchRequest\x12%\n" +
 	"\x04refs\x18\x01 \x03(\v2\x11.connector.v1.RefR\x04refs\"\x9e\x01\n" +
 	"\x12ResolveBatchResult\x12#\n" +
@@ -993,7 +1138,7 @@ const file_credentialloader_proto_rawDesc = "" +
 	"\bmaterial\x18\x02 \x01(\v2\x16.connector.v1.MaterialR\bmaterial\x12/\n" +
 	"\afailure\x18\x03 \x01(\v2\x15.connector.v1.FailureR\afailure\"R\n" +
 	"\x14ResolveBatchResponse\x12:\n" +
-	"\aresults\x18\x01 \x03(\v2 .connector.v1.ResolveBatchResultR\aresults2\xd5\x04\n" +
+	"\aresults\x18\x01 \x03(\v2 .connector.v1.ResolveBatchResultR\aresults2\xa0\x05\n" +
 	"\x10CredentialLoader\x12F\n" +
 	"\aResolve\x12\x1c.connector.v1.ResolveRequest\x1a\x1d.connector.v1.ResolveResponse\x12=\n" +
 	"\x04List\x12\x19.connector.v1.ListRequest\x1a\x1a.connector.v1.ListResponse\x12@\n" +
@@ -1002,7 +1147,8 @@ const file_credentialloader_proto_rawDesc = "" +
 	"\x06Revoke\x12\x1b.connector.v1.RevokeRequest\x1a\x1c.connector.v1.RevokeResponse\x12C\n" +
 	"\x06Health\x12\x1b.connector.v1.HealthRequest\x1a\x1c.connector.v1.HealthResponse\x12U\n" +
 	"\fCapabilities\x12!.connector.v1.CapabilitiesRequest\x1a\".connector.v1.CapabilitiesResponse\x12U\n" +
-	"\fResolveBatch\x12!.connector.v1.ResolveBatchRequest\x1a\".connector.v1.ResolveBatchResponseB.Z,github.com/arqtiqa/arqtos-sdk-go/connectorpbb\x06proto3"
+	"\fResolveBatch\x12!.connector.v1.ResolveBatchRequest\x1a\".connector.v1.ResolveBatchResponse\x12I\n" +
+	"\bBindAuth\x12\x1d.connector.v1.BindAuthRequest\x1a\x1e.connector.v1.BindAuthResponseB.Z,github.com/arqtiqa/arqtos-sdk-go/connectorpbb\x06proto3"
 
 var (
 	file_credentialloader_proto_rawDescOnce sync.Once
@@ -1016,7 +1162,7 @@ func file_credentialloader_proto_rawDescGZIP() []byte {
 	return file_credentialloader_proto_rawDescData
 }
 
-var file_credentialloader_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_credentialloader_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_credentialloader_proto_goTypes = []any{
 	(*Ref)(nil),                  // 0: connector.v1.Ref
 	(*Material)(nil),             // 1: connector.v1.Material
@@ -1032,13 +1178,16 @@ var file_credentialloader_proto_goTypes = []any{
 	(*RenewResponse)(nil),        // 11: connector.v1.RenewResponse
 	(*RevokeRequest)(nil),        // 12: connector.v1.RevokeRequest
 	(*RevokeResponse)(nil),       // 13: connector.v1.RevokeResponse
-	(*ResolveBatchRequest)(nil),  // 14: connector.v1.ResolveBatchRequest
-	(*ResolveBatchResult)(nil),   // 15: connector.v1.ResolveBatchResult
-	(*ResolveBatchResponse)(nil), // 16: connector.v1.ResolveBatchResponse
-	(*HealthRequest)(nil),        // 17: connector.v1.HealthRequest
-	(*CapabilitiesRequest)(nil),  // 18: connector.v1.CapabilitiesRequest
-	(*HealthResponse)(nil),       // 19: connector.v1.HealthResponse
-	(*CapabilitiesResponse)(nil), // 20: connector.v1.CapabilitiesResponse
+	(*BindAuthRequest)(nil),      // 14: connector.v1.BindAuthRequest
+	(*BootstrapEntry)(nil),       // 15: connector.v1.BootstrapEntry
+	(*BindAuthResponse)(nil),     // 16: connector.v1.BindAuthResponse
+	(*ResolveBatchRequest)(nil),  // 17: connector.v1.ResolveBatchRequest
+	(*ResolveBatchResult)(nil),   // 18: connector.v1.ResolveBatchResult
+	(*ResolveBatchResponse)(nil), // 19: connector.v1.ResolveBatchResponse
+	(*HealthRequest)(nil),        // 20: connector.v1.HealthRequest
+	(*CapabilitiesRequest)(nil),  // 21: connector.v1.CapabilitiesRequest
+	(*HealthResponse)(nil),       // 22: connector.v1.HealthResponse
+	(*CapabilitiesResponse)(nil), // 23: connector.v1.CapabilitiesResponse
 }
 var file_credentialloader_proto_depIdxs = []int32{
 	0,  // 0: connector.v1.ResolveRequest.ref:type_name -> connector.v1.Ref
@@ -1050,32 +1199,35 @@ var file_credentialloader_proto_depIdxs = []int32{
 	2,  // 6: connector.v1.RenewRequest.lease:type_name -> connector.v1.Lease
 	2,  // 7: connector.v1.RenewResponse.lease:type_name -> connector.v1.Lease
 	2,  // 8: connector.v1.RevokeRequest.lease:type_name -> connector.v1.Lease
-	0,  // 9: connector.v1.ResolveBatchRequest.refs:type_name -> connector.v1.Ref
-	0,  // 10: connector.v1.ResolveBatchResult.ref:type_name -> connector.v1.Ref
-	1,  // 11: connector.v1.ResolveBatchResult.material:type_name -> connector.v1.Material
-	3,  // 12: connector.v1.ResolveBatchResult.failure:type_name -> connector.v1.Failure
-	15, // 13: connector.v1.ResolveBatchResponse.results:type_name -> connector.v1.ResolveBatchResult
-	4,  // 14: connector.v1.CredentialLoader.Resolve:input_type -> connector.v1.ResolveRequest
-	6,  // 15: connector.v1.CredentialLoader.List:input_type -> connector.v1.ListRequest
-	8,  // 16: connector.v1.CredentialLoader.Lease:input_type -> connector.v1.LeaseRequest
-	10, // 17: connector.v1.CredentialLoader.Renew:input_type -> connector.v1.RenewRequest
-	12, // 18: connector.v1.CredentialLoader.Revoke:input_type -> connector.v1.RevokeRequest
-	17, // 19: connector.v1.CredentialLoader.Health:input_type -> connector.v1.HealthRequest
-	18, // 20: connector.v1.CredentialLoader.Capabilities:input_type -> connector.v1.CapabilitiesRequest
-	14, // 21: connector.v1.CredentialLoader.ResolveBatch:input_type -> connector.v1.ResolveBatchRequest
-	5,  // 22: connector.v1.CredentialLoader.Resolve:output_type -> connector.v1.ResolveResponse
-	7,  // 23: connector.v1.CredentialLoader.List:output_type -> connector.v1.ListResponse
-	9,  // 24: connector.v1.CredentialLoader.Lease:output_type -> connector.v1.LeaseResponse
-	11, // 25: connector.v1.CredentialLoader.Renew:output_type -> connector.v1.RenewResponse
-	13, // 26: connector.v1.CredentialLoader.Revoke:output_type -> connector.v1.RevokeResponse
-	19, // 27: connector.v1.CredentialLoader.Health:output_type -> connector.v1.HealthResponse
-	20, // 28: connector.v1.CredentialLoader.Capabilities:output_type -> connector.v1.CapabilitiesResponse
-	16, // 29: connector.v1.CredentialLoader.ResolveBatch:output_type -> connector.v1.ResolveBatchResponse
-	22, // [22:30] is the sub-list for method output_type
-	14, // [14:22] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	15, // 9: connector.v1.BindAuthRequest.keys:type_name -> connector.v1.BootstrapEntry
+	0,  // 10: connector.v1.ResolveBatchRequest.refs:type_name -> connector.v1.Ref
+	0,  // 11: connector.v1.ResolveBatchResult.ref:type_name -> connector.v1.Ref
+	1,  // 12: connector.v1.ResolveBatchResult.material:type_name -> connector.v1.Material
+	3,  // 13: connector.v1.ResolveBatchResult.failure:type_name -> connector.v1.Failure
+	18, // 14: connector.v1.ResolveBatchResponse.results:type_name -> connector.v1.ResolveBatchResult
+	4,  // 15: connector.v1.CredentialLoader.Resolve:input_type -> connector.v1.ResolveRequest
+	6,  // 16: connector.v1.CredentialLoader.List:input_type -> connector.v1.ListRequest
+	8,  // 17: connector.v1.CredentialLoader.Lease:input_type -> connector.v1.LeaseRequest
+	10, // 18: connector.v1.CredentialLoader.Renew:input_type -> connector.v1.RenewRequest
+	12, // 19: connector.v1.CredentialLoader.Revoke:input_type -> connector.v1.RevokeRequest
+	20, // 20: connector.v1.CredentialLoader.Health:input_type -> connector.v1.HealthRequest
+	21, // 21: connector.v1.CredentialLoader.Capabilities:input_type -> connector.v1.CapabilitiesRequest
+	17, // 22: connector.v1.CredentialLoader.ResolveBatch:input_type -> connector.v1.ResolveBatchRequest
+	14, // 23: connector.v1.CredentialLoader.BindAuth:input_type -> connector.v1.BindAuthRequest
+	5,  // 24: connector.v1.CredentialLoader.Resolve:output_type -> connector.v1.ResolveResponse
+	7,  // 25: connector.v1.CredentialLoader.List:output_type -> connector.v1.ListResponse
+	9,  // 26: connector.v1.CredentialLoader.Lease:output_type -> connector.v1.LeaseResponse
+	11, // 27: connector.v1.CredentialLoader.Renew:output_type -> connector.v1.RenewResponse
+	13, // 28: connector.v1.CredentialLoader.Revoke:output_type -> connector.v1.RevokeResponse
+	22, // 29: connector.v1.CredentialLoader.Health:output_type -> connector.v1.HealthResponse
+	23, // 30: connector.v1.CredentialLoader.Capabilities:output_type -> connector.v1.CapabilitiesResponse
+	19, // 31: connector.v1.CredentialLoader.ResolveBatch:output_type -> connector.v1.ResolveBatchResponse
+	16, // 32: connector.v1.CredentialLoader.BindAuth:output_type -> connector.v1.BindAuthResponse
+	24, // [24:33] is the sub-list for method output_type
+	15, // [15:24] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_credentialloader_proto_init() }
@@ -1090,7 +1242,7 @@ func file_credentialloader_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_credentialloader_proto_rawDesc), len(file_credentialloader_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

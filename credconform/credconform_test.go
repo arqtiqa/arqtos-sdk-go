@@ -133,6 +133,28 @@ func batchOne(ctx context.Context, c credential.CredentialLoader, r ref.Ref) cre
 
 var _ credential.BatchResolver = (*batchLoader)(nil)
 
+type authLoader struct{ baseLoader }
+
+func (l *authLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapBindAuth}
+}
+
+func (l *authLoader) BindAuth(context.Context, *credential.Bootstrap) error { return nil }
+
+var _ credential.AuthBinder = (*authLoader)(nil)
+
+type authLiarLoader struct{ baseLoader }
+
+func (l *authLiarLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapBindAuth}
+}
+
+type unauthedBinder struct{ authLoader }
+
+func (l *unauthedBinder) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead}
+}
+
 func manifestFor(caps ...connector.Capability) manifest.Doc {
 	return manifest.Doc{
 		Name:         "placeholder-credential-loader",
@@ -396,6 +418,18 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 			wantFail: credconform.CheckBatchDeclared,
 		},
 		{
+			name:     "manifest declares bind_auth, connector does not implement it",
+			loader:   &authLiarLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapBindAuth),
+			wantFail: credconform.CheckBindAuthDeclared,
+		},
+		{
+			name:     "implements bind_auth and declares it nowhere",
+			loader:   &unauthedBinder{},
+			manifest: manifestFor(credential.CapRead),
+			wantFail: credconform.CheckBindAuthDeclared,
+		},
+		{
 			name:     "manifest is invalid",
 			loader:   &baseLoader{},
 			manifest: manifest.Doc{Implements: connector.ClassCredentialLoader, Kind: manifest.KindNative},
@@ -490,6 +524,16 @@ func TestCompliantConnectorsPass(t *testing.T) {
 			t.Fatalf("batch shape must be checked for a batch connector:\n%s", rep)
 		}
 	})
+	t.Run("bind_auth capability", func(t *testing.T) {
+		m := manifestFor(credential.CapRead, credential.CapBindAuth)
+		rep, err := credconform.Run(context.Background(), &authLoader{}, opts(t, m))
+		if err != nil {
+			t.Fatalf("the harness could not run: %v", err)
+		}
+		if !rep.OK() {
+			t.Fatalf("a compliant bind_auth connector must pass:\n%s", rep)
+		}
+	})
 }
 
 // TestEveryObligationIsChecked pins the check set. A check that stops running
@@ -504,6 +548,7 @@ func TestEveryObligationIsChecked(t *testing.T) {
 		credconform.CheckManifest,
 		credconform.CheckCapabilityHonesty,
 		credconform.CheckBatchDeclared,
+		credconform.CheckBindAuthDeclared,
 		credconform.CheckResolveNoEmptySuccess,
 		credconform.CheckFailureTyped,
 		credconform.CheckBatchShape,

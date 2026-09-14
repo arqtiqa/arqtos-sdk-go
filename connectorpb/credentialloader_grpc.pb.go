@@ -49,6 +49,7 @@ const (
 	CredentialLoader_Health_FullMethodName       = "/connector.v1.CredentialLoader/Health"
 	CredentialLoader_Capabilities_FullMethodName = "/connector.v1.CredentialLoader/Capabilities"
 	CredentialLoader_ResolveBatch_FullMethodName = "/connector.v1.CredentialLoader/ResolveBatch"
+	CredentialLoader_BindAuth_FullMethodName     = "/connector.v1.CredentialLoader/BindAuth"
 )
 
 // CredentialLoaderClient is the client API for CredentialLoader service.
@@ -103,6 +104,13 @@ type CredentialLoaderClient interface {
 	// failure belongs in that reference's ResolveBatchResult.failure, so one
 	// missing field does not discard everything fetched with it.
 	ResolveBatch(ctx context.Context, in *ResolveBatchRequest, opts ...grpc.CallOption) (*ResolveBatchResponse, error)
+	// BindAuth delivers the host's bootstrap key set over the authenticated
+	// channel. It is OPTIONAL, and gated: implement it only if you also report
+	// "bind_auth" from Capabilities and declare it in your manifest. A
+	// provider that does not support it returns UNIMPLEMENTED. Old hosts that
+	// never call it keep the released refs-only Auth map as documentation of
+	// required names, not as a delivery path.
+	BindAuth(ctx context.Context, in *BindAuthRequest, opts ...grpc.CallOption) (*BindAuthResponse, error)
 }
 
 type credentialLoaderClient struct {
@@ -193,6 +201,16 @@ func (c *credentialLoaderClient) ResolveBatch(ctx context.Context, in *ResolveBa
 	return out, nil
 }
 
+func (c *credentialLoaderClient) BindAuth(ctx context.Context, in *BindAuthRequest, opts ...grpc.CallOption) (*BindAuthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BindAuthResponse)
+	err := c.cc.Invoke(ctx, CredentialLoader_BindAuth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CredentialLoaderServer is the server API for CredentialLoader service.
 // All implementations must embed UnimplementedCredentialLoaderServer
 // for forward compatibility.
@@ -245,6 +263,13 @@ type CredentialLoaderServer interface {
 	// failure belongs in that reference's ResolveBatchResult.failure, so one
 	// missing field does not discard everything fetched with it.
 	ResolveBatch(context.Context, *ResolveBatchRequest) (*ResolveBatchResponse, error)
+	// BindAuth delivers the host's bootstrap key set over the authenticated
+	// channel. It is OPTIONAL, and gated: implement it only if you also report
+	// "bind_auth" from Capabilities and declare it in your manifest. A
+	// provider that does not support it returns UNIMPLEMENTED. Old hosts that
+	// never call it keep the released refs-only Auth map as documentation of
+	// required names, not as a delivery path.
+	BindAuth(context.Context, *BindAuthRequest) (*BindAuthResponse, error)
 	mustEmbedUnimplementedCredentialLoaderServer()
 }
 
@@ -278,6 +303,9 @@ func (UnimplementedCredentialLoaderServer) Capabilities(context.Context, *Capabi
 }
 func (UnimplementedCredentialLoaderServer) ResolveBatch(context.Context, *ResolveBatchRequest) (*ResolveBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveBatch not implemented")
+}
+func (UnimplementedCredentialLoaderServer) BindAuth(context.Context, *BindAuthRequest) (*BindAuthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BindAuth not implemented")
 }
 func (UnimplementedCredentialLoaderServer) mustEmbedUnimplementedCredentialLoaderServer() {}
 func (UnimplementedCredentialLoaderServer) testEmbeddedByValue()                          {}
@@ -444,6 +472,24 @@ func _CredentialLoader_ResolveBatch_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CredentialLoader_BindAuth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BindAuthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CredentialLoaderServer).BindAuth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CredentialLoader_BindAuth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CredentialLoaderServer).BindAuth(ctx, req.(*BindAuthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CredentialLoader_ServiceDesc is the grpc.ServiceDesc for CredentialLoader service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -482,6 +528,10 @@ var CredentialLoader_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveBatch",
 			Handler:    _CredentialLoader_ResolveBatch_Handler,
+		},
+		{
+			MethodName: "BindAuth",
+			Handler:    _CredentialLoader_BindAuth_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

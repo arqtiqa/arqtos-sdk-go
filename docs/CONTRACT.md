@@ -317,6 +317,44 @@ A provider that reports `batch_resolve` without implementing
 rather than fanning out to N single resolves behind the host's back — which is
 how a quota disappears with the evidence pointing at the wrong component.
 
+### Bind auth (`CapBindAuth`)
+
+Bootstrap is an **opaque required-key set**, not one token string. Token and
+two-key profiles use the same host API:
+
+```go
+type AuthProfile struct {
+	Required []string
+}
+
+func CheckBootstrap(profile AuthProfile, boot *Bootstrap) error
+func ProfileFromAuth(auth map[string]string) AuthProfile
+
+type AuthBinder interface {
+	BindAuth(ctx context.Context, boot *Bootstrap) error
+}
+```
+
+`CheckBootstrap` names a missing or duplicate field and never embeds material.
+It does **not** read the process environment: an inherited `TOKEN` is not a
+substitute for a key the host did not put in `Bootstrap`.
+
+A connector that can receive that set implements `credential.AuthBinder`
+**and** declares `bind_auth` — in its manifest and from `Capabilities()`.
+Both, or conformance fails it.
+
+**Delivery is `BindAuth`, not argv, an inherited environment, a log line or a
+persisted payload.** The released `manifest.Auth` map stays refs-or-`ENV_NAME`
+only: its **keys** are the required names (`ProfileFromAuth`), its **values**
+are still references, never material. Old hosts that never call `BindAuth`
+keep working against that map. Old providers that do not implement it answer
+`UNIMPLEMENTED` (`cerr.KindUnsupported`) rather than silently ignoring extra
+keys or reading the environment.
+
+The Track-B service carries a `BindAuth` RPC. The host-side stub implements
+`credential.AuthBinder` **exactly when** the provider reports `bind_auth` from
+its `Capabilities` RPC.
+
 ### `Material` and `Lease`
 
 - `credential.Material` holds resolved secret bytes. `String()`/`GoString()`
@@ -342,6 +380,7 @@ capability constants declared in the `credential` package:
 | `CapOIDC` | The connector authenticates to its backing store via OIDC federation (no long-lived credential held by the connector itself). |
 | `CapAppRole` | The connector authenticates to its backing store via an AppRole-style (role-id/secret-id) mechanism. |
 | `CapBatchResolve` | Resolves many references in ONE backend call, via `credential.BatchResolver`. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Batch resolution](#batch-resolution-capbatchresolve). |
+| `CapBindAuth` | Accepts host-supplied bootstrap material via `credential.AuthBinder.BindAuth`. Token and two-key profiles use that same operation. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Bind auth](#bind-auth-capbindauth). |
 
 `CapOIDC` and `CapAppRole` describe how the connector itself authenticates
 outward, not a behavior it exposes inward — hosts use them to reason about the
@@ -454,6 +493,7 @@ if err := rep.Err(); err != nil {
 | `manifest/valid` | the manifest validates, declares this class, and declares only capabilities the class defines |
 | `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
 | `batch/declared-is-implemented` | `batch_resolve` is declared in both places exactly when `credential.BatchResolver` is implemented |
+| `bind_auth/declared-is-implemented` | `bind_auth` is declared in both places exactly when `credential.AuthBinder` is implemented |
 | `resolve/no-empty-success` | every reference the run declares resolvable comes back carrying **material** — not a success carrying nothing, and not a `ResolvedEmpty()` assertion either |
 | `failure/typed` | the reference the run declares unresolvable fails with a classified `cerr.Kind` |
 | `batch/results-match-request` | batch results correspond one-for-one, in order, with the request — reported only for a connector that implements batch |
@@ -1536,8 +1576,8 @@ not healthy.
 
 | Layer | Package | What it is |
 |---|---|---|
-| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
-| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, `ObservationToPB`/`ObservationFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — a `Quota` observation crosses as a status detail, so old peers that ignore details still see the code. |
+| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure`/`BindAuthRequest` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`, `BindAuth`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
+| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, `BootstrapToPB`/`BootstrapFromPB`, `ObservationToPB`/`ObservationFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — a `Quota` observation crosses as a status detail, so old peers that ignore details still see the code. |
 | Transport binding | [`plugin/`](../plugin/plugin.go) | `plugin.Handshake` (the go-plugin magic-cookie handshake both sides must share), `plugin.CredentialLoaderName`, and `plugin.PluginMap(impl)`. A provider passes `plugin.PluginMap(impl)` to `goplugin.ServeConfig.Plugins`; the host's `Dispense(plugin.CredentialLoaderName)` returns a value that itself satisfies `credential.CredentialLoader` — from the host's point of view, calling a Track-B provider looks identical to calling a native connector. |
 | Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yaml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), typed `capabilities` (`[]connector.Capability`, checked against the class vocabulary and against the running connector by `credconform`), `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums, closes the `capabilities` vocabulary against the class in `implements` (so a misspelled capability is refused by the host **before** it loads anything, not only by a full `credconform` run against a live connector), and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
 
@@ -1548,6 +1588,12 @@ or serialization step that could leak them. The host-side `grpcClient` re-wraps
 every returned byte slice with `credential.NewMaterial`, so `String()`
 redaction and `Zero()` wiping hold exactly the same as for a native connector
 — see [`SECURITY.md`](SECURITY.md).
+
+**Bootstrap is the one inbound material path.** `BindAuth` carries the host's
+bootstrap set to the provider for the connector's *own* outward authentication.
+It is not a "which secret" argument and it is not a substitute for `Resolve`.
+Providers MUST NOT log, persist, or copy those bytes into argv or the process
+environment. `Bootstrap.String()` redacts. Old providers answer `UNIMPLEMENTED`.
 
 **Error strings are not redacted.** Unlike `Material`, an `error` a provider
 returns crosses the wire verbatim: `transport.ErrToStatus`/`ErrFromStatus`
@@ -1571,9 +1617,9 @@ fixed map of placeholder `op://` refs, served via `goplugin.Serve`. Copy
 `main.go` as the starting point for a real provider (Infisical, Vault, ...) —
 swap `memLoader`'s method bodies for calls to the actual backing store; the
 `plugin.Handshake` + `plugin.PluginMap(...)` + `goplugin.Serve` wiring does
-not change. It also declares and implements a second capability,
-`CapBatchResolve`, alongside the baseline `CapRead` — a copier sees a
-capability wired correctly end to end, not only the baseline. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
+not change. It also declares and implements `CapBatchResolve` and
+`CapBindAuth` alongside the baseline `CapRead` — a copier sees optional
+capabilities wired correctly end to end, not only the baseline. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
 in the same directory builds that binary and drives it as a real subprocess
 the way a host would — dial, `Dispense`, `Resolve`, `Kill` — confirming the
 process actually exits (dies-with-session); [`conform_test.go`](../examples/credentialloader-provider/conform_test.go)

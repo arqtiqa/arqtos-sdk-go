@@ -73,6 +73,12 @@ const (
 	// MUST implement that interface — see BatchResolver for why a false
 	// declaration is worse than no declaration at all.
 	CapBatchResolve connector.Capability = "batch_resolve"
+	// CapBindAuth declares that this connector accepts host-supplied
+	// bootstrap material via [AuthBinder.BindAuth]. Token and two-key
+	// profiles use that same operation. A connector that declares it MUST
+	// implement the interface. Delivery is the authenticated provider
+	// channel, never argv or an inherited environment.
+	CapBindAuth connector.Capability = "bind_auth"
 )
 
 // knownCapabilities is the closed capability vocabulary of this connector
@@ -80,7 +86,7 @@ const (
 // capability a host does not recognise is a capability the host will not use,
 // and a typo is indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
-	CapRead, CapLease, CapRotate, CapOIDC, CapAppRole, CapBatchResolve,
+	CapRead, CapLease, CapRotate, CapOIDC, CapAppRole, CapBatchResolve, CapBindAuth,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for
@@ -136,8 +142,9 @@ func (l Lease) Expired(now time.Time) bool { return !now.Before(l.ExpiresAt) }
 // [Resolution].
 //
 // Optional operations live behind capabilities rather than in this interface:
-// [BatchResolver] behind [CapBatchResolve]. A host type-asserts for them, and
-// a connector that declares one without implementing it fails conformance.
+// [BatchResolver] behind [CapBatchResolve], [AuthBinder] behind [CapBindAuth].
+// A host type-asserts for them, and a connector that declares one without
+// implementing it fails conformance.
 type CredentialLoader interface {
 	connector.Connector
 	Resolve(ctx context.Context, r ref.Ref) (Resolution, error)
