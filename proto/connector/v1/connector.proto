@@ -55,3 +55,18 @@ message CloseRequest {}
 // held. Close is IDEMPOTENT: a second Close, or a Close after the host has
 // already killed the process, is not an error.
 message CloseResponse {}
+
+// QuotaObservation is non-secret quota telemetry attached as a gRPC status
+// detail on RESOURCE_EXHAUSTED. Old peers that ignore details still see the
+// code. Bucket is opaque: token, account, tenant, egress, or unknown — never
+// a provider name. upstream_kind is observed, estimated, or unknown; SDK
+// method calls are not billable requests. Persist only these fields as
+// cooldown metadata — never secret material.
+message QuotaObservation {
+  string bucket = 1;
+  int64 observed_at_unix = 2;
+  int64 retry_at_unix = 3;
+  string provenance = 4;
+  int32 upstream_n = 5;
+  string upstream_kind = 6;
+}
