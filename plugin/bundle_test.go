@@ -140,6 +140,37 @@ func TestGrantBundleDeclaredButNotImplementedAnswersUnsupported(t *testing.T) {
 	}
 }
 
+type batchBundleMemLoader struct{ bundleMemLoader }
+
+func (b *batchBundleMemLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapBatchResolve, credential.CapGrantBundle}
+}
+
+func (b *batchBundleMemLoader) ResolveBatch(ctx context.Context, refs []ref.Ref) ([]credential.BatchResult, error) {
+	out := make([]credential.BatchResult, 0, len(refs))
+	for _, r := range refs {
+		res, err := b.Resolve(ctx, r)
+		if err != nil {
+			failed, _ := credential.BatchFailed(r, err)
+			out = append(out, failed)
+			continue
+		}
+		ok, _ := credential.BatchResolved(r, res)
+		out = append(out, ok)
+	}
+	return out, nil
+}
+
+func TestStubShapeMirrorsBatchAndGrantBundleTogether(t *testing.T) {
+	c := newTestClient(t, &batchBundleMemLoader{bundleMemLoader: bundleMemLoader{memLoader{vals: batchVals()}}})
+	if _, ok := c.(credential.BatchResolver); !ok {
+		t.Fatalf("dispensed %T, want BatchResolver", c)
+	}
+	if _, ok := c.(credential.BundleAcquirer); !ok {
+		t.Fatalf("dispensed %T, want BundleAcquirer", c)
+	}
+}
+
 func TestOldPeerAcquireBundleIsUnimplemented(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

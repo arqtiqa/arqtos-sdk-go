@@ -132,6 +132,54 @@ func TestCompleteBundle_DuplicateAndOverflowFailExplicitly(t *testing.T) {
 	}
 }
 
+func TestCheckBundle_EnforcesCompleteBundleRules(t *testing.T) {
+	a := mustRef(t, "op://<vault>/<item>/<field>")
+	extra := mustRef(t, "op://<other-vault>/<item>/<field>")
+	inv := credential.Inventory{
+		Authority:  "sa-placeholder",
+		Containers: []string{"<vault>"},
+		Keys:       []ref.Ref{a},
+		Coverage:   credential.CoverageDeclared,
+	}
+	va, err := credential.Resolved(credential.NewMaterial([]byte("alpha-secret")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ve, err := credential.Resolved(credential.NewMaterial([]byte("overflow-secret")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overflow := credential.RestoreBundle(credential.BundleMeta{Generation: "g1"}, inv.Coverage, credential.CompletenessComplete, []credential.BundleEntry{
+		credential.BundleValue(a, va),
+		credential.BundleValue(extra, ve),
+	})
+	if _, err := credential.CheckBundle("placeholder-loader", inv, overflow, nil); err == nil {
+		t.Fatal("CheckBundle accepted a scope overflow")
+	}
+	dup := credential.RestoreBundle(credential.BundleMeta{Generation: "g1"}, inv.Coverage, credential.CompletenessComplete, []credential.BundleEntry{
+		credential.BundleValue(a, va),
+		credential.BundleValue(a, va),
+	})
+	if _, err := credential.CheckBundle("placeholder-loader", inv, dup, nil); err == nil {
+		t.Fatal("CheckBundle accepted duplicate identities")
+	}
+	blank := credential.RestoreBundle(credential.BundleMeta{Generation: "g1"}, inv.Coverage, credential.CompletenessComplete, []credential.BundleEntry{
+		credential.BundleValue(a, credential.Resolution{}),
+	})
+	if _, err := credential.CheckBundle("placeholder-loader", inv, blank, nil); err == nil {
+		t.Fatal("CheckBundle accepted an unresolved identity")
+	}
+	badInv := inv
+	badInv.Coverage = credential.CoverageIncomplete
+	ok, err := credential.CompleteBundle(inv, []credential.BundleEntry{credential.BundleValue(a, va)}, credential.BundleMeta{Generation: "g1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := credential.CheckBundle("placeholder-loader", badInv, ok, nil); err == nil {
+		t.Fatal("CheckBundle accepted incomplete coverage")
+	}
+}
+
 func TestBundle_StringRedactsAndZeroWipes(t *testing.T) {
 	a := mustRef(t, "op://<vault>/<item>/<field>")
 	inv := credential.Inventory{

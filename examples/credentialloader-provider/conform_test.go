@@ -21,13 +21,19 @@ import (
 // wiring correctly. Copy this alongside main.go's memLoader as the pattern
 // for verifying your own capability in your own CI.
 func TestMemLoaderIsConformant(t *testing.T) {
+	otherRef := "op://<vault>/<other-item>/<field>"
 	impl := &memLoader{vals: map[string]string{
 		referenceRef: referencePlaceholder,
+		otherRef:     "placeholder-api-token",
 	}}
 
 	resolvable, err := ref.Parse(referenceRef)
 	if err != nil {
 		t.Fatalf("ref.Parse(%q): %v", referenceRef, err)
+	}
+	other, err := ref.Parse(otherRef)
+	if err != nil {
+		t.Fatalf("ref.Parse(%q): %v", otherRef, err)
 	}
 	unresolvable, err := ref.Parse("op://<vault>/<no-such-item>/<field>")
 	if err != nil {
@@ -44,7 +50,7 @@ func TestMemLoaderIsConformant(t *testing.T) {
 
 	rep, err := credconform.Run(context.Background(), impl, credconform.Options{
 		Manifest:     m,
-		Resolvable:   []ref.Ref{resolvable},
+		Resolvable:   []ref.Ref{resolvable, other},
 		Unresolvable: unresolvable,
 	})
 	if err != nil {

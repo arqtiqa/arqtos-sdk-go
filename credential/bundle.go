@@ -57,9 +57,9 @@ type BundleEntry struct {
 	res Resolution
 }
 
-// A Bundle is one logical full-grant acquisition. Ready only when completeness
-// is asserted complete and every enrolled key is present. One acquisition may
-// contain several backend requests.
+// A Bundle is one logical full-grant acquisition. Ready reports asserted
+// completeness with at least one entry; [CheckBundle] applies the enrolled
+// inventory. One acquisition may contain several backend requests.
 type Bundle struct {
 	meta  BundleMeta
 	cov   Coverage
@@ -80,8 +80,8 @@ func (i Inventory) Validate() error {
 	if !i.Coverage.Valid() {
 		return fmt.Errorf("%w: coverage %q", ErrIncompleteInventory, i.Coverage)
 	}
-	if i.Authority == "" || len(i.Keys) == 0 {
-		return fmt.Errorf("%w: authority or keys missing", ErrIncompleteInventory)
+	if i.Authority == "" || len(i.Keys) == 0 || len(i.Containers) == 0 {
+		return fmt.Errorf("%w: authority, containers or keys missing", ErrIncompleteInventory)
 	}
 	seen := map[string]struct{}{}
 	allowed := map[string]struct{}{}
@@ -197,7 +197,7 @@ func CheckBundle(connectorName string, inv Inventory, b Bundle, err error) (Bund
 	if err != nil {
 		return Bundle{}, err
 	}
-	if !b.Ready() {
+	if b.Completeness() != CompletenessComplete {
 		return Bundle{}, &FaultError{
 			Connector: connectorName,
 			Op:        "AcquireBundle",
@@ -205,17 +205,16 @@ func CheckBundle(connectorName string, inv Inventory, b Bundle, err error) (Bund
 			Detail:    "the connector reported a grant bundle that is not complete; a partial page or unspecified completeness is not ready",
 		}
 	}
-	for _, k := range inv.Keys {
-		if _, ok := b.Lookup(k); !ok {
-			return Bundle{}, &FaultError{
-				Connector: connectorName,
-				Op:        "AcquireBundle",
-				Fault:     FaultBundleIncomplete,
-				Detail:    "enrolled key " + k.String() + " is missing from a bundle marked complete",
-			}
+	rebuilt, berr := CompleteBundle(inv, b.Entries(), b.Meta())
+	if berr != nil {
+		return Bundle{}, &FaultError{
+			Connector: connectorName,
+			Op:        "AcquireBundle",
+			Fault:     FaultBundleIncomplete,
+			Detail:    berr.Error(),
 		}
 	}
-	return b, nil
+	return rebuilt, nil
 }
 
 // BundleAcquirer acquires a finite enrolled grant in one logical operation.
