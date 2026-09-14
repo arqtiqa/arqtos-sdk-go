@@ -121,6 +121,9 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	if e.Quota != nil {
+		return fmt.Sprintf("%s: %s: %s", e.Op, e.Kind, e.Quota)
+	}
 	if e.Err != nil {
 		return fmt.Sprintf("%s: %s: %v", e.Op, e.Kind, e.Err)
 	}
@@ -133,7 +136,17 @@ func New(kind Kind, op string, err error) *Error { return &Error{Kind: kind, Op:
 
 // RateLimited is a quota refusal with optional non-secret observation.
 func RateLimited(op string, q Observation, err error) *Error {
-	return &Error{Kind: KindRateLimited, Op: op, Err: err}
+	if !q.Bucket.Valid() {
+		q.Bucket = BucketUnknown
+	}
+	if !q.UpstreamKind.Valid() {
+		q.UpstreamKind = CountUnknown
+	}
+	if !q.Provenance.Valid() {
+		q.Provenance = ProvenanceUnknown
+	}
+	o := q
+	return &Error{Kind: KindRateLimited, Op: op, Err: err, Quota: &o}
 }
 
 // KindOf returns the Kind of the first *Error in the chain, else KindUnknown.
