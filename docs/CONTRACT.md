@@ -355,8 +355,13 @@ does not advertise, rather than silently no-op'ing.
 ## The `cerr.Kind` taxonomy
 
 Every error a contract method returns is a `*cerr.Error{Kind, Op, Err}`.
+An optional `Quota *Observation` carries non-secret bucket, observed-at,
+retry/reset provenance and an upstream-operation count (`observed` /
+`estimated` / `unknown`). SDK method calls are not billable requests.
 Callers classify with `cerr.KindOf(err)` / `cerr.Retryable(err)` /
-`cerr.TripsBreaker(err)` — never by matching on the error string.
+`cerr.TripsBreaker(err)` — never by matching on the error string. When
+`Quota` is set, `Error()` renders the observation and **omits** the wrapped
+cause, so a synthetic credential in `Err` cannot echo.
 
 The vocabulary is **closed**: `cerr.Kinds()` is the whole set, `Kind.Valid()`
 rejects anything outside it, and adding one is a deliberate change to a
@@ -371,7 +376,7 @@ same classification.
 | `KindNotFound` | The referenced secret, scope, or lease does not exist. | no | no |
 | `KindUnauthorized` | The caller/connector identity lacks access — including a backend session that is not signed in. | no | no |
 | `KindUnavailable` | The backing store is transiently unreachable (network, outage). | yes | no |
-| `KindRateLimited` | The backend itself reported a quota or rate limit. | no | **yes** |
+| `KindRateLimited` | The backend itself reported a quota or rate limit. Optional `Quota` names an opaque bucket (`token` / `account` / `tenant` / `egress` / `unknown`) — never a provider name. | no | **yes** |
 | `KindUnsupported` | The operation is not implemented by this connector/capability set. | no | no |
 | `KindInvalid` | The input (a malformed `ref.Ref`, an unknown lease ID, ...) is invalid. | no | no |
 | `KindTimeout` | The operation did not complete within its deadline. | yes | no |
@@ -1532,7 +1537,7 @@ not healthy.
 | Layer | Package | What it is |
 |---|---|---|
 | Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
-| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — errors cross the wire as gRPC status, never as strings for the caller to pattern-match. |
+| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, `ObservationToPB`/`ObservationFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — a `Quota` observation crosses as a status detail, so old peers that ignore details still see the code. |
 | Transport binding | [`plugin/`](../plugin/plugin.go) | `plugin.Handshake` (the go-plugin magic-cookie handshake both sides must share), `plugin.CredentialLoaderName`, and `plugin.PluginMap(impl)`. A provider passes `plugin.PluginMap(impl)` to `goplugin.ServeConfig.Plugins`; the host's `Dispense(plugin.CredentialLoaderName)` returns a value that itself satisfies `credential.CredentialLoader` — from the host's point of view, calling a Track-B provider looks identical to calling a native connector. |
 | Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yaml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), typed `capabilities` (`[]connector.Capability`, checked against the class vocabulary and against the running connector by `credconform`), `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums, closes the `capabilities` vocabulary against the class in `implements` (so a misspelled capability is refused by the host **before** it loads anything, not only by a full `credconform` run against a live connector), and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
 
@@ -1551,6 +1556,14 @@ directions, and a host may log a received error as part of its audit trail.
 A connector author MUST NOT embed secret material in an error string — see
 [`SECURITY.md`](SECURITY.md#track-b-error-strings-cross-the-wire-verbatim)
 for the full rule.
+
+**Quota observations are not secret.** A `KindRateLimited` error may carry a
+`QuotaObservation` status detail (`bucket`, timestamps, provenance, upstream
+count kind). Persist that as cooldown metadata across a restart; do not persist
+material. Old peers that ignore details still see `RESOURCE_EXHAUSTED` and
+reconstruct `KindRateLimited` with `Quota == nil`. Unauthorised and unavailable
+failures stay distinct: they do not grow a quota observation by crossing the
+wire.
 
 **Reference provider.** [`examples/credentialloader-provider/`](../examples/credentialloader-provider/main.go)
 is a complete, vendor-free `CredentialLoader` provider: a `memLoader` over a

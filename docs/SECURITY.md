@@ -126,6 +126,12 @@ the PERMAFROST audit trail above does for every action). Consequently:
 - See [`docs/CONTRACT.md`](CONTRACT.md#track-b-the-out-of-process-wire-contract)
   for how `transport.ErrToStatus`/`ErrFromStatus` map every `cerr.Kind` to a
   gRPC code and carry the message across.
+- `cerr.RateLimited` attaches a non-secret `Observation` (opaque bucket,
+  observed-at, retry/reset provenance, upstream count kind). `Error()` with
+  `Quota` set does **not** echo the wrapped cause. Persist only those fields
+  as cooldown metadata — never a credential, URI or secret-value hash. An old
+  peer without the detail still classifies `RESOURCE_EXHAUSTED` as
+  `KindRateLimited` with `Quota == nil`.
 
 ## Placeholders in examples and docs
 
