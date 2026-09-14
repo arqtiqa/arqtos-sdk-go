@@ -41,15 +41,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CredentialLoader_Resolve_FullMethodName      = "/connector.v1.CredentialLoader/Resolve"
-	CredentialLoader_List_FullMethodName         = "/connector.v1.CredentialLoader/List"
-	CredentialLoader_Lease_FullMethodName        = "/connector.v1.CredentialLoader/Lease"
-	CredentialLoader_Renew_FullMethodName        = "/connector.v1.CredentialLoader/Renew"
-	CredentialLoader_Revoke_FullMethodName       = "/connector.v1.CredentialLoader/Revoke"
-	CredentialLoader_Health_FullMethodName       = "/connector.v1.CredentialLoader/Health"
-	CredentialLoader_Capabilities_FullMethodName = "/connector.v1.CredentialLoader/Capabilities"
-	CredentialLoader_ResolveBatch_FullMethodName = "/connector.v1.CredentialLoader/ResolveBatch"
-	CredentialLoader_BindAuth_FullMethodName     = "/connector.v1.CredentialLoader/BindAuth"
+	CredentialLoader_Resolve_FullMethodName       = "/connector.v1.CredentialLoader/Resolve"
+	CredentialLoader_List_FullMethodName          = "/connector.v1.CredentialLoader/List"
+	CredentialLoader_Lease_FullMethodName         = "/connector.v1.CredentialLoader/Lease"
+	CredentialLoader_Renew_FullMethodName         = "/connector.v1.CredentialLoader/Renew"
+	CredentialLoader_Revoke_FullMethodName        = "/connector.v1.CredentialLoader/Revoke"
+	CredentialLoader_Health_FullMethodName        = "/connector.v1.CredentialLoader/Health"
+	CredentialLoader_Capabilities_FullMethodName  = "/connector.v1.CredentialLoader/Capabilities"
+	CredentialLoader_ResolveBatch_FullMethodName  = "/connector.v1.CredentialLoader/ResolveBatch"
+	CredentialLoader_BindAuth_FullMethodName      = "/connector.v1.CredentialLoader/BindAuth"
+	CredentialLoader_AcquireBundle_FullMethodName = "/connector.v1.CredentialLoader/AcquireBundle"
 )
 
 // CredentialLoaderClient is the client API for CredentialLoader service.
@@ -111,6 +112,17 @@ type CredentialLoaderClient interface {
 	// never call it keep the released refs-only Auth map as documentation of
 	// required names, not as a delivery path.
 	BindAuth(ctx context.Context, in *BindAuthRequest, opts ...grpc.CallOption) (*BindAuthResponse, error)
+	// AcquireBundle loads a finite enrolled grant in ONE logical acquisition.
+	// It is OPTIONAL, and gated: implement it only if you also report
+	// "grant_bundle" from Capabilities and declare it in your manifest. A
+	// provider that does not support it returns UNIMPLEMENTED.
+	//
+	// Completeness zero (unspecified) is NOT ready. Old peers that omit the
+	// field cannot claim a complete grant. A partial page, a duplicate
+	// identity, or a key outside the enrolled containers is a failed
+	// acquisition, not a ready bundle. This is not ResolveBatch: one
+	// acquisition may contain several backend requests.
+	AcquireBundle(ctx context.Context, in *AcquireBundleRequest, opts ...grpc.CallOption) (*AcquireBundleResponse, error)
 }
 
 type credentialLoaderClient struct {
@@ -211,6 +223,16 @@ func (c *credentialLoaderClient) BindAuth(ctx context.Context, in *BindAuthReque
 	return out, nil
 }
 
+func (c *credentialLoaderClient) AcquireBundle(ctx context.Context, in *AcquireBundleRequest, opts ...grpc.CallOption) (*AcquireBundleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquireBundleResponse)
+	err := c.cc.Invoke(ctx, CredentialLoader_AcquireBundle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CredentialLoaderServer is the server API for CredentialLoader service.
 // All implementations must embed UnimplementedCredentialLoaderServer
 // for forward compatibility.
@@ -270,6 +292,17 @@ type CredentialLoaderServer interface {
 	// never call it keep the released refs-only Auth map as documentation of
 	// required names, not as a delivery path.
 	BindAuth(context.Context, *BindAuthRequest) (*BindAuthResponse, error)
+	// AcquireBundle loads a finite enrolled grant in ONE logical acquisition.
+	// It is OPTIONAL, and gated: implement it only if you also report
+	// "grant_bundle" from Capabilities and declare it in your manifest. A
+	// provider that does not support it returns UNIMPLEMENTED.
+	//
+	// Completeness zero (unspecified) is NOT ready. Old peers that omit the
+	// field cannot claim a complete grant. A partial page, a duplicate
+	// identity, or a key outside the enrolled containers is a failed
+	// acquisition, not a ready bundle. This is not ResolveBatch: one
+	// acquisition may contain several backend requests.
+	AcquireBundle(context.Context, *AcquireBundleRequest) (*AcquireBundleResponse, error)
 	mustEmbedUnimplementedCredentialLoaderServer()
 }
 
@@ -306,6 +339,9 @@ func (UnimplementedCredentialLoaderServer) ResolveBatch(context.Context, *Resolv
 }
 func (UnimplementedCredentialLoaderServer) BindAuth(context.Context, *BindAuthRequest) (*BindAuthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BindAuth not implemented")
+}
+func (UnimplementedCredentialLoaderServer) AcquireBundle(context.Context, *AcquireBundleRequest) (*AcquireBundleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcquireBundle not implemented")
 }
 func (UnimplementedCredentialLoaderServer) mustEmbedUnimplementedCredentialLoaderServer() {}
 func (UnimplementedCredentialLoaderServer) testEmbeddedByValue()                          {}
@@ -490,6 +526,24 @@ func _CredentialLoader_BindAuth_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CredentialLoader_AcquireBundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireBundleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CredentialLoaderServer).AcquireBundle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CredentialLoader_AcquireBundle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CredentialLoaderServer).AcquireBundle(ctx, req.(*AcquireBundleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CredentialLoader_ServiceDesc is the grpc.ServiceDesc for CredentialLoader service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -532,6 +586,10 @@ var CredentialLoader_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BindAuth",
 			Handler:    _CredentialLoader_BindAuth_Handler,
+		},
+		{
+			MethodName: "AcquireBundle",
+			Handler:    _CredentialLoader_AcquireBundle_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

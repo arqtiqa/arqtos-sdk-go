@@ -43,6 +43,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type BundleCompleteness int32
+
+const (
+	BundleCompleteness_BUNDLE_COMPLETENESS_UNSPECIFIED BundleCompleteness = 0
+	BundleCompleteness_BUNDLE_COMPLETENESS_COMPLETE    BundleCompleteness = 1
+	BundleCompleteness_BUNDLE_COMPLETENESS_INCOMPLETE  BundleCompleteness = 2
+)
+
+// Enum value maps for BundleCompleteness.
+var (
+	BundleCompleteness_name = map[int32]string{
+		0: "BUNDLE_COMPLETENESS_UNSPECIFIED",
+		1: "BUNDLE_COMPLETENESS_COMPLETE",
+		2: "BUNDLE_COMPLETENESS_INCOMPLETE",
+	}
+	BundleCompleteness_value = map[string]int32{
+		"BUNDLE_COMPLETENESS_UNSPECIFIED": 0,
+		"BUNDLE_COMPLETENESS_COMPLETE":    1,
+		"BUNDLE_COMPLETENESS_INCOMPLETE":  2,
+	}
+)
+
+func (x BundleCompleteness) Enum() *BundleCompleteness {
+	p := new(BundleCompleteness)
+	*p = x
+	return p
+}
+
+func (x BundleCompleteness) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BundleCompleteness) Descriptor() protoreflect.EnumDescriptor {
+	return file_credentialloader_proto_enumTypes[0].Descriptor()
+}
+
+func (BundleCompleteness) Type() protoreflect.EnumType {
+	return &file_credentialloader_proto_enumTypes[0]
+}
+
+func (x BundleCompleteness) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BundleCompleteness.Descriptor instead.
+func (BundleCompleteness) EnumDescriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{0}
+}
+
 // Ref is an op://<vault>/<item>/<field> secret reference: the ADDRESS of a
 // secret, never the secret itself. All three segments are required and
 // non-empty; a host sends only refs, and a provider returns only the material
@@ -1084,6 +1133,254 @@ func (x *ResolveBatchResponse) GetResults() []*ResolveBatchResult {
 	return nil
 }
 
+type GrantInventory struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Authority     string                 `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
+	Containers    []string               `protobuf:"bytes,2,rep,name=containers,proto3" json:"containers,omitempty"`
+	Keys          []*Ref                 `protobuf:"bytes,3,rep,name=keys,proto3" json:"keys,omitempty"`
+	Coverage      string                 `protobuf:"bytes,4,opt,name=coverage,proto3" json:"coverage,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantInventory) Reset() {
+	*x = GrantInventory{}
+	mi := &file_credentialloader_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantInventory) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantInventory) ProtoMessage() {}
+
+func (x *GrantInventory) ProtoReflect() protoreflect.Message {
+	mi := &file_credentialloader_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantInventory.ProtoReflect.Descriptor instead.
+func (*GrantInventory) Descriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GrantInventory) GetAuthority() string {
+	if x != nil {
+		return x.Authority
+	}
+	return ""
+}
+
+func (x *GrantInventory) GetContainers() []string {
+	if x != nil {
+		return x.Containers
+	}
+	return nil
+}
+
+func (x *GrantInventory) GetKeys() []*Ref {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *GrantInventory) GetCoverage() string {
+	if x != nil {
+		return x.Coverage
+	}
+	return ""
+}
+
+type BundleEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Identity      *Ref                   `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	Material      *Material              `protobuf:"bytes,2,opt,name=material,proto3" json:"material,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BundleEntry) Reset() {
+	*x = BundleEntry{}
+	mi := &file_credentialloader_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BundleEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BundleEntry) ProtoMessage() {}
+
+func (x *BundleEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_credentialloader_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BundleEntry.ProtoReflect.Descriptor instead.
+func (*BundleEntry) Descriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *BundleEntry) GetIdentity() *Ref {
+	if x != nil {
+		return x.Identity
+	}
+	return nil
+}
+
+func (x *BundleEntry) GetMaterial() *Material {
+	if x != nil {
+		return x.Material
+	}
+	return nil
+}
+
+type AcquireBundleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Inventory     *GrantInventory        `protobuf:"bytes,1,opt,name=inventory,proto3" json:"inventory,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcquireBundleRequest) Reset() {
+	*x = AcquireBundleRequest{}
+	mi := &file_credentialloader_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcquireBundleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcquireBundleRequest) ProtoMessage() {}
+
+func (x *AcquireBundleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_credentialloader_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcquireBundleRequest.ProtoReflect.Descriptor instead.
+func (*AcquireBundleRequest) Descriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *AcquireBundleRequest) GetInventory() *GrantInventory {
+	if x != nil {
+		return x.Inventory
+	}
+	return nil
+}
+
+type AcquireBundleResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Generation     string                 `protobuf:"bytes,1,opt,name=generation,proto3" json:"generation,omitempty"`
+	Source         string                 `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	AcquiredAtUnix int64                  `protobuf:"varint,3,opt,name=acquired_at_unix,json=acquiredAtUnix,proto3" json:"acquired_at_unix,omitempty"`
+	Coverage       string                 `protobuf:"bytes,4,opt,name=coverage,proto3" json:"coverage,omitempty"`
+	Entries        []*BundleEntry         `protobuf:"bytes,5,rep,name=entries,proto3" json:"entries,omitempty"`
+	Completeness   BundleCompleteness     `protobuf:"varint,6,opt,name=completeness,proto3,enum=connector.v1.BundleCompleteness" json:"completeness,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AcquireBundleResponse) Reset() {
+	*x = AcquireBundleResponse{}
+	mi := &file_credentialloader_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcquireBundleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcquireBundleResponse) ProtoMessage() {}
+
+func (x *AcquireBundleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_credentialloader_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcquireBundleResponse.ProtoReflect.Descriptor instead.
+func (*AcquireBundleResponse) Descriptor() ([]byte, []int) {
+	return file_credentialloader_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AcquireBundleResponse) GetGeneration() string {
+	if x != nil {
+		return x.Generation
+	}
+	return ""
+}
+
+func (x *AcquireBundleResponse) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *AcquireBundleResponse) GetAcquiredAtUnix() int64 {
+	if x != nil {
+		return x.AcquiredAtUnix
+	}
+	return 0
+}
+
+func (x *AcquireBundleResponse) GetCoverage() string {
+	if x != nil {
+		return x.Coverage
+	}
+	return ""
+}
+
+func (x *AcquireBundleResponse) GetEntries() []*BundleEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *AcquireBundleResponse) GetCompleteness() BundleCompleteness {
+	if x != nil {
+		return x.Completeness
+	}
+	return BundleCompleteness_BUNDLE_COMPLETENESS_UNSPECIFIED
+}
+
 var File_credentialloader_proto protoreflect.FileDescriptor
 
 const file_credentialloader_proto_rawDesc = "" +
@@ -1138,7 +1435,32 @@ const file_credentialloader_proto_rawDesc = "" +
 	"\bmaterial\x18\x02 \x01(\v2\x16.connector.v1.MaterialR\bmaterial\x12/\n" +
 	"\afailure\x18\x03 \x01(\v2\x15.connector.v1.FailureR\afailure\"R\n" +
 	"\x14ResolveBatchResponse\x12:\n" +
-	"\aresults\x18\x01 \x03(\v2 .connector.v1.ResolveBatchResultR\aresults2\xa0\x05\n" +
+	"\aresults\x18\x01 \x03(\v2 .connector.v1.ResolveBatchResultR\aresults\"\x91\x01\n" +
+	"\x0eGrantInventory\x12\x1c\n" +
+	"\tauthority\x18\x01 \x01(\tR\tauthority\x12\x1e\n" +
+	"\n" +
+	"containers\x18\x02 \x03(\tR\n" +
+	"containers\x12%\n" +
+	"\x04keys\x18\x03 \x03(\v2\x11.connector.v1.RefR\x04keys\x12\x1a\n" +
+	"\bcoverage\x18\x04 \x01(\tR\bcoverage\"p\n" +
+	"\vBundleEntry\x12-\n" +
+	"\bidentity\x18\x01 \x01(\v2\x11.connector.v1.RefR\bidentity\x122\n" +
+	"\bmaterial\x18\x02 \x01(\v2\x16.connector.v1.MaterialR\bmaterial\"R\n" +
+	"\x14AcquireBundleRequest\x12:\n" +
+	"\tinventory\x18\x01 \x01(\v2\x1c.connector.v1.GrantInventoryR\tinventory\"\x90\x02\n" +
+	"\x15AcquireBundleResponse\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x01 \x01(\tR\n" +
+	"generation\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\x12(\n" +
+	"\x10acquired_at_unix\x18\x03 \x01(\x03R\x0eacquiredAtUnix\x12\x1a\n" +
+	"\bcoverage\x18\x04 \x01(\tR\bcoverage\x123\n" +
+	"\aentries\x18\x05 \x03(\v2\x19.connector.v1.BundleEntryR\aentries\x12D\n" +
+	"\fcompleteness\x18\x06 \x01(\x0e2 .connector.v1.BundleCompletenessR\fcompleteness*\x7f\n" +
+	"\x12BundleCompleteness\x12#\n" +
+	"\x1fBUNDLE_COMPLETENESS_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cBUNDLE_COMPLETENESS_COMPLETE\x10\x01\x12\"\n" +
+	"\x1eBUNDLE_COMPLETENESS_INCOMPLETE\x10\x022\xfa\x05\n" +
 	"\x10CredentialLoader\x12F\n" +
 	"\aResolve\x12\x1c.connector.v1.ResolveRequest\x1a\x1d.connector.v1.ResolveResponse\x12=\n" +
 	"\x04List\x12\x19.connector.v1.ListRequest\x1a\x1a.connector.v1.ListResponse\x12@\n" +
@@ -1148,7 +1470,8 @@ const file_credentialloader_proto_rawDesc = "" +
 	"\x06Health\x12\x1b.connector.v1.HealthRequest\x1a\x1c.connector.v1.HealthResponse\x12U\n" +
 	"\fCapabilities\x12!.connector.v1.CapabilitiesRequest\x1a\".connector.v1.CapabilitiesResponse\x12U\n" +
 	"\fResolveBatch\x12!.connector.v1.ResolveBatchRequest\x1a\".connector.v1.ResolveBatchResponse\x12I\n" +
-	"\bBindAuth\x12\x1d.connector.v1.BindAuthRequest\x1a\x1e.connector.v1.BindAuthResponseB.Z,github.com/arqtiqa/arqtos-sdk-go/connectorpbb\x06proto3"
+	"\bBindAuth\x12\x1d.connector.v1.BindAuthRequest\x1a\x1e.connector.v1.BindAuthResponse\x12X\n" +
+	"\rAcquireBundle\x12\".connector.v1.AcquireBundleRequest\x1a#.connector.v1.AcquireBundleResponseB.Z,github.com/arqtiqa/arqtos-sdk-go/connectorpbb\x06proto3"
 
 var (
 	file_credentialloader_proto_rawDescOnce sync.Once
@@ -1162,72 +1485,86 @@ func file_credentialloader_proto_rawDescGZIP() []byte {
 	return file_credentialloader_proto_rawDescData
 }
 
-var file_credentialloader_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_credentialloader_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_credentialloader_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_credentialloader_proto_goTypes = []any{
-	(*Ref)(nil),                  // 0: connector.v1.Ref
-	(*Material)(nil),             // 1: connector.v1.Material
-	(*Lease)(nil),                // 2: connector.v1.Lease
-	(*Failure)(nil),              // 3: connector.v1.Failure
-	(*ResolveRequest)(nil),       // 4: connector.v1.ResolveRequest
-	(*ResolveResponse)(nil),      // 5: connector.v1.ResolveResponse
-	(*ListRequest)(nil),          // 6: connector.v1.ListRequest
-	(*ListResponse)(nil),         // 7: connector.v1.ListResponse
-	(*LeaseRequest)(nil),         // 8: connector.v1.LeaseRequest
-	(*LeaseResponse)(nil),        // 9: connector.v1.LeaseResponse
-	(*RenewRequest)(nil),         // 10: connector.v1.RenewRequest
-	(*RenewResponse)(nil),        // 11: connector.v1.RenewResponse
-	(*RevokeRequest)(nil),        // 12: connector.v1.RevokeRequest
-	(*RevokeResponse)(nil),       // 13: connector.v1.RevokeResponse
-	(*BindAuthRequest)(nil),      // 14: connector.v1.BindAuthRequest
-	(*BootstrapEntry)(nil),       // 15: connector.v1.BootstrapEntry
-	(*BindAuthResponse)(nil),     // 16: connector.v1.BindAuthResponse
-	(*ResolveBatchRequest)(nil),  // 17: connector.v1.ResolveBatchRequest
-	(*ResolveBatchResult)(nil),   // 18: connector.v1.ResolveBatchResult
-	(*ResolveBatchResponse)(nil), // 19: connector.v1.ResolveBatchResponse
-	(*HealthRequest)(nil),        // 20: connector.v1.HealthRequest
-	(*CapabilitiesRequest)(nil),  // 21: connector.v1.CapabilitiesRequest
-	(*HealthResponse)(nil),       // 22: connector.v1.HealthResponse
-	(*CapabilitiesResponse)(nil), // 23: connector.v1.CapabilitiesResponse
+	(BundleCompleteness)(0),       // 0: connector.v1.BundleCompleteness
+	(*Ref)(nil),                   // 1: connector.v1.Ref
+	(*Material)(nil),              // 2: connector.v1.Material
+	(*Lease)(nil),                 // 3: connector.v1.Lease
+	(*Failure)(nil),               // 4: connector.v1.Failure
+	(*ResolveRequest)(nil),        // 5: connector.v1.ResolveRequest
+	(*ResolveResponse)(nil),       // 6: connector.v1.ResolveResponse
+	(*ListRequest)(nil),           // 7: connector.v1.ListRequest
+	(*ListResponse)(nil),          // 8: connector.v1.ListResponse
+	(*LeaseRequest)(nil),          // 9: connector.v1.LeaseRequest
+	(*LeaseResponse)(nil),         // 10: connector.v1.LeaseResponse
+	(*RenewRequest)(nil),          // 11: connector.v1.RenewRequest
+	(*RenewResponse)(nil),         // 12: connector.v1.RenewResponse
+	(*RevokeRequest)(nil),         // 13: connector.v1.RevokeRequest
+	(*RevokeResponse)(nil),        // 14: connector.v1.RevokeResponse
+	(*BindAuthRequest)(nil),       // 15: connector.v1.BindAuthRequest
+	(*BootstrapEntry)(nil),        // 16: connector.v1.BootstrapEntry
+	(*BindAuthResponse)(nil),      // 17: connector.v1.BindAuthResponse
+	(*ResolveBatchRequest)(nil),   // 18: connector.v1.ResolveBatchRequest
+	(*ResolveBatchResult)(nil),    // 19: connector.v1.ResolveBatchResult
+	(*ResolveBatchResponse)(nil),  // 20: connector.v1.ResolveBatchResponse
+	(*GrantInventory)(nil),        // 21: connector.v1.GrantInventory
+	(*BundleEntry)(nil),           // 22: connector.v1.BundleEntry
+	(*AcquireBundleRequest)(nil),  // 23: connector.v1.AcquireBundleRequest
+	(*AcquireBundleResponse)(nil), // 24: connector.v1.AcquireBundleResponse
+	(*HealthRequest)(nil),         // 25: connector.v1.HealthRequest
+	(*CapabilitiesRequest)(nil),   // 26: connector.v1.CapabilitiesRequest
+	(*HealthResponse)(nil),        // 27: connector.v1.HealthResponse
+	(*CapabilitiesResponse)(nil),  // 28: connector.v1.CapabilitiesResponse
 }
 var file_credentialloader_proto_depIdxs = []int32{
-	0,  // 0: connector.v1.ResolveRequest.ref:type_name -> connector.v1.Ref
-	1,  // 1: connector.v1.ResolveResponse.material:type_name -> connector.v1.Material
-	0,  // 2: connector.v1.ListResponse.refs:type_name -> connector.v1.Ref
-	0,  // 3: connector.v1.LeaseRequest.ref:type_name -> connector.v1.Ref
-	1,  // 4: connector.v1.LeaseResponse.material:type_name -> connector.v1.Material
-	2,  // 5: connector.v1.LeaseResponse.lease:type_name -> connector.v1.Lease
-	2,  // 6: connector.v1.RenewRequest.lease:type_name -> connector.v1.Lease
-	2,  // 7: connector.v1.RenewResponse.lease:type_name -> connector.v1.Lease
-	2,  // 8: connector.v1.RevokeRequest.lease:type_name -> connector.v1.Lease
-	15, // 9: connector.v1.BindAuthRequest.keys:type_name -> connector.v1.BootstrapEntry
-	0,  // 10: connector.v1.ResolveBatchRequest.refs:type_name -> connector.v1.Ref
-	0,  // 11: connector.v1.ResolveBatchResult.ref:type_name -> connector.v1.Ref
-	1,  // 12: connector.v1.ResolveBatchResult.material:type_name -> connector.v1.Material
-	3,  // 13: connector.v1.ResolveBatchResult.failure:type_name -> connector.v1.Failure
-	18, // 14: connector.v1.ResolveBatchResponse.results:type_name -> connector.v1.ResolveBatchResult
-	4,  // 15: connector.v1.CredentialLoader.Resolve:input_type -> connector.v1.ResolveRequest
-	6,  // 16: connector.v1.CredentialLoader.List:input_type -> connector.v1.ListRequest
-	8,  // 17: connector.v1.CredentialLoader.Lease:input_type -> connector.v1.LeaseRequest
-	10, // 18: connector.v1.CredentialLoader.Renew:input_type -> connector.v1.RenewRequest
-	12, // 19: connector.v1.CredentialLoader.Revoke:input_type -> connector.v1.RevokeRequest
-	20, // 20: connector.v1.CredentialLoader.Health:input_type -> connector.v1.HealthRequest
-	21, // 21: connector.v1.CredentialLoader.Capabilities:input_type -> connector.v1.CapabilitiesRequest
-	17, // 22: connector.v1.CredentialLoader.ResolveBatch:input_type -> connector.v1.ResolveBatchRequest
-	14, // 23: connector.v1.CredentialLoader.BindAuth:input_type -> connector.v1.BindAuthRequest
-	5,  // 24: connector.v1.CredentialLoader.Resolve:output_type -> connector.v1.ResolveResponse
-	7,  // 25: connector.v1.CredentialLoader.List:output_type -> connector.v1.ListResponse
-	9,  // 26: connector.v1.CredentialLoader.Lease:output_type -> connector.v1.LeaseResponse
-	11, // 27: connector.v1.CredentialLoader.Renew:output_type -> connector.v1.RenewResponse
-	13, // 28: connector.v1.CredentialLoader.Revoke:output_type -> connector.v1.RevokeResponse
-	22, // 29: connector.v1.CredentialLoader.Health:output_type -> connector.v1.HealthResponse
-	23, // 30: connector.v1.CredentialLoader.Capabilities:output_type -> connector.v1.CapabilitiesResponse
-	19, // 31: connector.v1.CredentialLoader.ResolveBatch:output_type -> connector.v1.ResolveBatchResponse
-	16, // 32: connector.v1.CredentialLoader.BindAuth:output_type -> connector.v1.BindAuthResponse
-	24, // [24:33] is the sub-list for method output_type
-	15, // [15:24] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	1,  // 0: connector.v1.ResolveRequest.ref:type_name -> connector.v1.Ref
+	2,  // 1: connector.v1.ResolveResponse.material:type_name -> connector.v1.Material
+	1,  // 2: connector.v1.ListResponse.refs:type_name -> connector.v1.Ref
+	1,  // 3: connector.v1.LeaseRequest.ref:type_name -> connector.v1.Ref
+	2,  // 4: connector.v1.LeaseResponse.material:type_name -> connector.v1.Material
+	3,  // 5: connector.v1.LeaseResponse.lease:type_name -> connector.v1.Lease
+	3,  // 6: connector.v1.RenewRequest.lease:type_name -> connector.v1.Lease
+	3,  // 7: connector.v1.RenewResponse.lease:type_name -> connector.v1.Lease
+	3,  // 8: connector.v1.RevokeRequest.lease:type_name -> connector.v1.Lease
+	16, // 9: connector.v1.BindAuthRequest.keys:type_name -> connector.v1.BootstrapEntry
+	1,  // 10: connector.v1.ResolveBatchRequest.refs:type_name -> connector.v1.Ref
+	1,  // 11: connector.v1.ResolveBatchResult.ref:type_name -> connector.v1.Ref
+	2,  // 12: connector.v1.ResolveBatchResult.material:type_name -> connector.v1.Material
+	4,  // 13: connector.v1.ResolveBatchResult.failure:type_name -> connector.v1.Failure
+	19, // 14: connector.v1.ResolveBatchResponse.results:type_name -> connector.v1.ResolveBatchResult
+	1,  // 15: connector.v1.GrantInventory.keys:type_name -> connector.v1.Ref
+	1,  // 16: connector.v1.BundleEntry.identity:type_name -> connector.v1.Ref
+	2,  // 17: connector.v1.BundleEntry.material:type_name -> connector.v1.Material
+	21, // 18: connector.v1.AcquireBundleRequest.inventory:type_name -> connector.v1.GrantInventory
+	22, // 19: connector.v1.AcquireBundleResponse.entries:type_name -> connector.v1.BundleEntry
+	0,  // 20: connector.v1.AcquireBundleResponse.completeness:type_name -> connector.v1.BundleCompleteness
+	5,  // 21: connector.v1.CredentialLoader.Resolve:input_type -> connector.v1.ResolveRequest
+	7,  // 22: connector.v1.CredentialLoader.List:input_type -> connector.v1.ListRequest
+	9,  // 23: connector.v1.CredentialLoader.Lease:input_type -> connector.v1.LeaseRequest
+	11, // 24: connector.v1.CredentialLoader.Renew:input_type -> connector.v1.RenewRequest
+	13, // 25: connector.v1.CredentialLoader.Revoke:input_type -> connector.v1.RevokeRequest
+	25, // 26: connector.v1.CredentialLoader.Health:input_type -> connector.v1.HealthRequest
+	26, // 27: connector.v1.CredentialLoader.Capabilities:input_type -> connector.v1.CapabilitiesRequest
+	18, // 28: connector.v1.CredentialLoader.ResolveBatch:input_type -> connector.v1.ResolveBatchRequest
+	15, // 29: connector.v1.CredentialLoader.BindAuth:input_type -> connector.v1.BindAuthRequest
+	23, // 30: connector.v1.CredentialLoader.AcquireBundle:input_type -> connector.v1.AcquireBundleRequest
+	6,  // 31: connector.v1.CredentialLoader.Resolve:output_type -> connector.v1.ResolveResponse
+	8,  // 32: connector.v1.CredentialLoader.List:output_type -> connector.v1.ListResponse
+	10, // 33: connector.v1.CredentialLoader.Lease:output_type -> connector.v1.LeaseResponse
+	12, // 34: connector.v1.CredentialLoader.Renew:output_type -> connector.v1.RenewResponse
+	14, // 35: connector.v1.CredentialLoader.Revoke:output_type -> connector.v1.RevokeResponse
+	27, // 36: connector.v1.CredentialLoader.Health:output_type -> connector.v1.HealthResponse
+	28, // 37: connector.v1.CredentialLoader.Capabilities:output_type -> connector.v1.CapabilitiesResponse
+	20, // 38: connector.v1.CredentialLoader.ResolveBatch:output_type -> connector.v1.ResolveBatchResponse
+	17, // 39: connector.v1.CredentialLoader.BindAuth:output_type -> connector.v1.BindAuthResponse
+	24, // 40: connector.v1.CredentialLoader.AcquireBundle:output_type -> connector.v1.AcquireBundleResponse
+	31, // [31:41] is the sub-list for method output_type
+	21, // [21:31] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_credentialloader_proto_init() }
@@ -1241,13 +1578,14 @@ func file_credentialloader_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_credentialloader_proto_rawDesc), len(file_credentialloader_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   20,
+			NumEnums:      1,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_credentialloader_proto_goTypes,
 		DependencyIndexes: file_credentialloader_proto_depIdxs,
+		EnumInfos:         file_credentialloader_proto_enumTypes,
 		MessageInfos:      file_credentialloader_proto_msgTypes,
 	}.Build()
 	File_credentialloader_proto = out.File
