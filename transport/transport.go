@@ -235,6 +235,9 @@ var codeToKind = func() map[codes.Code]cerr.Kind {
 // An error with no known Kind (including a plain, non-cerr error, or
 // cerr.KindUnknown) maps to codes.Unknown. The message is preserved
 // verbatim; nil in yields nil out.
+//
+// A *cerr.Error that carries Quota attaches it as a QuotaObservation
+// status detail. Old peers that ignore details still see the gRPC code.
 func ErrToStatus(err error) error {
 	if err == nil {
 		return nil
@@ -243,13 +246,21 @@ func ErrToStatus(err error) error {
 	if !ok {
 		code = codes.Unknown
 	}
-	return status.Error(code, err.Error())
+	st := status.New(code, err.Error())
+	var ce *cerr.Error
+	if errors.As(err, &ce) && ce.Quota != nil {
+		if with, derr := st.WithDetails(ObservationToPB(*ce.Quota)); derr == nil {
+			return with.Err()
+		}
+	}
+	return st.Err()
 }
 
 // ErrFromStatus reconstructs a *cerr.Error from a gRPC status error,
 // mapping the status code back to a cerr.Kind via codeToKind. An err that
 // is not a gRPC status error is wrapped as cerr.KindUnknown; nil in yields
-// nil out.
+// nil out. A QuotaObservation detail is restored when present; old peers
+// that sent none leave Quota nil.
 func ErrFromStatus(err error) error {
 	if err == nil {
 		return nil
@@ -262,5 +273,13 @@ func ErrFromStatus(err error) error {
 	if !ok {
 		kind = cerr.KindUnknown
 	}
-	return cerr.New(kind, "", errors.New(st.Message()))
+	out := cerr.New(kind, "", errors.New(st.Message()))
+	for _, d := range st.Details() {
+		pb, ok := d.(*connectorpb.QuotaObservation)
+		if !ok {
+			continue
+		}
+		out.Quota = ObservationFromPB(pb)
+	}
+	return out
 }

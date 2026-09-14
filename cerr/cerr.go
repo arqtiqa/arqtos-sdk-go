@@ -114,12 +114,16 @@ func (k Kind) String() string {
 }
 
 type Error struct {
-	Kind Kind
-	Op   string // the contract op, e.g. "Resolve"
-	Err  error
+	Kind  Kind
+	Op    string // the contract op, e.g. "Resolve"
+	Err   error
+	Quota *Observation
 }
 
 func (e *Error) Error() string {
+	if e.Quota != nil {
+		return fmt.Sprintf("%s: %s: %s", e.Op, e.Kind, e.Quota)
+	}
 	if e.Err != nil {
 		return fmt.Sprintf("%s: %s: %v", e.Op, e.Kind, e.Err)
 	}
@@ -129,6 +133,21 @@ func (e *Error) Error() string {
 func (e *Error) Unwrap() error { return e.Err }
 
 func New(kind Kind, op string, err error) *Error { return &Error{Kind: kind, Op: op, Err: err} }
+
+// RateLimited is a quota refusal with optional non-secret observation.
+func RateLimited(op string, q Observation, err error) *Error {
+	if !q.Bucket.Valid() {
+		q.Bucket = BucketUnknown
+	}
+	if !q.UpstreamKind.Valid() {
+		q.UpstreamKind = CountUnknown
+	}
+	if !q.Provenance.Valid() {
+		q.Provenance = ProvenanceUnknown
+	}
+	o := q
+	return &Error{Kind: KindRateLimited, Op: op, Err: err, Quota: &o}
+}
 
 // KindOf returns the Kind of the first *Error in the chain, else KindUnknown.
 // An error that carries no Kind is Unknown, which is the safe default — see

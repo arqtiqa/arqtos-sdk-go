@@ -296,6 +296,96 @@ func (*CloseResponse) Descriptor() ([]byte, []int) {
 	return file_connector_proto_rawDescGZIP(), []int{5}
 }
 
+// QuotaObservation is non-secret quota telemetry attached as a gRPC status
+// detail on RESOURCE_EXHAUSTED. Old peers that ignore details still see the
+// code. Bucket is opaque: token, account, tenant, egress, or unknown — never
+// a provider name. upstream_kind is observed, estimated, or unknown; SDK
+// method calls are not billable requests. Persist only these fields as
+// cooldown metadata — never secret material.
+type QuotaObservation struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Bucket         string                 `protobuf:"bytes,1,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	ObservedAtUnix int64                  `protobuf:"varint,2,opt,name=observed_at_unix,json=observedAtUnix,proto3" json:"observed_at_unix,omitempty"`
+	RetryAtUnix    int64                  `protobuf:"varint,3,opt,name=retry_at_unix,json=retryAtUnix,proto3" json:"retry_at_unix,omitempty"`
+	Provenance     string                 `protobuf:"bytes,4,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	UpstreamN      int32                  `protobuf:"varint,5,opt,name=upstream_n,json=upstreamN,proto3" json:"upstream_n,omitempty"`
+	UpstreamKind   string                 `protobuf:"bytes,6,opt,name=upstream_kind,json=upstreamKind,proto3" json:"upstream_kind,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *QuotaObservation) Reset() {
+	*x = QuotaObservation{}
+	mi := &file_connector_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuotaObservation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuotaObservation) ProtoMessage() {}
+
+func (x *QuotaObservation) ProtoReflect() protoreflect.Message {
+	mi := &file_connector_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuotaObservation.ProtoReflect.Descriptor instead.
+func (*QuotaObservation) Descriptor() ([]byte, []int) {
+	return file_connector_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *QuotaObservation) GetBucket() string {
+	if x != nil {
+		return x.Bucket
+	}
+	return ""
+}
+
+func (x *QuotaObservation) GetObservedAtUnix() int64 {
+	if x != nil {
+		return x.ObservedAtUnix
+	}
+	return 0
+}
+
+func (x *QuotaObservation) GetRetryAtUnix() int64 {
+	if x != nil {
+		return x.RetryAtUnix
+	}
+	return 0
+}
+
+func (x *QuotaObservation) GetProvenance() string {
+	if x != nil {
+		return x.Provenance
+	}
+	return ""
+}
+
+func (x *QuotaObservation) GetUpstreamN() int32 {
+	if x != nil {
+		return x.UpstreamN
+	}
+	return 0
+}
+
+func (x *QuotaObservation) GetUpstreamKind() string {
+	if x != nil {
+		return x.UpstreamKind
+	}
+	return ""
+}
+
 var File_connector_proto protoreflect.FileDescriptor
 
 const file_connector_proto_rawDesc = "" +
@@ -309,7 +399,17 @@ const file_connector_proto_rawDesc = "" +
 	"\x14CapabilitiesResponse\x12\"\n" +
 	"\fcapabilities\x18\x01 \x03(\tR\fcapabilities\"\x0e\n" +
 	"\fCloseRequest\"\x0f\n" +
-	"\rCloseResponseB.Z,github.com/arqtiqa/arqtos-sdk-go/connectorpbb\x06proto3"
+	"\rCloseResponse\"\xdc\x01\n" +
+	"\x10QuotaObservation\x12\x16\n" +
+	"\x06bucket\x18\x01 \x01(\tR\x06bucket\x12(\n" +
+	"\x10observed_at_unix\x18\x02 \x01(\x03R\x0eobservedAtUnix\x12\"\n" +
+	"\rretry_at_unix\x18\x03 \x01(\x03R\vretryAtUnix\x12\x1e\n" +
+	"\n" +
+	"provenance\x18\x04 \x01(\tR\n" +
+	"provenance\x12\x1d\n" +
+	"\n" +
+	"upstream_n\x18\x05 \x01(\x05R\tupstreamN\x12#\n" +
+	"\rupstream_kind\x18\x06 \x01(\tR\fupstreamKindB.Z,github.com/arqtiqa/arqtos-sdk-go/connectorpbb\x06proto3"
 
 var (
 	file_connector_proto_rawDescOnce sync.Once
@@ -323,7 +423,7 @@ func file_connector_proto_rawDescGZIP() []byte {
 	return file_connector_proto_rawDescData
 }
 
-var file_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_connector_proto_goTypes = []any{
 	(*HealthRequest)(nil),        // 0: connector.v1.HealthRequest
 	(*HealthResponse)(nil),       // 1: connector.v1.HealthResponse
@@ -331,6 +431,7 @@ var file_connector_proto_goTypes = []any{
 	(*CapabilitiesResponse)(nil), // 3: connector.v1.CapabilitiesResponse
 	(*CloseRequest)(nil),         // 4: connector.v1.CloseRequest
 	(*CloseResponse)(nil),        // 5: connector.v1.CloseResponse
+	(*QuotaObservation)(nil),     // 6: connector.v1.QuotaObservation
 }
 var file_connector_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -351,7 +452,7 @@ func file_connector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_connector_proto_rawDesc), len(file_connector_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
