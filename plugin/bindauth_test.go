@@ -3,13 +3,21 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+
 	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
+	"github.com/arqtiqa/arqtos-sdk-go/connectorpb"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
+	"github.com/arqtiqa/arqtos-sdk-go/transport"
 )
 
 type authMemLoader struct {
@@ -122,6 +130,28 @@ func TestOldPeerWithoutBindAuthIsUnsupportedNotSilent(t *testing.T) {
 	c := newTestClient(t, &memLoader{vals: batchVals()})
 	if _, ok := c.(credential.AuthBinder); ok {
 		t.Fatal("an old peer must not grow BindAuth by default")
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	connectorpb.RegisterCredentialLoaderServer(srv, &connectorpb.UnimplementedCredentialLoaderServer{})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = connectorpb.NewCredentialLoaderClient(conn).BindAuth(context.Background(), &connectorpb.BindAuthRequest{})
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.Unimplemented {
+		t.Fatalf("old peer BindAuth: %v, want Unimplemented", err)
+	}
+	if cerr.KindOf(transport.ErrFromStatus(err)) != cerr.KindUnsupported {
+		t.Fatalf("KindOf = %v, want KindUnsupported", cerr.KindOf(transport.ErrFromStatus(err)))
 	}
 }
 

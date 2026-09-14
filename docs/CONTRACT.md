@@ -1617,9 +1617,9 @@ fixed map of placeholder `op://` refs, served via `goplugin.Serve`. Copy
 `main.go` as the starting point for a real provider (Infisical, Vault, ...) —
 swap `memLoader`'s method bodies for calls to the actual backing store; the
 `plugin.Handshake` + `plugin.PluginMap(...)` + `goplugin.Serve` wiring does
-not change. It also declares and implements a second capability,
-`CapBatchResolve`, alongside the baseline `CapRead` — a copier sees a
-capability wired correctly end to end, not only the baseline. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
+not change. It also declares and implements `CapBatchResolve` and
+`CapBindAuth` alongside the baseline `CapRead` — a copier sees optional
+capabilities wired correctly end to end, not only the baseline. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
 in the same directory builds that binary and drives it as a real subprocess
 the way a host would — dial, `Dispense`, `Resolve`, `Kill` — confirming the
 process actually exits (dies-with-session); [`conform_test.go`](../examples/credentialloader-provider/conform_test.go)
