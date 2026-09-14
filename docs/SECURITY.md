@@ -10,15 +10,23 @@ first-party or third-party.
 ## Refs-only in
 
 A `CredentialLoader` method never accepts raw credential material as an
-argument. Every input that identifies "which secret" is a
+argument **when identifying which secret to resolve**. Every input that
+identifies "which secret" is a
 [`ref.Ref`](../ref/ref.go) — an `op://<vault>/<item>/<field>` reference — never the
-secret value itself. This is enforced structurally: no contract method in this
-SDK takes anything but a `ref.Ref` (or a `Lease`, which is a handle, not
-material) as its "which secret" argument.
+secret value itself. This is enforced structurally: `Resolve` / `List` /
+`Lease` take a `ref.Ref` (or a `Lease`, which is a handle, not material).
 
-If you find yourself wanting to pass a secret value *into* a connector method,
-that is a sign the design is wrong — plumb a `ref.Ref` through instead and let
-the connector resolve it.
+**`BindAuth` is the one inbound material path**, and it is not a "which secret"
+argument. The host supplies the connector's own outward-auth bootstrap — a
+token, or `client_id` + `client_secret`, same API — over the authenticated
+provider channel. That set MUST NOT arrive via argv, an inherited environment,
+a log line, or a persisted payload. `credential.CheckBootstrap` refuses a
+missing or duplicate key by **field name** and never embeds material.
+`Bootstrap.String()` / `GoString()` redact; `Zero()` wipes.
+
+If you find yourself wanting to pass a secret value *into* `Resolve`, that is a
+sign the design is wrong — plumb a `ref.Ref` through instead and let the
+connector resolve it. Do not "fix" a missing bootstrap key by reading `os.Getenv`.
 
 ## `Material` redacted + wiped
 

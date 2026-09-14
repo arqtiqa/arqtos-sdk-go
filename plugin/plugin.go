@@ -18,8 +18,9 @@
 //
 // The dispensed client also mirrors the provider's OPTIONAL operations: it
 // satisfies credential.BatchResolver exactly when the provider reports
-// credential.CapBatchResolve, so a host discovers batch by type assertion
-// the same way it would on a native connector.
+// credential.CapBatchResolve, and credential.AuthBinder exactly when it
+// reports credential.CapBindAuth, so a host discovers either by type
+// assertion the same way it would on a native connector.
 package plugin
 
 import (
@@ -90,29 +91,29 @@ func (p *CredentialLoaderPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Serv
 // native connector works, and the Track-B stub has to behave the same way or
 // every host grows a second code path for providers. So the client dispensed
 // here implements credential.BatchResolver exactly when the provider reports
-// [credential.CapBatchResolve] from its Capabilities RPC, and does not when
-// it does not.
+// [credential.CapBatchResolve], credential.AuthBinder exactly when it reports
+// [credential.CapBindAuth], both when it reports both, and neither otherwise.
 //
-// Always implementing it would be worse than never: a provider that cannot
-// batch would then look implemented-but-undeclared to conformance, failing
-// every honest non-batching provider. Never implementing it is the hole this
-// replaces — CapBatchResolve was declarable but structurally unreachable
-// over the wire.
-//
-// This is also why credconform.CheckBatchDeclared cannot, for a provider
-// dispensed by this method, catch a backend that genuinely supports batching
-// while declaring otherwise: this stub's ability to satisfy
-// credential.BatchResolver IS the provider's declaration, read back. There is
-// no independent signal here for that check to compare it against — see
-// credconform.CheckBatchDeclared's doc for the consequence and for which
-// check catches the adjacent Track-B failure (a declaration this stub
-// believed that the provider's own ResolveBatch then refuses).
+// Always implementing either would be worse than never: a provider that
+// cannot batch or bind would then look implemented-but-undeclared to
+// conformance, failing every honest peer. Never implementing them is the
+// hole this replaces — the capability was declarable but structurally
+// unreachable over the wire.
 func (p *CredentialLoaderPlugin) GRPCClient(ctx context.Context, _ *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
 	c := &grpcClient{client: connectorpb.NewCredentialLoaderClient(conn), name: p.Name}
-	if c.declaresBatch(ctx) {
+	caps := c.probeCaps(ctx)
+	batch := caps.Has(credential.CapBatchResolve)
+	auth := caps.Has(credential.CapBindAuth)
+	switch {
+	case batch && auth:
+		return &batchAuthGRPCClient{grpcClient: c}, nil
+	case batch:
 		return &batchGRPCClient{grpcClient: c}, nil
+	case auth:
+		return &authGRPCClient{grpcClient: c}, nil
+	default:
+		return c, nil
 	}
-	return c, nil
 }
 
 // grpcServer adapts a credential.CredentialLoader implementation to the
@@ -333,32 +334,23 @@ func (c *grpcClient) Close() error { return nil }
 // than tight.
 const batchProbeTimeout = 10 * time.Second
 
-// declaresBatch reports whether the provider reports CapBatchResolve.
-//
-// It reads the RUNNING connector rather than the manifest because the
-// manifest is the host's to hold and this stub has never seen it. The two
-// must agree — that agreement is exactly what credconform's
-// capability/manifest-matches-runtime check exists to prove — so reading
-// either gives the same answer for a conformant provider, and a provider
-// where they disagree fails conformance on that difference rather than
-// getting a stub built on the wrong one.
-//
-// A failed probe answers false: the host then resolves one reference at a
-// time, which is correct behaviour that costs calls, rather than calling an
-// operation that may not be there.
-func (c *grpcClient) declaresBatch(ctx context.Context) bool {
+// probeCaps reports the provider's Capabilities. It reads the RUNNING
+// connector rather than the manifest because the manifest is the host's to
+// hold and this stub has never seen it. A failed probe answers empty: the
+// host then uses only required operations, which is correct behaviour that
+// costs calls, rather than calling an operation that may not be there.
+func (c *grpcClient) probeCaps(ctx context.Context) connector.Capabilities {
 	ctx, cancel := context.WithTimeout(ctx, batchProbeTimeout)
 	defer cancel()
 	resp, err := c.client.Capabilities(ctx, &connectorpb.CapabilitiesRequest{})
 	if err != nil {
-		return false
+		return nil
 	}
-	for _, s := range resp.GetCapabilities() {
-		if connector.Capability(s) == credential.CapBatchResolve {
-			return true
-		}
+	caps := make(connector.Capabilities, len(resp.GetCapabilities()))
+	for i, s := range resp.GetCapabilities() {
+		caps[i] = connector.Capability(s)
 	}
-	return false
+	return caps
 }
 
 // batchGRPCClient is grpcClient plus the optional batch operation. It is
@@ -380,6 +372,10 @@ var (
 // results cannot be attributed to the references asked about is how the wrong
 // secret reaches the wrong caller.
 func (c *batchGRPCClient) ResolveBatch(ctx context.Context, refs []ref.Ref) ([]credential.BatchResult, error) {
+	return doResolveBatch(ctx, c.grpcClient, refs)
+}
+
+func doResolveBatch(ctx context.Context, c *grpcClient, refs []ref.Ref) ([]credential.BatchResult, error) {
 	pbRefs := make([]*connectorpb.Ref, len(refs))
 	for i, r := range refs {
 		pbRefs[i] = transport.RefToPB(r)

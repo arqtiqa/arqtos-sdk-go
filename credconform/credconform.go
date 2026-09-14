@@ -32,6 +32,8 @@
 //   - [CheckBatchDeclared] — batch resolution is declared exactly when it is
 //     implemented. Over an out-of-process provider this is a narrower
 //     guarantee than it sounds; see the constant's doc.
+//   - [CheckBindAuthDeclared] — bind_auth is declared exactly when
+//     credential.AuthBinder is implemented. Same Track-B narrowing as batch.
 //   - [CheckResolveNoEmptySuccess] — a reference the connector can resolve
 //     comes back carrying material, never as a success carrying nothing and
 //     never as a deliberately-empty assertion.
@@ -105,6 +107,10 @@ const (
 	// which calls ResolveBatch for real and surfaces the provider's own
 	// KindUnsupported when the declaration was false.
 	CheckBatchDeclared = "batch/declared-is-implemented"
+	// CheckBindAuthDeclared covers bind_auth being declared exactly when
+	// credential.AuthBinder is implemented. Same Track-B narrowing as
+	// [CheckBatchDeclared]: the dispensed stub's shape IS the declaration.
+	CheckBindAuthDeclared = "bind_auth/declared-is-implemented"
 	// CheckResolveNoEmptySuccess covers a resolvable reference coming back
 	// carrying material, rather than as a success carrying nothing.
 	CheckResolveNoEmptySuccess = "resolve/no-empty-success"
@@ -229,12 +235,14 @@ func Run(ctx context.Context, c credential.CredentialLoader, opts Options) (Repo
 	if len(opts.Resolvable) == 0 {
 		return Report{}, cerr.New(cerr.KindInvalid, "credconform.Run", fmt.Errorf(
 			"Options.Resolvable is empty: without a reference the connector must resolve, "+
-				"a run cannot tell a conformant connector from one that resolves nothing"))
+				"a run cannot tell a conformant connector from one that resolves nothing",
+		))
 	}
 	if (opts.Unresolvable == ref.Ref{}) {
 		return Report{}, cerr.New(cerr.KindInvalid, "credconform.Run", fmt.Errorf(
 			"Options.Unresolvable is unset: without a reference the connector must fail on, "+
-				"its failure classification is never exercised"))
+				"its failure classification is never exercised",
+		))
 	}
 
 	rep := Report{Connector: opts.Manifest.Name}
@@ -243,6 +251,8 @@ func Run(ctx context.Context, c credential.CredentialLoader, opts Options) (Repo
 	checkCapabilityHonesty(&rep, c, opts.Manifest)
 	batcher, isBatcher := c.(credential.BatchResolver)
 	checkBatchDeclared(&rep, opts.Manifest, c.Capabilities(), isBatcher)
+	_, isBinder := c.(credential.AuthBinder)
+	checkBindAuthDeclared(&rep, opts.Manifest, c.Capabilities(), isBinder)
 	checkResolveNoEmptySuccess(ctx, &rep, c, opts)
 	checkFailureTyped(ctx, &rep, c, opts)
 	if isBatcher {
@@ -260,7 +270,8 @@ func checkManifest(rep *Report, m manifest.Doc) {
 	if m.Implements != connector.ClassCredentialLoader {
 		rep.add(CheckManifest, false, fmt.Sprintf(
 			"manifest implements %q; this harness checks the %q class",
-			m.Implements, connector.ClassCredentialLoader))
+			m.Implements, connector.ClassCredentialLoader,
+		))
 		return
 	}
 	// Capability-vocabulary closure is not re-implemented here.
@@ -291,15 +302,18 @@ func checkCapabilityHonesty(rep *Report, c credential.CredentialLoader, m manife
 	case len(missing) > 0 && len(undeclared) > 0:
 		rep.add(CheckCapabilityHonesty, false, fmt.Sprintf(
 			"manifest declares %s which Capabilities() does not report, and Capabilities() reports %s which the manifest does not declare",
-			strings.Join(missing, ", "), strings.Join(undeclared, ", ")))
+			strings.Join(missing, ", "), strings.Join(undeclared, ", "),
+		))
 	case len(missing) > 0:
 		rep.add(CheckCapabilityHonesty, false, fmt.Sprintf(
 			"manifest declares %s, which the running connector does not report. A host plans for what the manifest promises",
-			strings.Join(missing, ", ")))
+			strings.Join(missing, ", "),
+		))
 	case len(undeclared) > 0:
 		rep.add(CheckCapabilityHonesty, false, fmt.Sprintf(
 			"the running connector reports %s, which the manifest does not declare. The manifest is what a host reads before it ever loads the connector",
-			strings.Join(undeclared, ", ")))
+			strings.Join(undeclared, ", "),
+		))
 	default:
 		rep.add(CheckCapabilityHonesty, true, "")
 	}
@@ -334,17 +348,45 @@ func checkBatchDeclared(rep *Report, m manifest.Doc, runtime connector.Capabilit
 			"%s is declared %s, but the connector does not implement credential.BatchResolver. "+
 				"A declared capability that is absent is worse than an undeclared one: the host plans one backend call "+
 				"for N references and finds no operation to make it with",
-			credential.CapBatchResolve, declaredIn(inManifest, atRuntime)))
+			credential.CapBatchResolve, declaredIn(inManifest, atRuntime),
+		))
 	case implemented && !(inManifest && atRuntime):
 		rep.add(CheckBatchDeclared, false, fmt.Sprintf(
 			"the connector implements credential.BatchResolver, but %s is declared %s. "+
 				"A host reads the declaration before it calls anything, so a batch that is not declared in both places "+
 				"is never used and every reference costs its own backend call",
-			credential.CapBatchResolve, declaredIn(inManifest, atRuntime)))
+			credential.CapBatchResolve, declaredIn(inManifest, atRuntime),
+		))
 	case implemented:
 		rep.add(CheckBatchDeclared, true, "declared in the manifest and by Capabilities(), and implemented")
 	default:
 		rep.add(CheckBatchDeclared, true, "not declared, not implemented")
+	}
+}
+
+func checkBindAuthDeclared(rep *Report, m manifest.Doc, runtime connector.Capabilities, implemented bool) {
+	inManifest := m.Declares(credential.CapBindAuth)
+	atRuntime := runtime.Has(credential.CapBindAuth)
+
+	switch {
+	case (inManifest || atRuntime) && !implemented:
+		rep.add(CheckBindAuthDeclared, false, fmt.Sprintf(
+			"%s is declared %s, but the connector does not implement credential.AuthBinder. "+
+				"A declared capability that is absent is worse than an undeclared one: the host plans to "+
+				"deliver bootstrap material and finds no operation to make it with",
+			credential.CapBindAuth, declaredIn(inManifest, atRuntime),
+		))
+	case implemented && !(inManifest && atRuntime):
+		rep.add(CheckBindAuthDeclared, false, fmt.Sprintf(
+			"the connector implements credential.AuthBinder, but %s is declared %s. "+
+				"A host reads the declaration before it calls anything, so a BindAuth that is not declared in both places "+
+				"is never used",
+			credential.CapBindAuth, declaredIn(inManifest, atRuntime),
+		))
+	case implemented:
+		rep.add(CheckBindAuthDeclared, true, "declared in the manifest and by Capabilities(), and implemented")
+	default:
+		rep.add(CheckBindAuthDeclared, true, "not declared, not implemented")
 	}
 }
 
@@ -389,11 +431,13 @@ func checkResolveNoEmptySuccess(ctx context.Context, rep *Report, c credential.C
 			if errors.As(err, &fe) {
 				rep.add(CheckResolveNoEmptySuccess, false, fmt.Sprintf(
 					"resolving %s: %v. An unresolved credential must be reported as a failure — a backend that returns "+
-						"empty output with a success exit code is signed out, not holding an empty secret", r, fe))
+						"empty output with a success exit code is signed out, not holding an empty secret", r, fe,
+				))
 				return
 			}
 			rep.add(CheckResolveNoEmptySuccess, false, fmt.Sprintf(
-				"%s is declared resolvable by this run, and the connector failed on it: %v", r, err))
+				"%s is declared resolvable by this run, and the connector failed on it: %v", r, err,
+			))
 			return
 		}
 		mat, valueErr := res.Value()
@@ -403,7 +447,8 @@ func checkResolveNoEmptySuccess(ctx context.Context, rep *Report, c credential.C
 					"credential.ResolvedEmpty asserts that a secret is genuinely stored empty; it is not an answer for a "+
 					"reference this run nominates as one the connector must resolve, and a connector that answers every "+
 					"read that way serves \"\" to every caller while passing a presence-only check. Point Resolvable at a "+
-					"reference that holds a value, or fix the read", r))
+					"reference that holds a value, or fix the read", r,
+			))
 			return
 		}
 	}
@@ -416,18 +461,22 @@ func checkFailureTyped(ctx context.Context, rep *Report, c credential.Credential
 	case err == nil && !resolutionReadable(res):
 		rep.add(CheckFailureTyped, false, fmt.Sprintf(
 			"resolving %s returned neither a value nor an error. That is the shape a signed-out backend produces, "+
-				"and it must be a typed failure", opts.Unresolvable))
+				"and it must be a typed failure", opts.Unresolvable,
+		))
 	case err == nil:
 		rep.add(CheckFailureTyped, false, fmt.Sprintf(
-			"%s is declared unresolvable by this run, and the connector resolved it", opts.Unresolvable))
+			"%s is declared unresolvable by this run, and the connector resolved it", opts.Unresolvable,
+		))
 	case !cerr.Classified(err):
 		rep.add(CheckFailureTyped, false, fmt.Sprintf(
 			"failure is not classified: %v. A host must act on a cerr.Kind from the closed vocabulary; "+
-				"returning the backend's own text leaves it string-matching, and a vendor rewording silently changes host behaviour", err))
+				"returning the backend's own text leaves it string-matching, and a vendor rewording silently changes host behaviour", err,
+		))
 	case cerr.KindOf(err) == cerr.KindContractViolation:
 		rep.add(CheckFailureTyped, false, fmt.Sprintf(
 			"failure is classified as %s, which is what a host reports ABOUT a connector, not a failure a connector returns: %v",
-			cerr.KindContractViolation, err))
+			cerr.KindContractViolation, err,
+		))
 	default:
 		rep.add(CheckFailureTyped, true, fmt.Sprintf("%s -> %s", opts.Unresolvable, cerr.KindOf(err)))
 	}
@@ -456,7 +505,8 @@ func checkBatchShape(ctx context.Context, rep *Report, b credential.BatchResolve
 	for i, got := range results {
 		if err := got.Err(); err != nil {
 			rep.add(CheckBatchShape, false, fmt.Sprintf(
-				"%s is declared resolvable by this run, and the batch failed on it: %v", opts.Resolvable[i], err))
+				"%s is declared resolvable by this run, and the batch failed on it: %v", opts.Resolvable[i], err,
+			))
 			return
 		}
 		mat, valueErr := got.Resolution().Value()
@@ -465,7 +515,8 @@ func checkBatchShape(ctx context.Context, rep *Report, b credential.BatchResolve
 				"%s is declared resolvable by this run, and the batch resolved it to NO MATERIAL. "+
 					"credential.ResolvedEmpty asserts that a secret is genuinely stored empty; it is not an answer for a "+
 					"reference this run nominates as one the connector must resolve, and a batcher that answers every "+
-					"read that way serves \"\" to every caller while passing a status-only check", opts.Resolvable[i]))
+					"read that way serves \"\" to every caller while passing a status-only check", opts.Resolvable[i],
+			))
 			return
 		}
 	}

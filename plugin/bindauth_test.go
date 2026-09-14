@@ -124,3 +124,27 @@ func TestOldPeerWithoutBindAuthIsUnsupportedNotSilent(t *testing.T) {
 		t.Fatal("an old peer must not grow BindAuth by default")
 	}
 }
+
+type batchAuthMemLoader struct {
+	batchMemLoader
+	got *credential.Bootstrap
+}
+
+func (b *batchAuthMemLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth}
+}
+
+func (b *batchAuthMemLoader) BindAuth(_ context.Context, boot *credential.Bootstrap) error {
+	b.got = boot
+	return nil
+}
+
+func TestStubShapeMirrorsBatchAndBindAuthTogether(t *testing.T) {
+	c := newTestClient(t, &batchAuthMemLoader{batchMemLoader: batchMemLoader{memLoader{vals: batchVals()}}})
+	if _, ok := c.(credential.BatchResolver); !ok {
+		t.Fatalf("dispensed %T, want BatchResolver", c)
+	}
+	if _, ok := c.(credential.AuthBinder); !ok {
+		t.Fatalf("dispensed %T, want AuthBinder", c)
+	}
+}

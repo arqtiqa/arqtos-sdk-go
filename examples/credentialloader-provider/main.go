@@ -8,10 +8,11 @@
 // provider (Infisical, Vault, ...): swap memLoader's field and method bodies
 // for calls to the actual backing store; the plugin.Handshake +
 // plugin.PluginMap(...) + goplugin.Serve wiring in main() does not change. It
-// also declares and implements a second capability, CapBatchResolve, so a
-// copier sees a capability wired correctly end to end rather than only the
+// also declares and implements CapBatchResolve and CapBindAuth, so a copier
+// sees optional capabilities wired correctly end to end rather than only the
 // baseline CapRead — see conform_test.go in this directory, which runs
-// credconform against memLoader in-process to verify it. See docs/CONTRACT.md
+// credconform against memLoader in-process to verify it. BindAuth uses the
+// same CheckBootstrap API a two-key profile would. See docs/CONTRACT.md
 // ("Track-B: the out-of-process wire contract") for the full picture and
 // roundtrip_test.go in this directory for a real-subprocess round-trip
 // driving this exact binary the way a host would.
@@ -98,6 +99,13 @@ func (m *memLoader) ResolveBatch(ctx context.Context, refs []ref.Ref) ([]credent
 
 var _ credential.BatchResolver = (*memLoader)(nil)
 
+func (m *memLoader) BindAuth(_ context.Context, boot *credential.Bootstrap) error {
+	defer boot.Zero()
+	return credential.CheckBootstrap(credential.AuthProfile{Required: []string{"token"}}, boot)
+}
+
+var _ credential.AuthBinder = (*memLoader)(nil)
+
 func (m *memLoader) List(_ context.Context, _ string) ([]ref.Ref, error) {
 	refs := make([]ref.Ref, 0, len(m.vals))
 	for k := range m.vals {
@@ -126,12 +134,11 @@ func (m *memLoader) Revoke(_ context.Context, _ credential.Lease) error {
 
 func (m *memLoader) Implements() connector.Class { return connector.ClassCredentialLoader }
 
-// Capabilities declares CapBatchResolve alongside CapRead, matching
-// ResolveBatch above: a capability that is declared but not implemented, or
-// implemented but not declared, fails credconform in either direction — see
-// conform_test.go in this directory for the harness that checks it.
+// Capabilities declares CapBatchResolve and CapBindAuth alongside CapRead:
+// a capability that is declared but not implemented, or implemented but not
+// declared, fails credconform in either direction — see conform_test.go.
 func (m *memLoader) Capabilities() connector.Capabilities {
-	return connector.Capabilities{credential.CapRead, credential.CapBatchResolve}
+	return connector.Capabilities{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth}
 }
 
 func (m *memLoader) Health(_ context.Context) (connector.Health, error) {
