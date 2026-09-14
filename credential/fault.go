@@ -28,6 +28,10 @@ const (
 	// about, and guessing the correspondence is how the wrong secret reaches
 	// the wrong caller.
 	FaultBatchMismatch Fault = "batch-results-do-not-match-request"
+	// FaultBundleIncomplete is a grant bundle marked ready while an enrolled
+	// key is missing, completeness is unspecified, or the inventory is
+	// incomplete. A partial page must not become ready (credential-detail §3e).
+	FaultBundleIncomplete Fault = "bundle-not-complete"
 )
 
 // A FaultError reports a CONNECTOR CONTRACT VIOLATION, attributed by name.
