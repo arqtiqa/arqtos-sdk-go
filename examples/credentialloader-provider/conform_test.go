@@ -21,13 +21,19 @@ import (
 // wiring correctly. Copy this alongside main.go's memLoader as the pattern
 // for verifying your own capability in your own CI.
 func TestMemLoaderIsConformant(t *testing.T) {
+	otherRef := "op://<vault>/<other-item>/<field>"
 	impl := &memLoader{vals: map[string]string{
 		referenceRef: referencePlaceholder,
+		otherRef:     "placeholder-api-token",
 	}}
 
 	resolvable, err := ref.Parse(referenceRef)
 	if err != nil {
 		t.Fatalf("ref.Parse(%q): %v", referenceRef, err)
+	}
+	other, err := ref.Parse(otherRef)
+	if err != nil {
+		t.Fatalf("ref.Parse(%q): %v", otherRef, err)
 	}
 	unresolvable, err := ref.Parse("op://<vault>/<no-such-item>/<field>")
 	if err != nil {
@@ -39,18 +45,18 @@ func TestMemLoaderIsConformant(t *testing.T) {
 		Implements:     connector.ClassCredentialLoader,
 		Kind:           manifest.KindProvider,
 		MinHostVersion: "0.1.0",
-		Capabilities:   []connector.Capability{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth},
+		Capabilities:   []connector.Capability{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth, credential.CapGrantBundle},
 	}
 
 	rep, err := credconform.Run(context.Background(), impl, credconform.Options{
 		Manifest:     m,
-		Resolvable:   []ref.Ref{resolvable},
+		Resolvable:   []ref.Ref{resolvable, other},
 		Unresolvable: unresolvable,
 	})
 	if err != nil {
 		t.Fatalf("credconform.Run could not be carried out: %v", err)
 	}
 	if !rep.OK() {
-		t.Fatalf("the reference provider must be conformant, including CapBatchResolve and CapBindAuth:\n%s", rep)
+		t.Fatalf("the reference provider must be conformant, including CapBatchResolve, CapBindAuth and CapGrantBundle:\n%s", rep)
 	}
 }

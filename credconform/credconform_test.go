@@ -155,6 +155,53 @@ func (l *unauthedBinder) Capabilities() connector.Capabilities {
 	return connector.Capabilities{credential.CapRead}
 }
 
+type bundleLoader struct{ baseLoader }
+
+func (l *bundleLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapGrantBundle}
+}
+
+func (l *bundleLoader) AcquireBundle(ctx context.Context, inv credential.Inventory) (credential.Bundle, error) {
+	entries := make([]credential.BundleEntry, 0, len(inv.Keys))
+	for _, k := range inv.Keys {
+		res, err := l.Resolve(ctx, k)
+		if err != nil {
+			return credential.Bundle{}, err
+		}
+		entries = append(entries, credential.BundleValue(k, res))
+	}
+	return credential.CompleteBundle(inv, entries, credential.BundleMeta{Generation: "g1", Source: "credconform"})
+}
+
+var _ credential.BundleAcquirer = (*bundleLoader)(nil)
+
+type bundleLiarLoader struct{ baseLoader }
+
+func (l *bundleLiarLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapGrantBundle}
+}
+
+type unbundledAcquirer struct{ bundleLoader }
+
+func (l *unbundledAcquirer) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead}
+}
+
+type partialBundleLoader struct{ bundleLoader }
+
+func (l *partialBundleLoader) AcquireBundle(ctx context.Context, inv credential.Inventory) (credential.Bundle, error) {
+	if len(inv.Keys) == 0 {
+		return credential.Bundle{}, cerr.New(cerr.KindInvalid, "AcquireBundle", nil)
+	}
+	res, err := l.Resolve(ctx, inv.Keys[0])
+	if err != nil {
+		return credential.Bundle{}, err
+	}
+	return credential.RestoreBundle(credential.BundleMeta{Generation: "g1"}, inv.Coverage, credential.CompletenessComplete, []credential.BundleEntry{
+		credential.BundleValue(inv.Keys[0], res),
+	}), nil
+}
+
 func manifestFor(caps ...connector.Capability) manifest.Doc {
 	return manifest.Doc{
 		Name:         "placeholder-credential-loader",
@@ -430,6 +477,24 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 			wantFail: credconform.CheckBindAuthDeclared,
 		},
 		{
+			name:     "manifest declares grant_bundle, connector does not implement it",
+			loader:   &bundleLiarLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapGrantBundle),
+			wantFail: credconform.CheckGrantBundleDeclared,
+		},
+		{
+			name:     "implements grant_bundle and declares it nowhere",
+			loader:   &unbundledAcquirer{},
+			manifest: manifestFor(credential.CapRead),
+			wantFail: credconform.CheckGrantBundleDeclared,
+		},
+		{
+			name:     "grant bundle omits an enrolled key while claiming complete",
+			loader:   &partialBundleLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapGrantBundle),
+			wantFail: credconform.CheckGrantBundleShape,
+		},
+		{
 			name:     "manifest is invalid",
 			loader:   &baseLoader{},
 			manifest: manifest.Doc{Implements: connector.ClassCredentialLoader, Kind: manifest.KindNative},
@@ -534,6 +599,19 @@ func TestCompliantConnectorsPass(t *testing.T) {
 			t.Fatalf("a compliant bind_auth connector must pass:\n%s", rep)
 		}
 	})
+	t.Run("grant_bundle capability", func(t *testing.T) {
+		m := manifestFor(credential.CapRead, credential.CapGrantBundle)
+		rep, err := credconform.Run(context.Background(), &bundleLoader{}, opts(t, m))
+		if err != nil {
+			t.Fatalf("the harness could not run: %v", err)
+		}
+		if !rep.OK() {
+			t.Fatalf("a compliant grant_bundle connector must pass:\n%s", rep)
+		}
+		if !ran(rep, credconform.CheckGrantBundleShape) {
+			t.Fatalf("grant bundle shape must be checked:\n%s", rep)
+		}
+	})
 }
 
 // TestEveryObligationIsChecked pins the check set. A check that stops running
@@ -549,6 +627,7 @@ func TestEveryObligationIsChecked(t *testing.T) {
 		credconform.CheckCapabilityHonesty,
 		credconform.CheckBatchDeclared,
 		credconform.CheckBindAuthDeclared,
+		credconform.CheckGrantBundleDeclared,
 		credconform.CheckResolveNoEmptySuccess,
 		credconform.CheckFailureTyped,
 		credconform.CheckBatchShape,
