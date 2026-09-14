@@ -28,6 +28,11 @@ If you find yourself wanting to pass a secret value *into* `Resolve`, that is a
 sign the design is wrong — plumb a `ref.Ref` through instead and let the
 connector resolve it. Do not "fix" a missing bootstrap key by reading `os.Getenv`.
 
+`AcquireBundle` returns the enrolled grant as wipeable `Material` under
+qualified identities. Completeness unspecified is not ready. `Resolve` still
+returns only the identity it was asked for — it is not a side door for the
+rest of the bundle.
+
 ## `Material` redacted + wiped
 
 Resolved secret material is always wrapped in

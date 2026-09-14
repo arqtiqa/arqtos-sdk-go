@@ -9,8 +9,9 @@
 //
 // The dispensed client is also the boundary where a provider's returns are
 // checked: a provider is someone else's binary, so what it sends passes
-// through credential.CheckResolution (and credential.CheckBatch) before a
-// host ever sees it. A provider that reports success while resolving nothing
+// through credential.CheckResolution (and credential.CheckBatch /
+// credential.CheckBundle) before a host ever sees it. A provider that reports
+// success while resolving nothing
 // yields a named contract fault, not an empty credential — including the
 // provider that says so by sending an empty Material without the wire's
 // explicit deliberately-empty assertion, which is what a foreign author
@@ -18,8 +19,9 @@
 //
 // The dispensed client also mirrors the provider's OPTIONAL operations: it
 // satisfies credential.BatchResolver exactly when the provider reports
-// credential.CapBatchResolve, and credential.AuthBinder exactly when it
-// reports credential.CapBindAuth, so a host discovers either by type
+// credential.CapBatchResolve, credential.AuthBinder exactly when it
+// reports credential.CapBindAuth, and credential.BundleAcquirer exactly when
+// it reports credential.CapGrantBundle, so a host discovers each by type
 // assertion the same way it would on a native connector.
 package plugin
 
@@ -92,25 +94,40 @@ func (p *CredentialLoaderPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Serv
 // every host grows a second code path for providers. So the client dispensed
 // here implements credential.BatchResolver exactly when the provider reports
 // [credential.CapBatchResolve], credential.AuthBinder exactly when it reports
-// [credential.CapBindAuth], both when it reports both, and neither otherwise.
-//
-// Always implementing either would be worse than never: a provider that
-// cannot batch or bind would then look implemented-but-undeclared to
-// conformance, failing every honest peer. Never implementing them is the
-// hole this replaces — the capability was declarable but structurally
-// unreachable over the wire.
+// [credential.CapBindAuth], credential.BundleAcquirer exactly when it reports
+// [credential.CapGrantBundle], and the combinations when it reports more than
+// one.
 func (p *CredentialLoaderPlugin) GRPCClient(ctx context.Context, _ *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
 	c := &grpcClient{client: connectorpb.NewCredentialLoaderClient(conn), name: p.Name}
 	caps := c.probeCaps(ctx)
 	batch := caps.Has(credential.CapBatchResolve)
 	auth := caps.Has(credential.CapBindAuth)
-	switch {
-	case batch && auth:
-		return &batchAuthGRPCClient{grpcClient: c}, nil
-	case batch:
+	bundle := caps.Has(credential.CapGrantBundle)
+	n := 0
+	if batch {
+		n |= 1
+	}
+	if auth {
+		n |= 2
+	}
+	if bundle {
+		n |= 4
+	}
+	switch n {
+	case 1:
 		return &batchGRPCClient{grpcClient: c}, nil
-	case auth:
+	case 2:
 		return &authGRPCClient{grpcClient: c}, nil
+	case 3:
+		return &batchAuthGRPCClient{grpcClient: c}, nil
+	case 4:
+		return &bundleGRPCClient{grpcClient: c}, nil
+	case 5:
+		return &batchBundleGRPCClient{grpcClient: c}, nil
+	case 6:
+		return &authBundleGRPCClient{grpcClient: c}, nil
+	case 7:
+		return &batchAuthBundleGRPCClient{grpcClient: c}, nil
 	default:
 		return c, nil
 	}

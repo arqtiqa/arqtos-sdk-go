@@ -115,6 +115,14 @@ func (e BundleEntry) Identity() ref.Ref { return e.id }
 
 func (e BundleEntry) Resolution() Resolution { return e.res }
 
+// RestoreBundle reconstructs a bundle from the wire. Completeness unspecified
+// is not ready — CheckBundle refuses it.
+func RestoreBundle(meta BundleMeta, cov Coverage, comp Completeness, entries []BundleEntry) Bundle {
+	out := make([]BundleEntry, len(entries))
+	copy(out, entries)
+	return Bundle{meta: meta, cov: cov, comp: comp, items: out}
+}
+
 func CompleteBundle(inv Inventory, entries []BundleEntry, meta BundleMeta) (Bundle, error) {
 	if err := inv.Validate(); err != nil {
 		return Bundle{}, err

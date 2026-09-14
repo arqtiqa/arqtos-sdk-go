@@ -34,6 +34,10 @@
 //     guarantee than it sounds; see the constant's doc.
 //   - [CheckBindAuthDeclared] — bind_auth is declared exactly when
 //     credential.AuthBinder is implemented. Same Track-B narrowing as batch.
+//   - [CheckGrantBundleDeclared] — grant_bundle is declared exactly when
+//     credential.BundleAcquirer is implemented.
+//   - [CheckGrantBundleShape] — a grant bundle is ready only when every
+//     enrolled key is present; Resolve still answers one identity.
 //   - [CheckResolveNoEmptySuccess] — a reference the connector can resolve
 //     comes back carrying material, never as a success carrying nothing and
 //     never as a deliberately-empty assertion.
@@ -111,6 +115,9 @@ const (
 	// credential.AuthBinder is implemented. Same Track-B narrowing as
 	// [CheckBatchDeclared]: the dispensed stub's shape IS the declaration.
 	CheckBindAuthDeclared = "bind_auth/declared-is-implemented"
+	// CheckGrantBundleDeclared covers grant_bundle being declared exactly when
+	// credential.BundleAcquirer is implemented.
+	CheckGrantBundleDeclared = "grant_bundle/declared-is-implemented"
 	// CheckResolveNoEmptySuccess covers a resolvable reference coming back
 	// carrying material, rather than as a success carrying nothing.
 	CheckResolveNoEmptySuccess = "resolve/no-empty-success"
@@ -121,6 +128,10 @@ const (
 	// order, with the references requested. It is reported only for a
 	// connector that implements batch resolution.
 	CheckBatchShape = "batch/results-match-request"
+	// CheckGrantBundleShape covers a declared grant_bundle acquisition returning
+	// every enrolled key, ready only when complete, and Resolve still answering
+	// one requested identity.
+	CheckGrantBundleShape = "grant_bundle/complete-inventory"
 )
 
 // Options are the fixtures a conformance run needs. Every field is required:
@@ -253,10 +264,15 @@ func Run(ctx context.Context, c credential.CredentialLoader, opts Options) (Repo
 	checkBatchDeclared(&rep, opts.Manifest, c.Capabilities(), isBatcher)
 	_, isBinder := c.(credential.AuthBinder)
 	checkBindAuthDeclared(&rep, opts.Manifest, c.Capabilities(), isBinder)
+	acquirer, isAcquirer := c.(credential.BundleAcquirer)
+	checkGrantBundleDeclared(&rep, opts.Manifest, c.Capabilities(), isAcquirer)
 	checkResolveNoEmptySuccess(ctx, &rep, c, opts)
 	checkFailureTyped(ctx, &rep, c, opts)
 	if isBatcher {
 		checkBatchShape(ctx, &rep, batcher, opts)
+	}
+	if isAcquirer {
+		checkGrantBundleShape(ctx, &rep, acquirer, c, opts)
 	}
 
 	return rep, nil
@@ -387,6 +403,87 @@ func checkBindAuthDeclared(rep *Report, m manifest.Doc, runtime connector.Capabi
 		rep.add(CheckBindAuthDeclared, true, "declared in the manifest and by Capabilities(), and implemented")
 	default:
 		rep.add(CheckBindAuthDeclared, true, "not declared, not implemented")
+	}
+}
+
+func checkGrantBundleDeclared(rep *Report, m manifest.Doc, runtime connector.Capabilities, implemented bool) {
+	inManifest := m.Declares(credential.CapGrantBundle)
+	atRuntime := runtime.Has(credential.CapGrantBundle)
+
+	switch {
+	case (inManifest || atRuntime) && !implemented:
+		rep.add(CheckGrantBundleDeclared, false, fmt.Sprintf(
+			"%s is declared %s, but the connector does not implement credential.BundleAcquirer",
+			credential.CapGrantBundle, declaredIn(inManifest, atRuntime),
+		))
+	case implemented && !(inManifest && atRuntime):
+		rep.add(CheckGrantBundleDeclared, false, fmt.Sprintf(
+			"the connector implements credential.BundleAcquirer, but %s is declared %s",
+			credential.CapGrantBundle, declaredIn(inManifest, atRuntime),
+		))
+	case implemented:
+		rep.add(CheckGrantBundleDeclared, true, "declared in the manifest and by Capabilities(), and implemented")
+	default:
+		rep.add(CheckGrantBundleDeclared, true, "not declared, not implemented")
+	}
+}
+
+func checkGrantBundleShape(ctx context.Context, rep *Report, a credential.BundleAcquirer, c credential.CredentialLoader, opts Options) {
+	inv := inventoryFor(opts)
+	got, err := a.AcquireBundle(ctx, inv)
+	if _, err := credential.CheckBundle(rep.Connector, inv, got, err); err != nil {
+		rep.add(CheckGrantBundleShape, false, err.Error())
+		return
+	}
+	for _, r := range opts.Resolvable {
+		res, rerr := c.Resolve(ctx, r)
+		if rerr != nil {
+			rep.add(CheckGrantBundleShape, false, fmt.Sprintf("Resolve(%s): %v", r, rerr))
+			return
+		}
+		mat, verr := res.Value()
+		if verr != nil {
+			rep.add(CheckGrantBundleShape, false, verr.Error())
+			return
+		}
+		body := string(mat.Reveal())
+		for _, other := range opts.Resolvable {
+			if other == r {
+				continue
+			}
+			ores, oerr := c.Resolve(ctx, other)
+			if oerr != nil {
+				continue
+			}
+			omat, oerr := ores.Value()
+			if oerr != nil {
+				continue
+			}
+			adj := string(omat.Reveal())
+			if adj != "" && adj != body && strings.Contains(body, adj) {
+				rep.add(CheckGrantBundleShape, false, "Resolve exported an adjacent granted field")
+				return
+			}
+		}
+	}
+	rep.add(CheckGrantBundleShape, true, "complete inventory, Resolve answers one identity")
+}
+
+func inventoryFor(opts Options) credential.Inventory {
+	seen := map[string]struct{}{}
+	var containers []string
+	for _, r := range opts.Resolvable {
+		if _, ok := seen[r.Vault]; ok {
+			continue
+		}
+		seen[r.Vault] = struct{}{}
+		containers = append(containers, r.Vault)
+	}
+	return credential.Inventory{
+		Authority:  "credconform",
+		Containers: containers,
+		Keys:       opts.Resolvable,
+		Coverage:   credential.CoverageDeclared,
 	}
 }
 

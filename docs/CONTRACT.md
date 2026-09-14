@@ -355,6 +355,30 @@ The Track-B service carries a `BindAuth` RPC. The host-side stub implements
 `credential.AuthBinder` **exactly when** the provider reports `bind_auth` from
 its `Capabilities` RPC.
 
+### Grant bundle (`CapGrantBundle`)
+
+Resolving a caller-supplied list is not acquiring an entire enrolled grant.
+`AcquireBundle` is a separately negotiated operation:
+
+```go
+type BundleAcquirer interface {
+	AcquireBundle(ctx context.Context, inv Inventory) (Bundle, error)
+}
+```
+
+The request is a finite enrolled inventory: authority, containers, key
+identities, and coverage (`declared` or `provider_verified`). Incomplete
+coverage cannot be acquired as ready. The result is ready only when
+completeness is **asserted complete** and every enrolled key is present.
+Unspecified completeness (the proto3 zero) is not ready — old peers that omit
+the field cannot claim a complete grant. Stored empty is `ResolvedEmpty`;
+missing is absence. Duplicate identities and keys outside the enrolled
+containers fail explicitly. One acquisition may contain several backend
+requests; this is not `CapBatchResolve`.
+
+`Resolve` / `ResolveBatch` still answer the identities they were asked for.
+They must not export adjacent granted fields.
+
 ### `Material` and `Lease`
 
 - `credential.Material` holds resolved secret bytes. `String()`/`GoString()`
@@ -381,6 +405,7 @@ capability constants declared in the `credential` package:
 | `CapAppRole` | The connector authenticates to its backing store via an AppRole-style (role-id/secret-id) mechanism. |
 | `CapBatchResolve` | Resolves many references in ONE backend call, via `credential.BatchResolver`. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Batch resolution](#batch-resolution-capbatchresolve). |
 | `CapBindAuth` | Accepts host-supplied bootstrap material via `credential.AuthBinder.BindAuth`. Token and two-key profiles use that same operation. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Bind auth](#bind-auth-capbindauth). |
+| `CapGrantBundle` | Acquires a finite enrolled grant via `credential.BundleAcquirer.AcquireBundle`. One acquisition may contain several backend requests. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Grant bundle](#grant-bundle-capgrantbundle). |
 
 `CapOIDC` and `CapAppRole` describe how the connector itself authenticates
 outward, not a behavior it exposes inward — hosts use them to reason about the
@@ -494,6 +519,8 @@ if err := rep.Err(); err != nil {
 | `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
 | `batch/declared-is-implemented` | `batch_resolve` is declared in both places exactly when `credential.BatchResolver` is implemented |
 | `bind_auth/declared-is-implemented` | `bind_auth` is declared in both places exactly when `credential.AuthBinder` is implemented |
+| `grant_bundle/declared-is-implemented` | `grant_bundle` is declared in both places exactly when `credential.BundleAcquirer` is implemented |
+| `grant_bundle/complete-inventory` | a declared grant bundle is ready only with every enrolled key present; `Resolve` still answers one identity |
 | `resolve/no-empty-success` | every reference the run declares resolvable comes back carrying **material** — not a success carrying nothing, and not a `ResolvedEmpty()` assertion either |
 | `failure/typed` | the reference the run declares unresolvable fails with a classified `cerr.Kind` |
 | `batch/results-match-request` | batch results correspond one-for-one, in order, with the request — reported only for a connector that implements batch |
@@ -1576,8 +1603,8 @@ not healthy.
 
 | Layer | Package | What it is |
 |---|---|---|
-| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure`/`BindAuthRequest` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`, `BindAuth`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
-| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, `BootstrapToPB`/`BootstrapFromPB`, `ObservationToPB`/`ObservationFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — a `Quota` observation crosses as a status detail, so old peers that ignore details still see the code. |
+| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure`/`BindAuthRequest`/`GrantInventory` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`, `BindAuth`, `AcquireBundle`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
+| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, `BootstrapToPB`/`BootstrapFromPB`, `InventoryToPB`/`BundleToPB`, `ObservationToPB`/`ObservationFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — a `Quota` observation crosses as a status detail, so old peers that ignore details still see the code. Bundle completeness zero is not ready. |
 | Transport binding | [`plugin/`](../plugin/plugin.go) | `plugin.Handshake` (the go-plugin magic-cookie handshake both sides must share), `plugin.CredentialLoaderName`, and `plugin.PluginMap(impl)`. A provider passes `plugin.PluginMap(impl)` to `goplugin.ServeConfig.Plugins`; the host's `Dispense(plugin.CredentialLoaderName)` returns a value that itself satisfies `credential.CredentialLoader` — from the host's point of view, calling a Track-B provider looks identical to calling a native connector. |
 | Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yaml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), typed `capabilities` (`[]connector.Capability`, checked against the class vocabulary and against the running connector by `credconform`), `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums, closes the `capabilities` vocabulary against the class in `implements` (so a misspelled capability is refused by the host **before** it loads anything, not only by a full `credconform` run against a live connector), and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
 
@@ -1618,7 +1645,7 @@ fixed map of placeholder `op://` refs, served via `goplugin.Serve`. Copy
 swap `memLoader`'s method bodies for calls to the actual backing store; the
 `plugin.Handshake` + `plugin.PluginMap(...)` + `goplugin.Serve` wiring does
 not change. It also declares and implements `CapBatchResolve` and
-`CapBindAuth` alongside the baseline `CapRead` — a copier sees optional
+`CapBindAuth` and `CapGrantBundle` alongside the baseline `CapRead` — a copier sees optional
 capabilities wired correctly end to end, not only the baseline. [`roundtrip_test.go`](../examples/credentialloader-provider/roundtrip_test.go)
 in the same directory builds that binary and drives it as a real subprocess
 the way a host would — dial, `Dispense`, `Resolve`, `Kill` — confirming the
