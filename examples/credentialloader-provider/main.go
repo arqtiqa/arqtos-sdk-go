@@ -8,7 +8,8 @@
 // provider (Infisical, Vault, ...): swap memLoader's field and method bodies
 // for calls to the actual backing store; the plugin.Handshake +
 // plugin.PluginMap(...) + goplugin.Serve wiring in main() does not change. It
-// also declares and implements CapBatchResolve, CapBindAuth and CapGrantBundle,
+// also declares and implements CapBatchResolve, CapBindAuth, CapGrantBundle
+// and CapAuthLifecycle,
 // so a copier sees optional capabilities wired correctly end to end rather
 // than only the baseline CapRead — see conform_test.go. See docs/CONTRACT.md
 // ("Track-B: the out-of-process wire contract") for the full picture and
@@ -167,7 +168,7 @@ func (m *memLoader) Revoke(_ context.Context, _ credential.Lease) error {
 
 func (m *memLoader) Implements() connector.Class { return connector.ClassCredentialLoader }
 
-// Capabilities declares CapBatchResolve, CapBindAuth and CapGrantBundle
+// Capabilities declares CapBatchResolve, CapBindAuth, CapGrantBundle and CapAuthLifecycle
 // alongside CapRead: a capability that is declared but not implemented, or
 // implemented but not declared, fails credconform in either direction.
 func (m *memLoader) Capabilities() connector.Capabilities {

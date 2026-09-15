@@ -96,8 +96,9 @@ func (p *CredentialLoaderPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Serv
 // here implements credential.BatchResolver exactly when the provider reports
 // [credential.CapBatchResolve], credential.AuthBinder exactly when it reports
 // [credential.CapBindAuth], credential.BundleAcquirer exactly when it reports
-// [credential.CapGrantBundle], and the combinations when it reports more than
-// one.
+// [credential.CapGrantBundle], credential.AuthLifecycle exactly when it reports
+// [credential.CapAuthLifecycle], and the combinations when it reports more
+// than one.
 func (p *CredentialLoaderPlugin) GRPCClient(ctx context.Context, _ *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
 	c := &grpcClient{client: connectorpb.NewCredentialLoaderClient(conn), name: p.Name}
 	caps := c.probeCaps(ctx)

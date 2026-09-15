@@ -157,6 +157,65 @@ func TestAuthLifecycleDeclaredButNotImplementedAnswersUnsupported(t *testing.T) 
 	}
 }
 
+type fullOptionalLoader struct {
+	authLifeLoader
+}
+
+func (f *fullOptionalLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{
+		credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth,
+		credential.CapGrantBundle, credential.CapAuthLifecycle,
+	}
+}
+
+func (f *fullOptionalLoader) BindAuth(context.Context, *credential.Bootstrap) error { return nil }
+
+func (f *fullOptionalLoader) ResolveBatch(ctx context.Context, refs []ref.Ref) ([]credential.BatchResult, error) {
+	out := make([]credential.BatchResult, 0, len(refs))
+	for _, r := range refs {
+		res, err := f.Resolve(ctx, r)
+		if err != nil {
+			failed, _ := credential.BatchFailed(r, err)
+			out = append(out, failed)
+			continue
+		}
+		ok, _ := credential.BatchResolved(r, res)
+		out = append(out, ok)
+	}
+	return out, nil
+}
+
+func (f *fullOptionalLoader) AcquireBundle(ctx context.Context, inv credential.Inventory) (credential.Bundle, error) {
+	entries := make([]credential.BundleEntry, 0, len(inv.Keys))
+	for _, k := range inv.Keys {
+		res, err := f.Resolve(ctx, k)
+		if err != nil {
+			return credential.Bundle{}, err
+		}
+		entries = append(entries, credential.BundleValue(k, res))
+	}
+	return credential.CompleteBundle(inv, entries, credential.BundleMeta{Generation: "g1"})
+}
+
+func TestStubShapeMirrorsAllOptionalCapabilitiesTogether(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	c := newTestClient(t, &fullOptionalLoader{
+		authLifeLoader: authLifeLoader{memLoader: memLoader{vals: batchVals()}, expires: now.Add(time.Hour)},
+	})
+	if _, ok := c.(credential.BatchResolver); !ok {
+		t.Fatalf("dispensed %T, want BatchResolver", c)
+	}
+	if _, ok := c.(credential.AuthBinder); !ok {
+		t.Fatalf("dispensed %T, want AuthBinder", c)
+	}
+	if _, ok := c.(credential.BundleAcquirer); !ok {
+		t.Fatalf("dispensed %T, want BundleAcquirer", c)
+	}
+	if _, ok := c.(credential.AuthLifecycle); !ok {
+		t.Fatalf("dispensed %T, want AuthLifecycle", c)
+	}
+}
+
 func TestOldPeerAuthLifecycleIsUnimplemented(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -217,6 +217,18 @@ func (l *lifeLiarLoader) Capabilities() connector.Capabilities {
 	return connector.Capabilities{credential.CapRead, credential.CapAuthLifecycle}
 }
 
+type lifeLeaseAdvertiser struct{ lifeLoader }
+
+func (l *lifeLeaseAdvertiser) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapAuthLifecycle, credential.CapLease}
+}
+
+type lifeWrongKindLoader struct{ lifeLoader }
+
+func (l *lifeWrongKindLoader) AuthStatus(_ context.Context, now time.Time) (credential.AuthSession, error) {
+	return credential.AuthSession{ID: "dyn-123", Kind: credential.KindSecretLease, ExpiresAt: now.Add(time.Hour), Renewable: true}, nil
+}
+
 type partialBundleLoader struct{ bundleLoader }
 
 func (l *partialBundleLoader) AcquireBundle(ctx context.Context, inv credential.Inventory) (credential.Bundle, error) {
@@ -529,6 +541,18 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 			loader:   &lifeLiarLoader{},
 			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
 			wantFail: credconform.CheckAuthLifecycleDeclared,
+		},
+		{
+			name:     "static auth advertises CapLease while Lease is unsupported",
+			loader:   &lifeLeaseAdvertiser{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle, credential.CapLease),
+			wantFail: credconform.CheckAuthNotSecretLease,
+		},
+		{
+			name:     "AuthStatus returns a secret_lease handle",
+			loader:   &lifeWrongKindLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
+			wantFail: credconform.CheckAuthNotSecretLease,
 		},
 		{
 			name:     "manifest is invalid",

@@ -463,22 +463,19 @@ func checkAuthLifecycleDeclared(rep *Report, m manifest.Doc, runtime connector.C
 
 func checkAuthNotSecretLease(ctx context.Context, rep *Report, a credential.AuthLifecycle, c credential.CredentialLoader, opts Options) {
 	now := time.Unix(0, 0).UTC()
-	if !opts.Manifest.Declares(credential.CapLease) && !c.Capabilities().Has(credential.CapLease) {
-		_, _, err := c.Lease(ctx, opts.Resolvable[0])
-		if cerr.KindOf(err) != cerr.KindUnsupported {
-			rep.add(CheckAuthNotSecretLease, false, "static auth advertised a secret lease")
-			return
-		}
-	}
-	_, err := a.RenewAuth(ctx, credential.AuthSession{
-		ID: "dyn-123", Kind: credential.KindSecretLease, ExpiresAt: now.Add(time.Hour), Renewable: true,
-	}, now)
-	if err == nil || cerr.KindOf(err) == cerr.KindUnknown {
-		rep.add(CheckAuthNotSecretLease, false, "RenewAuth accepted a secret_lease handle")
+	_, _, lerr := c.Lease(ctx, opts.Resolvable[0])
+	leaseUnsupported := cerr.KindOf(lerr) == cerr.KindUnsupported
+	advertisesLease := opts.Manifest.Declares(credential.CapLease) || c.Capabilities().Has(credential.CapLease)
+	if leaseUnsupported && advertisesLease {
+		rep.add(CheckAuthNotSecretLease, false, "static auth advertised CapLease while Lease is unsupported")
 		return
 	}
 	s1, err := a.AuthStatus(ctx, now)
 	if err != nil {
+		rep.add(CheckAuthNotSecretLease, false, err.Error())
+		return
+	}
+	if err := credential.CheckAuthSession(s1); err != nil {
 		rep.add(CheckAuthNotSecretLease, false, err.Error())
 		return
 	}
@@ -489,6 +486,13 @@ func checkAuthNotSecretLease(ctx context.Context, rep *Report, a credential.Auth
 	}
 	if !s1.ExpiresAt.Equal(s2.ExpiresAt) {
 		rep.add(CheckAuthNotSecretLease, false, "AuthStatus changed expiry at a fixed host clock (hidden renewal)")
+		return
+	}
+	_, err = a.RenewAuth(ctx, credential.AuthSession{
+		ID: "dyn-123", Kind: credential.KindSecretLease, ExpiresAt: now.Add(time.Hour), Renewable: true,
+	}, now)
+	if err == nil {
+		rep.add(CheckAuthNotSecretLease, false, "RenewAuth accepted a secret_lease handle")
 		return
 	}
 	rep.add(CheckAuthNotSecretLease, true, "auth session is not a secret lease; host clock drives expiry")

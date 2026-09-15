@@ -57,6 +57,6 @@ func TestMemLoaderIsConformant(t *testing.T) {
 		t.Fatalf("credconform.Run could not be carried out: %v", err)
 	}
 	if !rep.OK() {
-		t.Fatalf("the reference provider must be conformant, including CapBatchResolve, CapBindAuth and CapGrantBundle:\n%s", rep)
+		t.Fatalf("the reference provider must be conformant, including CapBatchResolve, CapBindAuth, CapGrantBundle and CapAuthLifecycle:\n%s", rep)
 	}
 }
