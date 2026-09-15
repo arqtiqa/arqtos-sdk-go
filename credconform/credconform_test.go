@@ -229,6 +229,22 @@ func (l *lifeWrongKindLoader) AuthStatus(_ context.Context, now time.Time) (cred
 	return credential.AuthSession{ID: "dyn-123", Kind: credential.KindSecretLease, ExpiresAt: now.Add(time.Hour), Renewable: true}, nil
 }
 
+type lifeHiddenRenewLoader struct {
+	lifeLoader
+	n int
+}
+
+func (l *lifeHiddenRenewLoader) AuthStatus(_ context.Context, now time.Time) (credential.AuthSession, error) {
+	l.n++
+	return credential.AuthSession{ID: "auth-handle", Kind: credential.KindAuth, ExpiresAt: now.Add(time.Duration(l.n) * time.Hour), Renewable: false}, nil
+}
+
+type lifeRenewAcceptsLeaseLoader struct{ lifeLoader }
+
+func (l *lifeRenewAcceptsLeaseLoader) RenewAuth(_ context.Context, s credential.AuthSession, now time.Time) (credential.AuthSession, error) {
+	return credential.AuthSession{ID: s.ID, Kind: credential.KindAuth, ExpiresAt: now.Add(time.Hour), Renewable: true}, nil
+}
+
 type partialBundleLoader struct{ bundleLoader }
 
 func (l *partialBundleLoader) AcquireBundle(ctx context.Context, inv credential.Inventory) (credential.Bundle, error) {
@@ -551,6 +567,18 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 		{
 			name:     "AuthStatus returns a secret_lease handle",
 			loader:   &lifeWrongKindLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
+			wantFail: credconform.CheckAuthNotSecretLease,
+		},
+		{
+			name:     "AuthStatus hidden-renews at a fixed host clock",
+			loader:   &lifeHiddenRenewLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
+			wantFail: credconform.CheckAuthNotSecretLease,
+		},
+		{
+			name:     "RenewAuth accepts a secret_lease handle",
+			loader:   &lifeRenewAcceptsLeaseLoader{},
 			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
 			wantFail: credconform.CheckAuthNotSecretLease,
 		},

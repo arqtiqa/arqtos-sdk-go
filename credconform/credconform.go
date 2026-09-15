@@ -38,6 +38,11 @@
 //     credential.BundleAcquirer is implemented.
 //   - [CheckGrantBundleShape] — a grant bundle is ready only when every
 //     enrolled key is present; Resolve still answers one identity.
+//   - [CheckAuthLifecycleDeclared] — auth_lifecycle is declared exactly when
+//     credential.AuthLifecycle is implemented.
+//   - [CheckAuthNotSecretLease] — static auth does not advertise CapLease;
+//     AuthStatus is kind auth and does not hidden-renew at a fixed host
+//     clock; RenewAuth refuses a secret_lease handle.
 //   - [CheckResolveNoEmptySuccess] — a reference the connector can resolve
 //     comes back carrying material, never as a success carrying nothing and
 //     never as a deliberately-empty assertion.
@@ -58,7 +63,7 @@
 //
 // # Scope
 //
-// This package covers the three contract obligations above. Contract shape,
+// This package covers the contract obligations listed above. Contract shape,
 // secret-handling (no material to logs, disk or wire; dies-with-session) and
 // protocol-version negotiation are the rest of the conformance story and land
 // alongside these checks.
