@@ -151,6 +151,10 @@ func ValidateSet(declarations []Declaration) error {
 			if d.prefix() == other.prefix() && d.SequenceID != other.SequenceID && (d.Mode == Issuing || other.Mode == Issuing) {
 				return fmt.Errorf("recorduid: namespace collision")
 			}
+			if d.Mode == Issuing && other.Mode == Issuing && d.Namespace.Profile == Full && other.Namespace.Profile == Full &&
+				d.Kind == other.Kind && d.Namespace.HostKey == other.Namespace.HostKey && d.Namespace.RepositoryID == other.Namespace.RepositoryID {
+				return fmt.Errorf("recorduid: repository/kind has multiple issuing sequences")
+			}
 		}
 	}
 	return nil
