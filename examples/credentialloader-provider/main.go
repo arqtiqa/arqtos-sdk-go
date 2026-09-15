@@ -21,6 +21,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
 
@@ -118,6 +119,26 @@ func (m *memLoader) AcquireBundle(ctx context.Context, inv credential.Inventory)
 
 var _ credential.BundleAcquirer = (*memLoader)(nil)
 
+func (m *memLoader) AuthStatus(_ context.Context, now time.Time) (credential.AuthSession, error) {
+	return credential.AuthSession{ID: "auth-handle", Kind: credential.KindAuth, ExpiresAt: now.Add(time.Hour), Renewable: false}, nil
+}
+
+func (m *memLoader) RenewAuth(_ context.Context, s credential.AuthSession, now time.Time) (credential.AuthSession, error) {
+	if err := credential.CheckAuthSession(s); err != nil {
+		return credential.AuthSession{}, cerr.New(cerr.KindInvalid, "RenewAuth", err)
+	}
+	return credential.AuthSession{}, cerr.New(cerr.KindUnsupported, "RenewAuth", nil)
+}
+
+func (m *memLoader) Reauthenticate(_ context.Context, boot *credential.Bootstrap, now time.Time) (credential.AuthSession, error) {
+	if err := m.BindAuth(context.Background(), boot); err != nil {
+		return credential.AuthSession{}, err
+	}
+	return m.AuthStatus(context.Background(), now)
+}
+
+var _ credential.AuthLifecycle = (*memLoader)(nil)
+
 func (m *memLoader) List(_ context.Context, _ string) ([]ref.Ref, error) {
 	refs := make([]ref.Ref, 0, len(m.vals))
 	for k := range m.vals {
@@ -150,7 +171,7 @@ func (m *memLoader) Implements() connector.Class { return connector.ClassCredent
 // alongside CapRead: a capability that is declared but not implemented, or
 // implemented but not declared, fails credconform in either direction.
 func (m *memLoader) Capabilities() connector.Capabilities {
-	return connector.Capabilities{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth, credential.CapGrantBundle}
+	return connector.Capabilities{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth, credential.CapGrantBundle, credential.CapAuthLifecycle}
 }
 
 func (m *memLoader) Health(_ context.Context) (connector.Health, error) {

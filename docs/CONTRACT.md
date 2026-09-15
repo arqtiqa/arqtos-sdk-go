@@ -379,6 +379,19 @@ requests; this is not `CapBatchResolve`.
 `Resolve` / `ResolveBatch` still answer the identities they were asked for.
 They must not export adjacent granted fields.
 
+### Auth lifecycle (`CapAuthLifecycle`)
+
+Provider-login/token expiry is **not** `CredentialLoader.Lease`. A static KV
+under an expiring auth token implements `credential.AuthLifecycle` and must
+**not** advertise `CapLease`. Dynamic-secret lease IDs cannot be used as auth
+handles (`kind` must be `auth`; `secret_lease` is `cerr.KindInvalid`).
+
+The host supplies `now`. `AuthStatus` must not renew as a side effect.
+`RenewAuth` of a non-renewable or expired session fails explicitly.
+`Reauthenticate` takes the same bootstrap payload as `BindAuth`. Worker
+process death is **not** evidence that the backend revoked anything; retain a
+non-secret cleanup handle and rely on backend expiry as the outer bound.
+
 ### `Material` and `Lease`
 
 - `credential.Material` holds resolved secret bytes. `String()`/`GoString()`
@@ -406,6 +419,7 @@ capability constants declared in the `credential` package:
 | `CapBatchResolve` | Resolves many references in ONE backend call, via `credential.BatchResolver`. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Batch resolution](#batch-resolution-capbatchresolve). |
 | `CapBindAuth` | Accepts host-supplied bootstrap material via `credential.AuthBinder.BindAuth`. Token and two-key profiles use that same operation. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Bind auth](#bind-auth-capbindauth). |
 | `CapGrantBundle` | Acquires a finite enrolled grant via `credential.BundleAcquirer.AcquireBundle`. One acquisition may contain several backend requests. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Grant bundle](#grant-bundle-capgrantbundle). |
+| `CapAuthLifecycle` | Reports and renews the connector's own outward-auth lifetime via `credential.AuthLifecycle`. Not `CapLease`. MUST be declared in the manifest **and** by `Capabilities()`, and MUST be implemented — see [Auth lifecycle](#auth-lifecycle-capauthlifecycle). |
 
 `CapOIDC` and `CapAppRole` describe how the connector itself authenticates
 outward, not a behavior it exposes inward — hosts use them to reason about the
@@ -521,6 +535,8 @@ if err := rep.Err(); err != nil {
 | `bind_auth/declared-is-implemented` | `bind_auth` is declared in both places exactly when `credential.AuthBinder` is implemented |
 | `grant_bundle/declared-is-implemented` | `grant_bundle` is declared in both places exactly when `credential.BundleAcquirer` is implemented |
 | `grant_bundle/complete-inventory` | a declared grant bundle is ready only with every enrolled key present; `Resolve` still answers one identity |
+| `auth_lifecycle/declared-is-implemented` | `auth_lifecycle` is declared in both places exactly when `credential.AuthLifecycle` is implemented |
+| `auth_lifecycle/not-secret-lease` | static auth does not advertise `CapLease`; `RenewAuth` refuses a `secret_lease` handle; `AuthStatus` does not hidden-renew |
 | `resolve/no-empty-success` | every reference the run declares resolvable comes back carrying **material** — not a success carrying nothing, and not a `ResolvedEmpty()` assertion either |
 | `failure/typed` | the reference the run declares unresolvable fails with a classified `cerr.Kind` |
 | `batch/results-match-request` | batch results correspond one-for-one, in order, with the request — reported only for a connector that implements batch |
@@ -1603,8 +1619,8 @@ not healthy.
 
 | Layer | Package | What it is |
 |---|---|---|
-| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure`/`BindAuthRequest`/`GrantInventory` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`, `BindAuth`, `AcquireBundle`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
-| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, `BootstrapToPB`/`BootstrapFromPB`, `InventoryToPB`/`BundleToPB`, `ObservationToPB`/`ObservationFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — a `Quota` observation crosses as a status detail, so old peers that ignore details still see the code. Bundle completeness zero is not ready. |
+| Contract | [`proto/connector/v1/credentialloader.proto`](../proto/connector/v1/credentialloader.proto) | The `.proto` defining `Ref`/`Material`/`Lease`/`Failure`/`BindAuthRequest`/`GrantInventory`/`AuthSession` messages and the `CredentialLoader` gRPC service (`Resolve`, `List`, `Lease`, `Renew`, `Revoke`, `Health`, `Capabilities`, `ResolveBatch`, `BindAuth`, `AcquireBundle`, `AuthStatus`, `RenewAuth`, `Reauthenticate`). It carries the presence rules **in the file**, in comments, because it is the contract for authors who will never read the Go. Generated, committed Go stubs live in [`connectorpb/`](../connectorpb/) — a `buf generate` regenerates them; consumers need no local `protoc`. |
+| Marshalling | [`transport/`](../transport/transport.go) | `RefToPB`/`RefFromPB`, `LeaseToPB`/`LeaseFromPB`, `ResolutionToPB`/`ResolutionFromPB` (which own the presence + `empty_by_assertion` rules), `BatchResultToPB`/`BatchResultFromPB`, `BootstrapToPB`/`BootstrapFromPB`, `InventoryToPB`/`BundleToPB`, `AuthSessionToPB`/`AuthSessionFromPB`, `ObservationToPB`/`ObservationFromPB`, and `ErrToStatus`/`ErrFromStatus`, which map every `cerr.Kind` to a distinct `google.golang.org/grpc/codes` code and back — a `Quota` observation crosses as a status detail, so old peers that ignore details still see the code. Bundle completeness zero is not ready. Auth `kind` must be `auth`. |
 | Transport binding | [`plugin/`](../plugin/plugin.go) | `plugin.Handshake` (the go-plugin magic-cookie handshake both sides must share), `plugin.CredentialLoaderName`, and `plugin.PluginMap(impl)`. A provider passes `plugin.PluginMap(impl)` to `goplugin.ServeConfig.Plugins`; the host's `Dispense(plugin.CredentialLoaderName)` returns a value that itself satisfies `credential.CredentialLoader` — from the host's point of view, calling a Track-B provider looks identical to calling a native connector. |
 | Manifest | [`manifest/`](../manifest/manifest.go) | `connector.yaml`, the file a provider ships alongside its binary declaring `name`, `implements` (a known `connector.Class`, e.g. `CredentialLoader`), `kind` (`declarative` \| `provider` \| `native`), typed `capabilities` (`[]connector.Capability`, checked against the class vocabulary and against the running connector by `credconform`), `supports`, refs-only `auth`, and — required for `kind: provider` — `min_host_version`, the minimum host contract version the provider requires. `manifest.Parse` is strict (unknown fields rejected); `Doc.Validate()` closes the `kind`/`implements` enums, closes the `capabilities` vocabulary against the class in `implements` (so a misspelled capability is refused by the host **before** it loads anything, not only by a full `credconform` run against a live connector), and rejects any `auth` entry that isn't an `op://` ref or a bare environment-variable name (never literal secret material). |
 

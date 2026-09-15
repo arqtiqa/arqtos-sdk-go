@@ -15,6 +15,7 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
 	"github.com/arqtiqa/arqtos-sdk-go/connectorpb"
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
+	"github.com/arqtiqa/arqtos-sdk-go/ref"
 	"github.com/arqtiqa/arqtos-sdk-go/transport"
 )
 
@@ -26,6 +27,18 @@ type authLifeLoader struct {
 
 func (a *authLifeLoader) Capabilities() connector.Capabilities {
 	return connector.Capabilities{credential.CapRead, credential.CapAuthLifecycle}
+}
+
+func (a *authLifeLoader) Lease(context.Context, ref.Ref) (credential.Resolution, credential.Lease, error) {
+	return credential.Resolution{}, credential.Lease{}, cerr.New(cerr.KindUnsupported, "Lease", nil)
+}
+
+func (a *authLifeLoader) Renew(context.Context, credential.Lease) (credential.Lease, error) {
+	return credential.Lease{}, cerr.New(cerr.KindUnsupported, "Renew", nil)
+}
+
+func (a *authLifeLoader) Revoke(context.Context, credential.Lease) error {
+	return cerr.New(cerr.KindUnsupported, "Revoke", nil)
 }
 
 func (a *authLifeLoader) AuthStatus(_ context.Context, _ time.Time) (credential.AuthSession, error) {

@@ -88,11 +88,17 @@ Nothing a `CredentialLoader` resolves outlives the session that requested it:
 - A connector implementation MUST NOT persist resolved material to disk, an
   environment variable, or any store outside the process's own transient
   memory.
+- Killing a provider worker is **not** evidence the backend revoked a
+  dynamic secret or an auth token. The host must `Revoke` tracked secret
+  leases where supported, then terminate the worker. Forced death cannot
+  prove remote revocation; retain a non-secret cleanup handle and treat
+  backend expiry as the outer bound.
 
 ## Host-side PERMAFROST audit of every action
 
 Every `CredentialLoader` action — `Resolve`, `List`, `Lease`, `Renew`,
-`Revoke`, `BindAuth` when declared, and `AcquireBundle` when declared — is
+`Revoke`, `BindAuth` when declared, `AcquireBundle` when declared, and
+`AuthStatus`/`RenewAuth`/`Reauthenticate` when declared — is
 audited on the host side (PERMAFROST), independent of whether the underlying
 backing store keeps its own access log. A connector does not need to
 implement its own audit trail to satisfy this contract, but it MUST NOT do

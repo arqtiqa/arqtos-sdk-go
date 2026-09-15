@@ -45,7 +45,7 @@ func TestMemLoaderIsConformant(t *testing.T) {
 		Implements:     connector.ClassCredentialLoader,
 		Kind:           manifest.KindProvider,
 		MinHostVersion: "0.1.0",
-		Capabilities:   []connector.Capability{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth, credential.CapGrantBundle},
+		Capabilities:   []connector.Capability{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth, credential.CapGrantBundle, credential.CapAuthLifecycle},
 	}
 
 	rep, err := credconform.Run(context.Background(), impl, credconform.Options{
