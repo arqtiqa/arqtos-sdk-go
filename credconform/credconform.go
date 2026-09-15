@@ -38,6 +38,11 @@
 //     credential.BundleAcquirer is implemented.
 //   - [CheckGrantBundleShape] — a grant bundle is ready only when every
 //     enrolled key is present; Resolve still answers one identity.
+//   - [CheckAuthLifecycleDeclared] — auth_lifecycle is declared exactly when
+//     credential.AuthLifecycle is implemented.
+//   - [CheckAuthNotSecretLease] — static auth does not advertise CapLease;
+//     AuthStatus is kind auth and does not hidden-renew at a fixed host
+//     clock; RenewAuth refuses a secret_lease handle.
 //   - [CheckResolveNoEmptySuccess] — a reference the connector can resolve
 //     comes back carrying material, never as a success carrying nothing and
 //     never as a deliberately-empty assertion.
@@ -58,7 +63,7 @@
 //
 // # Scope
 //
-// This package covers the three contract obligations above. Contract shape,
+// This package covers the contract obligations listed above. Contract shape,
 // secret-handling (no material to logs, disk or wire; dies-with-session) and
 // protocol-version negotiation are the rest of the conformance story and land
 // alongside these checks.
@@ -69,6 +74,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
@@ -118,6 +124,9 @@ const (
 	// CheckGrantBundleDeclared covers grant_bundle being declared exactly when
 	// credential.BundleAcquirer is implemented.
 	CheckGrantBundleDeclared = "grant_bundle/declared-is-implemented"
+	// CheckAuthLifecycleDeclared covers auth_lifecycle being declared exactly
+	// when credential.AuthLifecycle is implemented.
+	CheckAuthLifecycleDeclared = "auth_lifecycle/declared-is-implemented"
 	// CheckResolveNoEmptySuccess covers a resolvable reference coming back
 	// carrying material, rather than as a success carrying nothing.
 	CheckResolveNoEmptySuccess = "resolve/no-empty-success"
@@ -132,6 +141,9 @@ const (
 	// every enrolled key, ready only when complete, and Resolve still answering
 	// one requested identity.
 	CheckGrantBundleShape = "grant_bundle/complete-inventory"
+	// CheckAuthNotSecretLease covers a static KV under expiring auth not
+	// advertising CapLease, and RenewAuth refusing a secret_lease handle.
+	CheckAuthNotSecretLease = "auth_lifecycle/not-secret-lease"
 )
 
 // Options are the fixtures a conformance run needs. Every field is required:
@@ -273,6 +285,11 @@ func Run(ctx context.Context, c credential.CredentialLoader, opts Options) (Repo
 	}
 	if isAcquirer {
 		checkGrantBundleShape(ctx, &rep, acquirer, c, opts)
+	}
+	life, isLife := c.(credential.AuthLifecycle)
+	checkAuthLifecycleDeclared(&rep, opts.Manifest, c.Capabilities(), isLife)
+	if isLife {
+		checkAuthNotSecretLease(ctx, &rep, life, c, opts)
 	}
 
 	return rep, nil
@@ -426,6 +443,64 @@ func checkGrantBundleDeclared(rep *Report, m manifest.Doc, runtime connector.Cap
 	default:
 		rep.add(CheckGrantBundleDeclared, true, "not declared, not implemented")
 	}
+}
+
+func checkAuthLifecycleDeclared(rep *Report, m manifest.Doc, runtime connector.Capabilities, implemented bool) {
+	inManifest := m.Declares(credential.CapAuthLifecycle)
+	atRuntime := runtime.Has(credential.CapAuthLifecycle)
+	switch {
+	case (inManifest || atRuntime) && !implemented:
+		rep.add(CheckAuthLifecycleDeclared, false, fmt.Sprintf(
+			"%s is declared %s, but the connector does not implement credential.AuthLifecycle",
+			credential.CapAuthLifecycle, declaredIn(inManifest, atRuntime),
+		))
+	case implemented && !(inManifest && atRuntime):
+		rep.add(CheckAuthLifecycleDeclared, false, fmt.Sprintf(
+			"the connector implements credential.AuthLifecycle, but %s is declared %s",
+			credential.CapAuthLifecycle, declaredIn(inManifest, atRuntime),
+		))
+	case implemented:
+		rep.add(CheckAuthLifecycleDeclared, true, "declared in the manifest and by Capabilities(), and implemented")
+	default:
+		rep.add(CheckAuthLifecycleDeclared, true, "not declared, not implemented")
+	}
+}
+
+func checkAuthNotSecretLease(ctx context.Context, rep *Report, a credential.AuthLifecycle, c credential.CredentialLoader, opts Options) {
+	now := time.Unix(0, 0).UTC()
+	_, _, lerr := c.Lease(ctx, opts.Resolvable[0])
+	leaseUnsupported := cerr.KindOf(lerr) == cerr.KindUnsupported
+	advertisesLease := opts.Manifest.Declares(credential.CapLease) || c.Capabilities().Has(credential.CapLease)
+	if leaseUnsupported && advertisesLease {
+		rep.add(CheckAuthNotSecretLease, false, "static auth advertised CapLease while Lease is unsupported")
+		return
+	}
+	s1, err := a.AuthStatus(ctx, now)
+	if err != nil {
+		rep.add(CheckAuthNotSecretLease, false, err.Error())
+		return
+	}
+	if err := credential.CheckAuthSession(s1); err != nil {
+		rep.add(CheckAuthNotSecretLease, false, err.Error())
+		return
+	}
+	s2, err := a.AuthStatus(ctx, now)
+	if err != nil {
+		rep.add(CheckAuthNotSecretLease, false, err.Error())
+		return
+	}
+	if !s1.ExpiresAt.Equal(s2.ExpiresAt) {
+		rep.add(CheckAuthNotSecretLease, false, "AuthStatus changed expiry at a fixed host clock (hidden renewal)")
+		return
+	}
+	_, err = a.RenewAuth(ctx, credential.AuthSession{
+		ID: "dyn-123", Kind: credential.KindSecretLease, ExpiresAt: now.Add(time.Hour), Renewable: true,
+	}, now)
+	if err == nil {
+		rep.add(CheckAuthNotSecretLease, false, "RenewAuth accepted a secret_lease handle")
+		return
+	}
+	rep.add(CheckAuthNotSecretLease, true, "auth session is not a secret lease; host clock drives expiry")
 }
 
 func checkGrantBundleShape(ctx context.Context, rep *Report, a credential.BundleAcquirer, c credential.CredentialLoader, opts Options) {

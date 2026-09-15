@@ -45,7 +45,7 @@ func TestMemLoaderIsConformant(t *testing.T) {
 		Implements:     connector.ClassCredentialLoader,
 		Kind:           manifest.KindProvider,
 		MinHostVersion: "0.1.0",
-		Capabilities:   []connector.Capability{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth, credential.CapGrantBundle},
+		Capabilities:   []connector.Capability{credential.CapRead, credential.CapBatchResolve, credential.CapBindAuth, credential.CapGrantBundle, credential.CapAuthLifecycle},
 	}
 
 	rep, err := credconform.Run(context.Background(), impl, credconform.Options{
@@ -57,6 +57,6 @@ func TestMemLoaderIsConformant(t *testing.T) {
 		t.Fatalf("credconform.Run could not be carried out: %v", err)
 	}
 	if !rep.OK() {
-		t.Fatalf("the reference provider must be conformant, including CapBatchResolve, CapBindAuth and CapGrantBundle:\n%s", rep)
+		t.Fatalf("the reference provider must be conformant, including CapBatchResolve, CapBindAuth, CapGrantBundle and CapAuthLifecycle:\n%s", rep)
 	}
 }

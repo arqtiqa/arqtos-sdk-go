@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arqtiqa/arqtos-sdk-go/cerr"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
@@ -185,6 +186,63 @@ type unbundledAcquirer struct{ bundleLoader }
 
 func (l *unbundledAcquirer) Capabilities() connector.Capabilities {
 	return connector.Capabilities{credential.CapRead}
+}
+
+type lifeLoader struct{ baseLoader }
+
+func (l *lifeLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapAuthLifecycle}
+}
+
+func (l *lifeLoader) AuthStatus(_ context.Context, now time.Time) (credential.AuthSession, error) {
+	return credential.AuthSession{ID: "auth-handle", Kind: credential.KindAuth, ExpiresAt: now.Add(time.Hour), Renewable: false}, nil
+}
+
+func (l *lifeLoader) RenewAuth(_ context.Context, s credential.AuthSession, now time.Time) (credential.AuthSession, error) {
+	if err := credential.CheckAuthSession(s); err != nil {
+		return credential.AuthSession{}, cerr.New(cerr.KindInvalid, "RenewAuth", err)
+	}
+	return credential.AuthSession{}, cerr.New(cerr.KindUnsupported, "RenewAuth", nil)
+}
+
+func (l *lifeLoader) Reauthenticate(_ context.Context, _ *credential.Bootstrap, now time.Time) (credential.AuthSession, error) {
+	return l.AuthStatus(context.Background(), now)
+}
+
+var _ credential.AuthLifecycle = (*lifeLoader)(nil)
+
+type lifeLiarLoader struct{ baseLoader }
+
+func (l *lifeLiarLoader) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapAuthLifecycle}
+}
+
+type lifeLeaseAdvertiser struct{ lifeLoader }
+
+func (l *lifeLeaseAdvertiser) Capabilities() connector.Capabilities {
+	return connector.Capabilities{credential.CapRead, credential.CapAuthLifecycle, credential.CapLease}
+}
+
+type lifeWrongKindLoader struct{ lifeLoader }
+
+func (l *lifeWrongKindLoader) AuthStatus(_ context.Context, now time.Time) (credential.AuthSession, error) {
+	return credential.AuthSession{ID: "dyn-123", Kind: credential.KindSecretLease, ExpiresAt: now.Add(time.Hour), Renewable: true}, nil
+}
+
+type lifeHiddenRenewLoader struct {
+	lifeLoader
+	n int
+}
+
+func (l *lifeHiddenRenewLoader) AuthStatus(_ context.Context, now time.Time) (credential.AuthSession, error) {
+	l.n++
+	return credential.AuthSession{ID: "auth-handle", Kind: credential.KindAuth, ExpiresAt: now.Add(time.Duration(l.n) * time.Hour), Renewable: false}, nil
+}
+
+type lifeRenewAcceptsLeaseLoader struct{ lifeLoader }
+
+func (l *lifeRenewAcceptsLeaseLoader) RenewAuth(_ context.Context, s credential.AuthSession, now time.Time) (credential.AuthSession, error) {
+	return credential.AuthSession{ID: s.ID, Kind: credential.KindAuth, ExpiresAt: now.Add(time.Hour), Renewable: true}, nil
 }
 
 type partialBundleLoader struct{ bundleLoader }
@@ -495,6 +553,36 @@ func TestNonCompliantConnectorsFailTheCheckTheyViolate(t *testing.T) {
 			wantFail: credconform.CheckGrantBundleShape,
 		},
 		{
+			name:     "manifest declares auth_lifecycle, connector does not implement it",
+			loader:   &lifeLiarLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
+			wantFail: credconform.CheckAuthLifecycleDeclared,
+		},
+		{
+			name:     "static auth advertises CapLease while Lease is unsupported",
+			loader:   &lifeLeaseAdvertiser{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle, credential.CapLease),
+			wantFail: credconform.CheckAuthNotSecretLease,
+		},
+		{
+			name:     "AuthStatus returns a secret_lease handle",
+			loader:   &lifeWrongKindLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
+			wantFail: credconform.CheckAuthNotSecretLease,
+		},
+		{
+			name:     "AuthStatus hidden-renews at a fixed host clock",
+			loader:   &lifeHiddenRenewLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
+			wantFail: credconform.CheckAuthNotSecretLease,
+		},
+		{
+			name:     "RenewAuth accepts a secret_lease handle",
+			loader:   &lifeRenewAcceptsLeaseLoader{},
+			manifest: manifestFor(credential.CapRead, credential.CapAuthLifecycle),
+			wantFail: credconform.CheckAuthNotSecretLease,
+		},
+		{
 			name:     "manifest is invalid",
 			loader:   &baseLoader{},
 			manifest: manifest.Doc{Implements: connector.ClassCredentialLoader, Kind: manifest.KindNative},
@@ -612,6 +700,16 @@ func TestCompliantConnectorsPass(t *testing.T) {
 			t.Fatalf("grant bundle shape must be checked:\n%s", rep)
 		}
 	})
+	t.Run("auth_lifecycle capability", func(t *testing.T) {
+		m := manifestFor(credential.CapRead, credential.CapAuthLifecycle)
+		rep, err := credconform.Run(context.Background(), &lifeLoader{}, opts(t, m))
+		if err != nil {
+			t.Fatalf("the harness could not run: %v", err)
+		}
+		if !rep.OK() {
+			t.Fatalf("a compliant auth_lifecycle connector must pass:\n%s", rep)
+		}
+	})
 }
 
 // TestEveryObligationIsChecked pins the check set. A check that stops running
@@ -628,6 +726,7 @@ func TestEveryObligationIsChecked(t *testing.T) {
 		credconform.CheckBatchDeclared,
 		credconform.CheckBindAuthDeclared,
 		credconform.CheckGrantBundleDeclared,
+		credconform.CheckAuthLifecycleDeclared,
 		credconform.CheckResolveNoEmptySuccess,
 		credconform.CheckFailureTyped,
 		credconform.CheckBatchShape,

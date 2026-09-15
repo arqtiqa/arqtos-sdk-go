@@ -41,16 +41,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CredentialLoader_Resolve_FullMethodName       = "/connector.v1.CredentialLoader/Resolve"
-	CredentialLoader_List_FullMethodName          = "/connector.v1.CredentialLoader/List"
-	CredentialLoader_Lease_FullMethodName         = "/connector.v1.CredentialLoader/Lease"
-	CredentialLoader_Renew_FullMethodName         = "/connector.v1.CredentialLoader/Renew"
-	CredentialLoader_Revoke_FullMethodName        = "/connector.v1.CredentialLoader/Revoke"
-	CredentialLoader_Health_FullMethodName        = "/connector.v1.CredentialLoader/Health"
-	CredentialLoader_Capabilities_FullMethodName  = "/connector.v1.CredentialLoader/Capabilities"
-	CredentialLoader_ResolveBatch_FullMethodName  = "/connector.v1.CredentialLoader/ResolveBatch"
-	CredentialLoader_BindAuth_FullMethodName      = "/connector.v1.CredentialLoader/BindAuth"
-	CredentialLoader_AcquireBundle_FullMethodName = "/connector.v1.CredentialLoader/AcquireBundle"
+	CredentialLoader_Resolve_FullMethodName        = "/connector.v1.CredentialLoader/Resolve"
+	CredentialLoader_List_FullMethodName           = "/connector.v1.CredentialLoader/List"
+	CredentialLoader_Lease_FullMethodName          = "/connector.v1.CredentialLoader/Lease"
+	CredentialLoader_Renew_FullMethodName          = "/connector.v1.CredentialLoader/Renew"
+	CredentialLoader_Revoke_FullMethodName         = "/connector.v1.CredentialLoader/Revoke"
+	CredentialLoader_Health_FullMethodName         = "/connector.v1.CredentialLoader/Health"
+	CredentialLoader_Capabilities_FullMethodName   = "/connector.v1.CredentialLoader/Capabilities"
+	CredentialLoader_ResolveBatch_FullMethodName   = "/connector.v1.CredentialLoader/ResolveBatch"
+	CredentialLoader_BindAuth_FullMethodName       = "/connector.v1.CredentialLoader/BindAuth"
+	CredentialLoader_AcquireBundle_FullMethodName  = "/connector.v1.CredentialLoader/AcquireBundle"
+	CredentialLoader_AuthStatus_FullMethodName     = "/connector.v1.CredentialLoader/AuthStatus"
+	CredentialLoader_RenewAuth_FullMethodName      = "/connector.v1.CredentialLoader/RenewAuth"
+	CredentialLoader_Reauthenticate_FullMethodName = "/connector.v1.CredentialLoader/Reauthenticate"
 )
 
 // CredentialLoaderClient is the client API for CredentialLoader service.
@@ -123,6 +126,21 @@ type CredentialLoaderClient interface {
 	// acquisition, not a ready bundle. This is not ResolveBatch: one
 	// acquisition may contain several backend requests.
 	AcquireBundle(ctx context.Context, in *AcquireBundleRequest, opts ...grpc.CallOption) (*AcquireBundleResponse, error)
+	// AuthStatus reports the connector's own outward-auth lifetime using the
+	// host's clock (`now_unix`). It is OPTIONAL, gated by reporting
+	// "auth_lifecycle". This is not Lease: a static KV under an expiring
+	// login token must not advertise "lease". kind must be "auth"; a
+	// secret_lease handle is invalid. The connector MUST NOT renew as a
+	// side effect of this RPC.
+	AuthStatus(ctx context.Context, in *AuthStatusRequest, opts ...grpc.CallOption) (*AuthStatusResponse, error)
+	// RenewAuth extends an AuthSession when Renewable is true. Expired or
+	// wrong-kind handles fail explicitly. Host-driven: the connector must not
+	// run a hidden renewal loop.
+	RenewAuth(ctx context.Context, in *RenewAuthRequest, opts ...grpc.CallOption) (*RenewAuthResponse, error)
+	// Reauthenticate replaces the outward-auth session using host-supplied
+	// bootstrap material (same BindAuth payload). Worker process death is
+	// not evidence that the backend revoked anything.
+	Reauthenticate(ctx context.Context, in *ReauthenticateRequest, opts ...grpc.CallOption) (*ReauthenticateResponse, error)
 }
 
 type credentialLoaderClient struct {
@@ -233,6 +251,36 @@ func (c *credentialLoaderClient) AcquireBundle(ctx context.Context, in *AcquireB
 	return out, nil
 }
 
+func (c *credentialLoaderClient) AuthStatus(ctx context.Context, in *AuthStatusRequest, opts ...grpc.CallOption) (*AuthStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthStatusResponse)
+	err := c.cc.Invoke(ctx, CredentialLoader_AuthStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *credentialLoaderClient) RenewAuth(ctx context.Context, in *RenewAuthRequest, opts ...grpc.CallOption) (*RenewAuthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewAuthResponse)
+	err := c.cc.Invoke(ctx, CredentialLoader_RenewAuth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *credentialLoaderClient) Reauthenticate(ctx context.Context, in *ReauthenticateRequest, opts ...grpc.CallOption) (*ReauthenticateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReauthenticateResponse)
+	err := c.cc.Invoke(ctx, CredentialLoader_Reauthenticate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CredentialLoaderServer is the server API for CredentialLoader service.
 // All implementations must embed UnimplementedCredentialLoaderServer
 // for forward compatibility.
@@ -303,6 +351,21 @@ type CredentialLoaderServer interface {
 	// acquisition, not a ready bundle. This is not ResolveBatch: one
 	// acquisition may contain several backend requests.
 	AcquireBundle(context.Context, *AcquireBundleRequest) (*AcquireBundleResponse, error)
+	// AuthStatus reports the connector's own outward-auth lifetime using the
+	// host's clock (`now_unix`). It is OPTIONAL, gated by reporting
+	// "auth_lifecycle". This is not Lease: a static KV under an expiring
+	// login token must not advertise "lease". kind must be "auth"; a
+	// secret_lease handle is invalid. The connector MUST NOT renew as a
+	// side effect of this RPC.
+	AuthStatus(context.Context, *AuthStatusRequest) (*AuthStatusResponse, error)
+	// RenewAuth extends an AuthSession when Renewable is true. Expired or
+	// wrong-kind handles fail explicitly. Host-driven: the connector must not
+	// run a hidden renewal loop.
+	RenewAuth(context.Context, *RenewAuthRequest) (*RenewAuthResponse, error)
+	// Reauthenticate replaces the outward-auth session using host-supplied
+	// bootstrap material (same BindAuth payload). Worker process death is
+	// not evidence that the backend revoked anything.
+	Reauthenticate(context.Context, *ReauthenticateRequest) (*ReauthenticateResponse, error)
 	mustEmbedUnimplementedCredentialLoaderServer()
 }
 
@@ -342,6 +405,15 @@ func (UnimplementedCredentialLoaderServer) BindAuth(context.Context, *BindAuthRe
 }
 func (UnimplementedCredentialLoaderServer) AcquireBundle(context.Context, *AcquireBundleRequest) (*AcquireBundleResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AcquireBundle not implemented")
+}
+func (UnimplementedCredentialLoaderServer) AuthStatus(context.Context, *AuthStatusRequest) (*AuthStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AuthStatus not implemented")
+}
+func (UnimplementedCredentialLoaderServer) RenewAuth(context.Context, *RenewAuthRequest) (*RenewAuthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenewAuth not implemented")
+}
+func (UnimplementedCredentialLoaderServer) Reauthenticate(context.Context, *ReauthenticateRequest) (*ReauthenticateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Reauthenticate not implemented")
 }
 func (UnimplementedCredentialLoaderServer) mustEmbedUnimplementedCredentialLoaderServer() {}
 func (UnimplementedCredentialLoaderServer) testEmbeddedByValue()                          {}
@@ -544,6 +616,60 @@ func _CredentialLoader_AcquireBundle_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CredentialLoader_AuthStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CredentialLoaderServer).AuthStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CredentialLoader_AuthStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CredentialLoaderServer).AuthStatus(ctx, req.(*AuthStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CredentialLoader_RenewAuth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewAuthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CredentialLoaderServer).RenewAuth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CredentialLoader_RenewAuth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CredentialLoaderServer).RenewAuth(ctx, req.(*RenewAuthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CredentialLoader_Reauthenticate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReauthenticateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CredentialLoaderServer).Reauthenticate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CredentialLoader_Reauthenticate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CredentialLoaderServer).Reauthenticate(ctx, req.(*ReauthenticateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CredentialLoader_ServiceDesc is the grpc.ServiceDesc for CredentialLoader service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -590,6 +716,18 @@ var CredentialLoader_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AcquireBundle",
 			Handler:    _CredentialLoader_AcquireBundle_Handler,
+		},
+		{
+			MethodName: "AuthStatus",
+			Handler:    _CredentialLoader_AuthStatus_Handler,
+		},
+		{
+			MethodName: "RenewAuth",
+			Handler:    _CredentialLoader_RenewAuth_Handler,
+		},
+		{
+			MethodName: "Reauthenticate",
+			Handler:    _CredentialLoader_Reauthenticate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

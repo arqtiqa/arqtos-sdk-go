@@ -21,7 +21,8 @@
 // satisfies credential.BatchResolver exactly when the provider reports
 // credential.CapBatchResolve, credential.AuthBinder exactly when it
 // reports credential.CapBindAuth, and credential.BundleAcquirer exactly when
-// it reports credential.CapGrantBundle, so a host discovers each by type
+// it reports credential.CapGrantBundle, and credential.AuthLifecycle exactly
+// when it reports credential.CapAuthLifecycle, so a host discovers each by type
 // assertion the same way it would on a native connector.
 package plugin
 
@@ -95,14 +96,16 @@ func (p *CredentialLoaderPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Serv
 // here implements credential.BatchResolver exactly when the provider reports
 // [credential.CapBatchResolve], credential.AuthBinder exactly when it reports
 // [credential.CapBindAuth], credential.BundleAcquirer exactly when it reports
-// [credential.CapGrantBundle], and the combinations when it reports more than
-// one.
+// [credential.CapGrantBundle], credential.AuthLifecycle exactly when it reports
+// [credential.CapAuthLifecycle], and the combinations when it reports more
+// than one.
 func (p *CredentialLoaderPlugin) GRPCClient(ctx context.Context, _ *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
 	c := &grpcClient{client: connectorpb.NewCredentialLoaderClient(conn), name: p.Name}
 	caps := c.probeCaps(ctx)
 	batch := caps.Has(credential.CapBatchResolve)
 	auth := caps.Has(credential.CapBindAuth)
 	bundle := caps.Has(credential.CapGrantBundle)
+	life := caps.Has(credential.CapAuthLifecycle)
 	n := 0
 	if batch {
 		n |= 1
@@ -113,24 +116,29 @@ func (p *CredentialLoaderPlugin) GRPCClient(ctx context.Context, _ *goplugin.GRP
 	if bundle {
 		n |= 4
 	}
+	var base interface{}
 	switch n {
 	case 1:
-		return &batchGRPCClient{grpcClient: c}, nil
+		base = &batchGRPCClient{grpcClient: c}
 	case 2:
-		return &authGRPCClient{grpcClient: c}, nil
+		base = &authGRPCClient{grpcClient: c}
 	case 3:
-		return &batchAuthGRPCClient{grpcClient: c}, nil
+		base = &batchAuthGRPCClient{grpcClient: c}
 	case 4:
-		return &bundleGRPCClient{grpcClient: c}, nil
+		base = &bundleGRPCClient{grpcClient: c}
 	case 5:
-		return &batchBundleGRPCClient{grpcClient: c}, nil
+		base = &batchBundleGRPCClient{grpcClient: c}
 	case 6:
-		return &authBundleGRPCClient{grpcClient: c}, nil
+		base = &authBundleGRPCClient{grpcClient: c}
 	case 7:
-		return &batchAuthBundleGRPCClient{grpcClient: c}, nil
+		base = &batchAuthBundleGRPCClient{grpcClient: c}
 	default:
-		return c, nil
+		base = c
 	}
+	if life {
+		return wrapLifecycle(base), nil
+	}
+	return base, nil
 }
 
 // grpcServer adapts a credential.CredentialLoader implementation to the

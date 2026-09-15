@@ -84,6 +84,11 @@ const (
 	// several backend requests; it is not [CapBatchResolve]. A connector that
 	// declares it MUST implement the interface.
 	CapGrantBundle connector.Capability = "grant_bundle"
+	// CapAuthLifecycle declares that this connector reports and renews its
+	// own outward-auth lifetime via [AuthLifecycle]. That is not
+	// [CapLease]: a static secret under an expiring login token must not
+	// advertise dynamic-secret leases (credential-detail §3e).
+	CapAuthLifecycle connector.Capability = "auth_lifecycle"
 )
 
 // knownCapabilities is the closed capability vocabulary of this connector
@@ -91,7 +96,7 @@ const (
 // capability a host does not recognise is a capability the host will not use,
 // and a typo is indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
-	CapRead, CapLease, CapRotate, CapOIDC, CapAppRole, CapBatchResolve, CapBindAuth, CapGrantBundle,
+	CapRead, CapLease, CapRotate, CapOIDC, CapAppRole, CapBatchResolve, CapBindAuth, CapGrantBundle, CapAuthLifecycle,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for
@@ -148,8 +153,9 @@ func (l Lease) Expired(now time.Time) bool { return !now.Before(l.ExpiresAt) }
 //
 // Optional operations live behind capabilities rather than in this interface:
 // [BatchResolver] behind [CapBatchResolve], [AuthBinder] behind [CapBindAuth],
-// [BundleAcquirer] behind [CapGrantBundle]. A host type-asserts for them, and
-// a connector that declares one without implementing it fails conformance.
+// [BundleAcquirer] behind [CapGrantBundle], [AuthLifecycle] behind
+// [CapAuthLifecycle]. A host type-asserts for them, and a connector that
+// declares one without implementing it fails conformance.
 type CredentialLoader interface {
 	connector.Connector
 	Resolve(ctx context.Context, r ref.Ref) (Resolution, error)
