@@ -1,0 +1,41 @@
+[
+  {
+    "declaration": {
+      "schema": "arqtos-uid-declaration/v1",
+      "org_id": "org-example",
+      "sequence_id": "seq-docs",
+      "revision": "revision-one",
+      "kind": "docs",
+      "mode": "issuing",
+      "namespace": {"profile": "simple", "kind_prefix": "doc", "project_ref": "project-example", "project_slug": "example"}
+    },
+    "label": "doc-example-00001",
+    "ordinal": "1"
+  },
+  {
+    "declaration": {
+      "schema": "arqtos-uid-declaration/v1",
+      "org_id": "org-example",
+      "sequence_id": "seq-full",
+      "revision": "revision-one",
+      "kind": "docs",
+      "mode": "issuing",
+      "namespace": {"profile": "full", "kind_prefix": "doc", "org_slug": "ex", "host_key": "host", "repository_id": "repo-A/%2d:é"}
+    },
+    "label": "doc-ex-host-repo%2d%41%2f%252d%3a%c3%a9-100000",
+    "ordinal": "100000"
+  },
+  {
+    "declaration": {
+      "schema": "arqtos-uid-declaration/v1",
+      "org_id": "org-example",
+      "sequence_id": "seq-radar-history",
+      "revision": "historical-revision",
+      "kind": "rdrs",
+      "mode": "historical",
+      "historical_prefix": "rdr-Legacy-Project"
+    },
+    "label": "rdr-Legacy-Project-000042",
+    "ordinal": "42"
+  }
+]
