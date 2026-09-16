@@ -102,6 +102,12 @@ const (
 	// that returned an empty Protection for an unauthorized read would report
 	// "no rules here" for "I was not allowed to look".
 	CheckProtectionFailClosed = "protection/failure-is-typed"
+	// CheckListMissing covers an owner that does not exist failing with
+	// KindNotFound — the other half of the host-404 pair.
+	CheckListMissing = "list/missing-is-not-found"
+	// CheckProtectionMissing covers a ref that does not exist failing with
+	// KindNotFound, readable by the credential's scope.
+	CheckProtectionMissing = "protection/missing-is-not-found"
 )
 
 // Options are the fixtures a conformance run needs. Every field is required: a
@@ -136,6 +142,15 @@ type Options struct {
 	// the check nobody runs.
 	UnreadableProtectionRepo string
 	UnreadableProtectionRef  string
+
+	// MissingOwner is an owner that does not exist, inside the credential's
+	// scope. It drives KindNotFound on list, distinct from UnlistableOwner.
+	MissingOwner string
+
+	// MissingProtectionRepo and MissingProtectionRef name a repository and
+	// ref that do not exist, readable by the credential's scope.
+	MissingProtectionRepo string
+	MissingProtectionRef  string
 }
 
 // A Result is the outcome of a single named check.
@@ -245,6 +260,11 @@ func Run(ctx context.Context, c codehost.CodeHost, opts Options) (Report, error)
 			"Options.UnlistableOwner is empty: without an owner the connector must fail on, "+
 				"its failure classification is never exercised"))
 	}
+	if opts.MissingOwner == "" {
+		return Report{}, cerr.New(cerr.KindInvalid, "codehost.Conform", fmt.Errorf(
+			"Options.MissingOwner is empty: without an owner that does not exist, "+
+				"KindNotFound is never distinguished from KindUnauthorized"))
+	}
 
 	rep := Report{Connector: opts.Manifest.Name}
 
@@ -254,8 +274,10 @@ func Run(ctx context.Context, c codehost.CodeHost, opts Options) (Report, error)
 	checkOptionalDeclared(&rep, c)
 	checkListNoEmptySuccess(ctx, &rep, c, opts)
 	checkListFailClosed(ctx, &rep, c, opts)
+	checkListMissing(ctx, &rep, c, opts)
 	checkHealth(ctx, &rep, c)
 	checkProtectionFailClosed(ctx, &rep, c, opts)
+	checkProtectionMissing(ctx, &rep, c, opts)
 
 	return rep, nil
 }
@@ -395,6 +417,12 @@ func checkListFailClosed(ctx context.Context, rep *Report, c codehost.CodeHost, 
 			opts.UnlistableOwner, err))
 		return
 	}
+	if k := cerr.KindOf(err); k != cerr.KindUnauthorized {
+		rep.add(CheckListFailClosed, false, fmt.Sprintf(
+			"ListRepos(%s) failed with %s, and the contract requires %s where the credential cannot list the owner; a host 404 here would exit 3 where the door requires 4",
+			opts.UnlistableOwner, k, cerr.KindUnauthorized))
+		return
+	}
 	if _, ierr := res.Items(); ierr == nil {
 		rep.add(CheckListFailClosed, false, fmt.Sprintf(
 			"ListRepos(%s) failed with %s and STILL returned a readable resolution; a caller that ignored the error "+
@@ -402,6 +430,27 @@ func checkListFailClosed(ctx context.Context, rep *Report, c codehost.CodeHost, 
 		return
 	}
 	rep.add(CheckListFailClosed, true, fmt.Sprintf("%s -> %s, resolution unreadable", opts.UnlistableOwner, cerr.KindOf(err)))
+}
+
+func checkListMissing(ctx context.Context, rep *Report, c codehost.CodeHost, opts Options) {
+	res, err := c.ListRepos(ctx, opts.MissingOwner)
+	if err == nil {
+		rep.add(CheckListMissing, false, fmt.Sprintf(
+			"ListRepos(%s) succeeded on an owner the fixtures say does not exist", opts.MissingOwner))
+		return
+	}
+	if k := cerr.KindOf(err); k != cerr.KindNotFound {
+		rep.add(CheckListMissing, false, fmt.Sprintf(
+			"ListRepos(%s) failed with %s, and the contract requires %s for an owner that does not exist",
+			opts.MissingOwner, k, cerr.KindNotFound))
+		return
+	}
+	if _, ierr := res.Items(); ierr == nil {
+		rep.add(CheckListMissing, false, fmt.Sprintf(
+			"ListRepos(%s) failed with %s and STILL returned a readable resolution", opts.MissingOwner, cerr.KindOf(err)))
+		return
+	}
+	rep.add(CheckListMissing, true, fmt.Sprintf("%s -> %s, resolution unreadable", opts.MissingOwner, cerr.KindOf(err)))
 }
 
 func checkHealth(ctx context.Context, rep *Report, c codehost.CodeHost) {
@@ -469,6 +518,12 @@ func checkProtectionFailClosed(ctx context.Context, rep *Report, c codehost.Code
 			opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef, err))
 		return
 	}
+	if k := cerr.KindOf(err); k != cerr.KindUnauthorized {
+		rep.add(CheckProtectionFailClosed, false, fmt.Sprintf(
+			"InspectProtection(%s, %s) failed with %s, and the contract requires %s where the credential cannot read the ref; a host 404 here would exit 3 where the door requires 4",
+			opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef, k, cerr.KindUnauthorized))
+		return
+	}
 	// ⚠️ THE HALF THAT MATTERS. A connector may fail correctly AND still hand
 	// back a Protection whose lists read as empty — and a caller that logged the
 	// error and carried on would then conclude that nothing may bypass the gate.
@@ -481,4 +536,40 @@ func checkProtectionFailClosed(ctx context.Context, rep *Report, c codehost.Code
 	}
 	rep.add(CheckProtectionFailClosed, true, fmt.Sprintf("%s %s -> %s, protection unreadable",
 		opts.UnreadableProtectionRepo, opts.UnreadableProtectionRef, cerr.KindOf(err)))
+}
+
+func checkProtectionMissing(ctx context.Context, rep *Report, c codehost.CodeHost, opts Options) {
+	insp, ok := c.(codehost.ProtectionInspector)
+	if !ok {
+		rep.add(CheckProtectionMissing, true,
+			"NOT EXERCISED: this connector does not implement ProtectionInspector, so there was nothing to drive")
+		return
+	}
+	if opts.MissingProtectionRepo == "" || opts.MissingProtectionRef == "" {
+		rep.add(CheckProtectionMissing, false,
+			"this connector implements ProtectionInspector but Options.MissingProtectionRepo/Ref are empty, "+
+				"so KindNotFound is never exercised — supply a repository and ref that do not exist")
+		return
+	}
+	p, err := insp.InspectProtection(ctx, opts.MissingProtectionRepo, opts.MissingProtectionRef)
+	if err == nil {
+		rep.add(CheckProtectionMissing, false, fmt.Sprintf(
+			"InspectProtection(%s, %s) SUCCEEDED on a ref the fixtures say does not exist",
+			opts.MissingProtectionRepo, opts.MissingProtectionRef))
+		return
+	}
+	if k := cerr.KindOf(err); k != cerr.KindNotFound {
+		rep.add(CheckProtectionMissing, false, fmt.Sprintf(
+			"InspectProtection(%s, %s) failed with %s, and the contract requires %s for a ref that does not exist",
+			opts.MissingProtectionRepo, opts.MissingProtectionRef, k, cerr.KindNotFound))
+		return
+	}
+	if _, ierr := p.BypassActors.Items(); ierr == nil {
+		rep.add(CheckProtectionMissing, false, fmt.Sprintf(
+			"InspectProtection(%s, %s) failed with %s and STILL returned a readable bypass-actor list",
+			opts.MissingProtectionRepo, opts.MissingProtectionRef, cerr.KindOf(err)))
+		return
+	}
+	rep.add(CheckProtectionMissing, true, fmt.Sprintf("%s %s -> %s, protection unreadable",
+		opts.MissingProtectionRepo, opts.MissingProtectionRef, cerr.KindOf(err)))
 }
