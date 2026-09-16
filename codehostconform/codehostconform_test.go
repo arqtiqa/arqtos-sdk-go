@@ -3,6 +3,8 @@ package codehostconform_test
 import (
 	"context"
 	"errors"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,9 @@ const (
 	// A repository and ref whose protection the stub must NOT be able to read.
 	fixtureUnreadableRepo = "listable-owner/private-repo"
 	fixtureUnreadableRef  = "refs/heads/unreadable"
+	fixtureMissingOwner   = "missing-owner"
+	fixtureMissingRepo    = "listable-owner/missing-repo"
+	fixtureMissingRef     = "refs/heads/missing"
 )
 
 // stub is a codehost.CodeHost that passes every check, with one knob per check so a test
@@ -58,8 +63,11 @@ func (s *stub) ListRepos(ctx context.Context, owner string) (codehost.Resolution
 	if s.listRepos != nil {
 		return s.listRepos(ctx, owner)
 	}
-	if owner != fixtureListable {
+	if owner == fixtureMissingOwner {
 		return codehost.Resolution[codehost.Repo]{}, cerr.New(cerr.KindNotFound, "ListRepos", nil)
+	}
+	if owner != fixtureListable {
+		return codehost.Resolution[codehost.Repo]{}, cerr.New(cerr.KindUnauthorized, "ListRepos", nil)
 	}
 	return codehost.Resolved([]codehost.Repo{{FullName: fixtureListable + "/one", Owner: fixtureListable, Name: "one"}}, codehost.Complete)
 }
@@ -120,6 +128,10 @@ func (protectionInspectingStub) InspectProtection(_ context.Context, _, ref stri
 		return codehost.Protection{}, cerr.New(cerr.KindUnauthorized, "InspectProtection",
 			errors.New("the credential may not read this ref's protection"))
 	}
+	if ref == fixtureMissingRef {
+		return codehost.Protection{}, cerr.New(cerr.KindNotFound, "InspectProtection",
+			errors.New("this ref does not exist"))
+	}
 	return codehost.Protection{
 		Ref:            ref,
 		RequiredChecks: codehost.EmptyList[codehost.RequiredCheck](),
@@ -154,6 +166,9 @@ func run(t *testing.T, c codehost.CodeHost, m manifest.Doc) codehostconform.Repo
 		// classification is never exercised.
 		UnreadableProtectionRepo: fixtureUnreadableRepo,
 		UnreadableProtectionRef:  fixtureUnreadableRef,
+		MissingOwner:             fixtureMissingOwner,
+		MissingProtectionRepo:    fixtureMissingRepo,
+		MissingProtectionRef:     fixtureMissingRef,
 	})
 	if err != nil {
 		t.Fatalf("the conformance run could not be carried out: %v", err)
@@ -190,7 +205,7 @@ func TestConform_CompliantStub_IsGreenOnEveryCheck(t *testing.T) {
 	// A report that ran no checks is green for the wrong reason.
 	want := []string{
 		codehostconform.CheckManifest, codehostconform.CheckClass, codehostconform.CheckCapabilityHonesty, codehostconform.CheckOptionalDeclared,
-		codehostconform.CheckListNoEmptySuccess, codehostconform.CheckListFailClosed, codehostconform.CheckHealth,
+		codehostconform.CheckListNoEmptySuccess, codehostconform.CheckListFailClosed, codehostconform.CheckListMissing, codehostconform.CheckHealth,
 	}
 	for _, name := range want {
 		if _, found := failed(rep, name); !found {
@@ -214,8 +229,9 @@ func TestConform_RefusesToRunWithoutFixtures(t *testing.T) {
 		name string
 		opts codehostconform.Options
 	}{
-		{"no listable owner", codehostconform.Options{Manifest: stubManifest(), UnlistableOwner: fixtureUnlistable}},
-		{"no unlistable owner", codehostconform.Options{Manifest: stubManifest(), ListableOwner: fixtureListable}},
+		{"no listable owner", codehostconform.Options{Manifest: stubManifest(), UnlistableOwner: fixtureUnlistable, MissingOwner: fixtureMissingOwner}},
+		{"no unlistable owner", codehostconform.Options{Manifest: stubManifest(), ListableOwner: fixtureListable, MissingOwner: fixtureMissingOwner}},
+		{"no missing owner", codehostconform.Options{Manifest: stubManifest(), ListableOwner: fixtureListable, UnlistableOwner: fixtureUnlistable}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := codehostconform.Run(context.Background(), newStub(), tc.opts); err == nil {
@@ -545,7 +561,8 @@ func TestConform_ProtectionCheckRefusesToSkipWhenTheTierIsPresent(t *testing.T) 
 		Manifest:        stubManifest(codehost.CapProtectionInspect),
 		ListableOwner:   fixtureListable,
 		UnlistableOwner: fixtureUnlistable,
-		// fixture deliberately omitted
+		MissingOwner:    fixtureMissingOwner,
+		// unreadable and missing protection fixtures deliberately omitted
 	})
 	if err != nil {
 		t.Fatalf("the run could not be carried out: %v", err)
@@ -556,5 +573,122 @@ func TestConform_ProtectionCheckRefusesToSkipWhenTheTierIsPresent(t *testing.T) 
 	}
 	if !strings.Contains(detail, "never exercised") {
 		t.Errorf("detail does not explain that the fixture is missing: %s", detail)
+	}
+}
+
+// notFoundOnUnreadable answers KindNotFound for a ref the credential cannot
+// read — the host-404 ambiguity §5a forbids. At the current tag this PASSES
+// protection/failure-is-typed; the test asserting it fails is the RED commit.
+type notFoundOnUnreadable struct{ *stub }
+
+func (notFoundOnUnreadable) InspectProtection(_ context.Context, _, ref string) (codehost.Protection, error) {
+	if ref == fixtureUnreadableRef {
+		return codehost.Protection{}, cerr.New(cerr.KindNotFound, "InspectProtection",
+			errors.New("the host answered 404 for a ref the credential cannot see"))
+	}
+	return codehost.Protection{
+		Ref:            ref,
+		RequiredChecks: codehost.EmptyList[codehost.RequiredCheck](),
+		BypassActors:   codehost.EmptyList[codehost.BypassActor](),
+	}, nil
+}
+
+func TestConform_ProtectionFailClosed_RejectsNotFoundForUnreadableRef(t *testing.T) {
+	rep := run(t, notFoundOnUnreadable{newStub()}, stubManifest(codehost.CapProtectionInspect))
+	detail, did := failed(rep, codehostconform.CheckProtectionFailClosed)
+	if !did {
+		t.Fatal("a connector answering KindNotFound for an unreadable ref passed protection/failure-is-typed; " +
+			"a door would exit 3 where the contract requires 4")
+	}
+	if !strings.Contains(detail, cerr.KindNotFound.String()) {
+		t.Errorf("detail does not name the Kind it got: %s", detail)
+	}
+}
+
+func TestConform_ListFailClosed_RejectsNotFoundForUnreadableOwner(t *testing.T) {
+	s := newStub()
+	s.listRepos = func(_ context.Context, owner string) (codehost.Resolution[codehost.Repo], error) {
+		if owner == fixtureListable {
+			return codehost.Resolved([]codehost.Repo{{FullName: fixtureListable + "/one"}}, codehost.Complete)
+		}
+		if owner == fixtureMissingOwner {
+			return codehost.Resolution[codehost.Repo]{}, cerr.New(cerr.KindNotFound, "ListRepos", nil)
+		}
+		return codehost.Resolution[codehost.Repo]{}, cerr.New(cerr.KindNotFound, "ListRepos",
+			errors.New("the host answered 404 for an owner the credential cannot list"))
+	}
+	rep := run(t, s, stubManifest(codehost.CapNativeReview))
+	detail, did := failed(rep, codehostconform.CheckListFailClosed)
+	if !did {
+		t.Fatal("a connector answering KindNotFound for an unlistable owner passed list/failure-is-typed-and-fail-closed")
+	}
+	if !strings.Contains(detail, cerr.KindNotFound.String()) {
+		t.Errorf("detail does not name the Kind it got: %s", detail)
+	}
+}
+
+func TestConform_ListMissing_RejectsUnauthorized(t *testing.T) {
+	s := newStub()
+	s.listRepos = func(_ context.Context, owner string) (codehost.Resolution[codehost.Repo], error) {
+		if owner == fixtureListable {
+			return codehost.Resolved([]codehost.Repo{{FullName: fixtureListable + "/one"}}, codehost.Complete)
+		}
+		return codehost.Resolution[codehost.Repo]{}, cerr.New(cerr.KindUnauthorized, "ListRepos", nil)
+	}
+	rep := run(t, s, stubManifest(codehost.CapNativeReview))
+	detail, did := failed(rep, codehostconform.CheckListMissing)
+	if !did {
+		t.Fatal("a connector answering KindUnauthorized for a missing owner passed list/missing-is-not-found")
+	}
+	if !strings.Contains(detail, cerr.KindUnauthorized.String()) {
+		t.Errorf("detail does not name the Kind it got: %s", detail)
+	}
+}
+
+func TestConform_ListMissing_AcceptsNotFound(t *testing.T) {
+	rep := run(t, newStub(), stubManifest(codehost.CapNativeReview))
+	if detail, did := failed(rep, codehostconform.CheckListMissing); did {
+		t.Fatalf("a connector answering KindNotFound for a missing owner was rejected: %s", detail)
+	}
+}
+
+type unauthorizedOnMissing struct{ *stub }
+
+func (unauthorizedOnMissing) InspectProtection(_ context.Context, _, ref string) (codehost.Protection, error) {
+	if ref == fixtureUnreadableRef {
+		return codehost.Protection{}, cerr.New(cerr.KindUnauthorized, "InspectProtection",
+			errors.New("the credential may not read this ref's protection"))
+	}
+	return codehost.Protection{}, cerr.New(cerr.KindUnauthorized, "InspectProtection",
+		errors.New("the credential may not read a missing ref"))
+}
+
+func TestConform_ProtectionMissing_RejectsUnauthorized(t *testing.T) {
+	rep := run(t, unauthorizedOnMissing{newStub()}, stubManifest(codehost.CapProtectionInspect))
+	detail, did := failed(rep, codehostconform.CheckProtectionMissing)
+	if !did {
+		t.Fatal("a connector answering KindUnauthorized for a missing ref passed protection/missing-is-not-found")
+	}
+	if !strings.Contains(detail, cerr.KindUnauthorized.String()) {
+		t.Errorf("detail does not name the Kind it got: %s", detail)
+	}
+}
+
+func TestConform_ProtectionMissing_AcceptsNotFound(t *testing.T) {
+	rep := run(t, protectionInspectingStub{newStub()}, stubManifest(codehost.CapProtectionInspect))
+	if detail, did := failed(rep, codehostconform.CheckProtectionMissing); did {
+		t.Fatalf("a connector answering KindNotFound for a missing ref was rejected: %s", detail)
+	}
+}
+
+func TestKindAssertions_CountAtLeastThree(t *testing.T) {
+	raw, err := os.ReadFile("codehostconform.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`cerr\.KindOf\([a-zA-Z]+\) *[=!]=|[=!]= *cerr\.Kind[A-Z]`)
+	n := len(re.FindAll(raw, -1))
+	if n < 3 {
+		t.Fatalf("Kind assertions in codehostconform.go = %d, want at least 3", n)
 	}
 }
