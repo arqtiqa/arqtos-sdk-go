@@ -284,6 +284,8 @@ func Run(ctx context.Context, c codehost.CodeHost, opts Options) (Report, error)
 	checkHealth(ctx, &rep, c)
 	checkProtectionFailClosed(ctx, &rep, c, opts)
 	checkProtectionMissing(ctx, &rep, c, opts)
+	checkNativeIdentity(ctx, &rep, c, opts)
+	checkGetRepoPrivate(ctx, &rep, c, opts)
 
 	return rep, nil
 }
@@ -578,4 +580,71 @@ func checkProtectionMissing(ctx context.Context, rep *Report, c codehost.CodeHos
 	}
 	rep.add(CheckProtectionMissing, true, fmt.Sprintf("%s %s -> %s, protection unreadable",
 		opts.MissingProtectionRepo, opts.MissingProtectionRef, cerr.KindOf(err)))
+}
+
+func checkNativeIdentity(ctx context.Context, rep *Report, c codehost.CodeHost, opts Options) {
+	res, err := c.ListRepos(ctx, opts.ListableOwner)
+	if err != nil {
+		rep.add(CheckNativeIdentity, false, fmt.Sprintf(
+			"ListRepos(%s) failed before native identity could be read: %v", opts.ListableOwner, err))
+		return
+	}
+	repos, ierr := res.Items()
+	if ierr != nil || len(repos) == 0 {
+		rep.add(CheckNativeIdentity, false, fmt.Sprintf(
+			"ListRepos(%s) did not yield repositories to check native identity", opts.ListableOwner))
+		return
+	}
+	seen := map[codehost.NativeIdentity]string{}
+	for _, r := range repos {
+		id, err := r.NativeIdentity("")
+		if err != nil {
+			rep.add(CheckNativeIdentity, false, fmt.Sprintf("%s: %v", r.FullName, err))
+			return
+		}
+		if other, ok := seen[id]; ok {
+			rep.add(CheckNativeIdentity, false, fmt.Sprintf(
+				"native identity %+v is shared by %s and %s", id, other, r.FullName))
+			return
+		}
+		seen[id] = r.FullName
+		got, gerr := c.GetRepo(ctx, r.FullName)
+		if gerr != nil {
+			rep.add(CheckNativeIdentity, false, fmt.Sprintf("GetRepo(%s) failed: %v", r.FullName, gerr))
+			return
+		}
+		gotID, ierr := got.NativeIdentity(id.Realm)
+		if ierr != nil {
+			rep.add(CheckNativeIdentity, false, fmt.Sprintf("GetRepo(%s) identity: %v", r.FullName, ierr))
+			return
+		}
+		if gotID != id {
+			rep.add(CheckNativeIdentity, false, fmt.Sprintf(
+				"GetRepo(%s) identity %+v does not match list %+v", r.FullName, gotID, id))
+			return
+		}
+	}
+	rep.add(CheckNativeIdentity, true, fmt.Sprintf("%d repositories carry opaque native identity", len(repos)))
+}
+
+func checkGetRepoPrivate(ctx context.Context, rep *Report, c codehost.CodeHost, opts Options) {
+	if opts.UnreadableProtectionRepo == "" {
+		rep.add(CheckGetRepoPrivate, true,
+			"NOT EXERCISED: Options.UnreadableProtectionRepo is empty, so private-denial classification was not driven")
+		return
+	}
+	_, err := c.GetRepo(ctx, opts.UnreadableProtectionRepo)
+	if err == nil {
+		rep.add(CheckGetRepoPrivate, false, fmt.Sprintf(
+			"GetRepo(%s) succeeded on a private repository the fixtures say this credential must not see",
+			opts.UnreadableProtectionRepo))
+		return
+	}
+	if k := cerr.KindOf(err); k != cerr.KindUnauthorized {
+		rep.add(CheckGetRepoPrivate, false, fmt.Sprintf(
+			"GetRepo(%s) failed with %s, and the contract requires %s where the credential cannot see a private repository; KindNotFound here would treat denial as absence",
+			opts.UnreadableProtectionRepo, k, cerr.KindUnauthorized))
+		return
+	}
+	rep.add(CheckGetRepoPrivate, true, fmt.Sprintf("%s -> %s", opts.UnreadableProtectionRepo, cerr.KindOf(err)))
 }
