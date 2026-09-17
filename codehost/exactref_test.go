@@ -2,6 +2,7 @@ package codehost
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -139,11 +140,64 @@ func newMemTransport() *memTransport {
 }
 
 func (m *memTransport) ReadExact(ctx context.Context, req ExactReadRequest) (ExactReadResult, error) {
-	return ExactReadResult{}, cerr.New(cerr.KindUnsupported, "ReadExact", errExactRefUnimplemented)
+	if err := ctx.Err(); err != nil {
+		return ExactReadResult{}, cerr.New(cerr.KindTimeout, "ReadExact", err)
+	}
+	if err := req.Validate(); err != nil {
+		return ExactReadResult{}, err
+	}
+	if err := m.classify(req.Realm); err != nil {
+		return ExactReadResult{}, err
+	}
+	oid, ok := m.heads[memKey(req.NativeID, req.Ref)]
+	if !ok {
+		return ExactReadResult{}, cerr.New(cerr.KindNotFound, "ReadExact", errors.New("ref not found"))
+	}
+	return ExactReadResult{Realm: req.Realm, NativeID: req.NativeID, Ref: req.Ref, ObjectID: oid}, nil
 }
 
 func (m *memTransport) CompareAndSwap(ctx context.Context, req CASRequest) (CASReceipt, error) {
-	return CASReceipt{}, cerr.New(cerr.KindUnsupported, "CompareAndSwap", errExactRefUnimplemented)
+	receipt := CASReceipt{Realm: req.Realm, NativeID: req.NativeID, Ref: req.Ref, Expected: req.Expected, New: req.New}
+	if err := ctx.Err(); err != nil {
+		return receipt, cerr.New(cerr.KindTimeout, "CompareAndSwap", err)
+	}
+	if err := req.Validate(); err != nil {
+		return CASReceipt{}, err
+	}
+	if err := m.classify(req.Realm); err != nil {
+		return CASReceipt{}, err
+	}
+	key := memKey(req.NativeID, req.Ref)
+	observed := m.heads[key]
+	receipt.Observed = observed
+	if m.indeterminate {
+		receipt.Outcome = CASIndeterminate
+		return receipt, nil
+	}
+	if observed != req.Expected {
+		receipt.Outcome = CASMismatch
+		return receipt, nil
+	}
+	m.heads[key] = req.New
+	receipt.Outcome = CASApplied
+	return receipt, nil
+}
+
+func (m *memTransport) classify(realm string) error {
+	if realm != "forge" {
+		return cerr.New(cerr.KindInvalid, "ExactRefTransport", errors.New("realm mismatch"))
+	}
+	if m.redirect {
+		return cerr.New(cerr.KindInvalid, "ExactRefTransport", errors.New("redirect"))
+	}
+	if m.denied {
+		return cerr.New(cerr.KindUnauthorized, "ExactRefTransport", errors.New("denied"))
+	}
+	return nil
+}
+
+func memKey(nativeID, ref string) string {
+	return nativeID + "\x00" + ref
 }
 
 func cancelledCtx(t *testing.T) context.Context {

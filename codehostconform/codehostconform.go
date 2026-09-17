@@ -366,6 +366,7 @@ var optionalOps = []struct {
 	{codehost.CapWebhooks, func(c codehost.CodeHost) bool { _, ok := c.(codehost.WebhookRegistrar); return ok }},
 	{codehost.CapRunnerTokens, func(c codehost.CodeHost) bool { _, ok := c.(codehost.RunnerTokenMinter); return ok }},
 	{codehost.CapProtectionInspect, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ProtectionInspector); return ok }},
+	{codehost.CapExactRef, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ExactRefTransport); return ok }},
 }
 
 func checkOptionalDeclared(rep *Report, c codehost.CodeHost) {

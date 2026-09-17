@@ -106,6 +106,12 @@ const (
 	// being asked to report on, and that is a different authority from
 	// inspecting one.
 	CapProtectionInspect connector.Capability = "protection_inspect"
+
+	// CapExactRef declares exact revision read and expected-head ref update,
+	// via [ExactRefTransport]. It is optional and all-or-nothing: write
+	// support without the matching exact read cannot recover an indeterminate
+	// outcome.
+	CapExactRef connector.Capability = "exact_ref"
 )
 
 // knownCapabilities is the closed capability vocabulary of this class. A
@@ -113,7 +119,7 @@ const (
 // host does not recognise is a capability the host will not use, and a typo is
 // indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
-	CapWebhooks, CapRunnerTokens, CapFileRead, CapNativeReview, CapProtectionInspect,
+	CapWebhooks, CapRunnerTokens, CapFileRead, CapNativeReview, CapProtectionInspect, CapExactRef,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for this class,
@@ -232,7 +238,8 @@ type Branch struct {
 //
 // Optional operations live behind capabilities rather than in this interface:
 // [FileReader] behind [CapFileRead], [WebhookRegistrar] behind [CapWebhooks],
-// [RunnerTokenMinter] behind [CapRunnerTokens]. A host type-asserts for them,
+// [RunnerTokenMinter] behind [CapRunnerTokens], [ExactRefTransport] behind
+// [CapExactRef]. A host type-asserts for them,
 // and [github.com/arqtiqa/arqtos-sdk-go/codehostconform.Run] fails a connector
 // that declares one without implementing it — in both directions.
 type CodeHost interface {

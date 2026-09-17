@@ -163,11 +163,22 @@ func (protectionInspectingStub) InspectProtection(_ context.Context, _, ref stri
 	}, nil
 }
 
+type exactRefStub struct{ *stub }
+
+func (exactRefStub) ReadExact(context.Context, codehost.ExactReadRequest) (codehost.ExactReadResult, error) {
+	return codehost.ExactReadResult{}, nil
+}
+
+func (exactRefStub) CompareAndSwap(context.Context, codehost.CASRequest) (codehost.CASReceipt, error) {
+	return codehost.CASReceipt{}, nil
+}
+
 var (
 	_ codehost.FileReader          = fileReadingStub{}
 	_ codehost.WebhookRegistrar    = hookRegisteringStub{}
 	_ codehost.RunnerTokenMinter   = tokenMintingStub{}
 	_ codehost.ProtectionInspector = protectionInspectingStub{}
+	_ codehost.ExactRefTransport   = exactRefStub{}
 )
 
 func stubManifest(caps ...connector.Capability) manifest.Doc {
@@ -328,6 +339,7 @@ func TestConform_CatchesAnOptionalOperationImplementedButUndeclared(t *testing.T
 		{"webhooks", hookRegisteringStub{newStub()}},
 		{"runner tokens", tokenMintingStub{newStub()}},
 		{"protection inspect", protectionInspectingStub{newStub()}},
+		{"exact ref", exactRefStub{newStub()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rep := run(t, tc.c, stubManifest(codehost.CapNativeReview))
@@ -365,6 +377,26 @@ func TestConform_AcceptsProtectionInspectDeclaredAndImplemented(t *testing.T) {
 	rep := run(t, protectionInspectingStub{s}, stubManifest(codehost.CapProtectionInspect))
 	if err := rep.Err(); err != nil {
 		t.Fatalf("a connector that declares and implements protection_inspect was failed: %v\n%s", err, rep)
+	}
+}
+
+func TestConform_CatchesExactRefDeclaredButAbsent(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codehost.CapExactRef}
+	rep := run(t, s, stubManifest(codehost.CapExactRef))
+	requireFailed(t, rep, codehostconform.CheckOptionalDeclared)
+	detail, _ := failed(rep, codehostconform.CheckOptionalDeclared)
+	if !strings.Contains(detail, string(codehost.CapExactRef)) {
+		t.Errorf("the failure does not name the capability: %q", detail)
+	}
+}
+
+func TestConform_AcceptsExactRefDeclaredAndImplemented(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codehost.CapExactRef}
+	rep := run(t, exactRefStub{s}, stubManifest(codehost.CapExactRef))
+	if err := rep.Err(); err != nil {
+		t.Fatalf("a connector that declares and implements exact_ref was failed: %v\n%s", err, rep)
 	}
 }
 
