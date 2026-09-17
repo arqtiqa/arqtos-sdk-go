@@ -49,7 +49,7 @@ const SDKVersion = "v0.2.0"
 // goDirective is the `go` directive every generated go.mod carries. It
 // matches arqtos-sdk-go's own go.mod so the generated module's toolchain
 // requirement is never looser than the dependency it pins.
-const goDirective = "1.26"
+const goDirective = "1.27.0"
 
 // The fixture directory identifiers baked into every generated main.go and
 // conform_test.go. They are exported, rather than private to a template, so
