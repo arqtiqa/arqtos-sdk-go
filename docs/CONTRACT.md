@@ -1337,7 +1337,7 @@ conflation in another shape.
 
 ### `CodeHost` capabilities and optional operations
 
-Four operations live behind capabilities rather than in the interface. A host
+Five operations live behind capabilities rather than in the interface. A host
 type-asserts for them, and `codehostconform.Run` fails a connector that declares
 one without implementing it **in both directions** — declared-and-absent leaves
 the host calling into nothing, and implemented-but-undeclared is behaviour the
@@ -1352,7 +1352,9 @@ anything.
 
 | `protection_inspect` | `ProtectionInspector` | `InspectProtection(ctx, fullName, ref) (Protection, error)` — the governed ref's enforcement configuration: the checks required before it moves, and the actors permitted to bypass them. ⚠️ **READ only, deliberately.** A connector able to relax a ruleset could disable the very gate it is being asked to report on; writing protection is a different authority and is not in this contract. ⚠️ This is the Shape A probe. `codeci.Branch.Protected` answers a cheaper question — *is this branch protected?* — and MUST NOT be overloaded as "ruleset pins our App and bypass-actors is empty". |
 
-A fifth capability, `native_review`, declares that review happens **on the code
+| `exact_ref` | `ExactRefTransport` | `ReadExact(ctx, ExactReadRequest) (ExactReadResult, error)` and `CompareAndSwap(ctx, CASRequest) (CASReceipt, error)` — the exact revision of one explicit ref, and an expected-head update of that same ref, addressed by `Realm` + `NativeID` (never a path). ⚠️ All-or-nothing: write support without the matching exact read cannot recover `CASIndeterminate`. A mismatch is a `CASMismatch` receipt with `Observed`, not an error. Cancellation is `cerr.KindTimeout` and MUST NOT be reported as a write result. An indeterminate receipt is not success and MUST NOT be retried as applied; the caller recovers with `ReadExact`. Existing connectors remain compatible until they declare this capability. |
+
+A sixth capability, `native_review`, declares that review happens **on the code
 host** rather than in arqtos. It carries **no operation** and is checked only for
 membership in this class's vocabulary — the review operations themselves belong
 to `CodeCI`.

@@ -16,7 +16,7 @@ func TestKnownCapabilities_CarriesProtectionInspect(t *testing.T) {
 		t.Fatalf("KnownCapabilities() = %v; want it to contain %q, or a manifest declaring it "+
 			"is rejected as an unknown capability", got, codehost.CapProtectionInspect)
 	}
-	if want := 5; len(got) != want {
+	if want := 6; len(got) != want {
 		t.Errorf("KnownCapabilities() has %d entries, want %d — the count is asserted so that a "+
 			"capability cannot be silently dropped while this test still passes on the one it looks for",
 			len(got), want)
