@@ -108,6 +108,12 @@ const (
 	// CheckProtectionMissing covers a ref that does not exist failing with
 	// KindNotFound, readable by the credential's scope.
 	CheckProtectionMissing = "protection/missing-is-not-found"
+	// CheckNativeIdentity covers listed and fetched repositories carrying a
+	// verified opaque native id scoped to an explicit provider realm.
+	CheckNativeIdentity = "repo/native-identity"
+	// CheckGetRepoPrivate covers GetRepo on a private repository the
+	// credential cannot see failing as KindUnauthorized, not KindNotFound.
+	CheckGetRepoPrivate = "repo/private-is-unauthorized"
 )
 
 // Options are the fixtures a conformance run needs. Every field is required: a

@@ -195,6 +195,12 @@ type Repo struct {
 	Private bool
 	// Topics are the repository's topic labels, as the host holds them.
 	Topics []string
+	// NativeID is the provider's opaque repository identity. It is never a
+	// path, GraphQL node id substituted for a missing native id, or a tracker
+	// number.
+	NativeID string
+	// Realm is the provider instance this NativeID is scoped to.
+	Realm string
 }
 
 // CreateRepoOpts describes a repository to create.

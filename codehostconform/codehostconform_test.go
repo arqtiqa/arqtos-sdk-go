@@ -41,6 +41,8 @@ type stub struct {
 
 	// listRepos overrides the default listing behaviour when non-nil.
 	listRepos func(ctx context.Context, owner string) (codehost.Resolution[codehost.Repo], error)
+	// getRepo overrides the default fetch behaviour when non-nil.
+	getRepo func(ctx context.Context, fullName string) (codehost.Repo, error)
 	// health overrides the default healthy answer when non-nil.
 	health func(ctx context.Context) (connector.Health, error)
 }
@@ -72,8 +74,13 @@ func (s *stub) ListRepos(ctx context.Context, owner string) (codehost.Resolution
 	return codehost.Resolved([]codehost.Repo{{FullName: fixtureListable + "/one", Owner: fixtureListable, Name: "one"}}, codehost.Complete)
 }
 
-func (s *stub) RepoExists(context.Context, string) (bool, error)       { return true, nil }
-func (s *stub) GetRepo(context.Context, string) (codehost.Repo, error) { return codehost.Repo{}, nil }
+func (s *stub) RepoExists(context.Context, string) (bool, error) { return true, nil }
+func (s *stub) GetRepo(ctx context.Context, fullName string) (codehost.Repo, error) {
+	if s.getRepo != nil {
+		return s.getRepo(ctx, fullName)
+	}
+	return codehost.Repo{}, nil
+}
 
 func (s *stub) CreateRepo(context.Context, codehost.CreateRepoOpts) (codehost.Repo, error) {
 	return codehost.Repo{}, nil
@@ -691,4 +698,21 @@ func TestKindAssertions_CountAtLeastThree(t *testing.T) {
 	if n < 3 {
 		t.Fatalf("Kind assertions in codehostconform.go = %d, want at least 3", n)
 	}
+}
+
+func TestConform_ListedRepoWithoutNativeIdentityFails(t *testing.T) {
+	rep := run(t, newStub(), stubManifest(codehost.CapNativeReview))
+	requireFailed(t, rep, codehostconform.CheckNativeIdentity)
+}
+
+func TestConform_PrivateDeniedGetRepo_IsUnauthorized(t *testing.T) {
+	s := newStub()
+	s.getRepo = func(_ context.Context, fullName string) (codehost.Repo, error) {
+		if fullName == fixtureUnreadableRepo {
+			return codehost.Repo{}, cerr.New(cerr.KindNotFound, "GetRepo", nil)
+		}
+		return codehost.Repo{FullName: fullName, NativeID: "1", Realm: "host-a"}, nil
+	}
+	rep := run(t, s, stubManifest(codehost.CapNativeReview))
+	requireFailed(t, rep, codehostconform.CheckGetRepoPrivate)
 }
