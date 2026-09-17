@@ -174,6 +174,9 @@ func TestGeneratedGoModPinsSDKVersion(t *testing.T) {
 	if strings.Contains(mod, "v0.1.1") || strings.Contains(mod, "v0.1.0") {
 		t.Fatalf("go.mod pins a pre-Roster-wire-protocol SDK tag:\n%s", mod)
 	}
+	if !strings.Contains(mod, "\ngo 1.27.0\n") {
+		t.Fatalf("go.mod does not declare the SDK Go 1.27.0 baseline:\n%s", mod)
+	}
 	if strings.Contains(mod, "replace") {
 		t.Fatalf("go.mod must not carry a replace directive — a real consumer has none:\n%s", mod)
 	}
