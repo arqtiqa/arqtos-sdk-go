@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "provider": "placeholder-provider",
+  "realm": "https://plane.example.test",
+  "workspace": "placeholder-workspace",
+  "event_id": "evt-stable-1",
+  "delivery_id": "del-attempt-b",
+  "kind": "issue.created",
+  "payload_version": "2",
+  "occurred": {"known": false},
+  "observed": {"known": false},
+  "entity": {"scope": "placeholder-project", "number": 7}
+}

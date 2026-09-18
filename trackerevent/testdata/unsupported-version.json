@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "provider": "placeholder-provider",
+  "realm": "https://plane.example.test",
+  "workspace": "placeholder-workspace",
+  "event_id": "evt-v2",
+  "delivery_id": "del-v2",
+  "kind": "issue.created",
+  "payload_version": "2",
+  "occurred": {"known": false},
+  "observed": {"known": false},
+  "entity": {"scope": "placeholder-project", "number": 1}
+}
