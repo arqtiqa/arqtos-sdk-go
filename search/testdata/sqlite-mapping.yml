@@ -1,0 +1,14 @@
+backend: sqlite
+class: Search
+lexical: FTS5
+tokenizer: unicode61
+embedding_tokenizer: absent
+client_context_counting: host-owned, not this adapter
+vectors: absent
+remote_serving: absent
+rank: bm25-like FTS5 rank; not comparable to PostgreSQL ts_rank
+transaction: WAL; generation published by directory rename after checkpoint
+generation: immutable partition directory; interrupted writes stay in staging
+rebuild: incompatible schema_version requires explicit rebuild
+tenant_filtering: host scope, not SQL roles
+ann_lossiness: not applicable

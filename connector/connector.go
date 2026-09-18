@@ -49,6 +49,11 @@ const (
 	// org can pair either half with a different backend. See the codehost
 	// package.
 	ClassCodeHost Class = "CodeHost"
+	// ClassSearch is revision-scoped lexical retrieval over one index
+	// partition: query, exact read, bounded list, optional facets/edges, and
+	// optional writer publication. Vectors and remote serving are capabilities
+	// that may be absent. See the search package.
+	ClassSearch Class = "Search"
 	// ClassRecordStore, ... land with their designs.
 )
 
@@ -64,6 +69,7 @@ var classes = []Class{
 	ClassTracker,
 	ClassAuthenticator,
 	ClassCodeHost,
+	ClassSearch,
 }
 
 // Classes returns the closed set of connector classes, sorted, as a copy. A

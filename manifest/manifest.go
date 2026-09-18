@@ -26,6 +26,7 @@ import (
 	"github.com/arqtiqa/arqtos-sdk-go/credential"
 	"github.com/arqtiqa/arqtos-sdk-go/ref"
 	"github.com/arqtiqa/arqtos-sdk-go/roster"
+	"github.com/arqtiqa/arqtos-sdk-go/search"
 	"github.com/arqtiqa/arqtos-sdk-go/tracker"
 )
 
@@ -104,6 +105,7 @@ var classCapabilities = map[connector.Class]connector.Capabilities{
 	// name a class the SDK did not publish — which is exactly the split this
 	// entry removes.
 	connector.ClassCodeHost: codehost.KnownCapabilities(),
+	connector.ClassSearch:   search.KnownCapabilities(),
 }
 
 // envNameRE matches a bare environment-variable NAME (e.g. INFISICAL_TOKEN):

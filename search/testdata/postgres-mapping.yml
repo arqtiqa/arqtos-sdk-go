@@ -1,0 +1,15 @@
+backend: postgres
+class: Search
+lexical: tsvector / GIN
+tokenizer: configured text search config; not SQLite unicode61
+embedding_tokenizer: model-specific when pgvector is enabled (post-MVP)
+client_context_counting: host-owned, not this adapter
+vectors: optional pgvector; ANN indexes are lossy
+remote_serving: post-MVP shared service, not MVP
+rank: ts_rank / ts_rank_cd; not comparable to SQLite FTS5
+transaction: SQL transactions; generation pointer advances by expected generation
+generation: immutable rows plus current pointer; late worker cannot roll back
+rebuild: incompatible schema requires explicit migration
+tenant_filtering: RLS / role reset on pooled connections
+ann_lossiness: approximate vector indexes may drop recall; qualify before enablement
+pgvector: independent of lexical FTS; not a prerequisite for remote lexical serving

@@ -13,13 +13,14 @@ contract method returns errors in.
 | [`CodeHost`](#the-codehost-contract) | a code host's repository and git surface | [`codehost`](../codehost/codehost.go) | [`codehostconform`](../codehostconform/) |
 | [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
 | [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | [`authenticator`](../authenticator/authenticator.go) | [`authconform`](../authconform/) |
+| [`Search`](#the-search-contract) | revision-scoped lexical retrieval over one index partition | [`search`](../search/search.go) | [`searchconform`](../searchconform/) |
 
 `CredentialLoader`, `Roster` and `Authenticator` are implemented by **native**
 (in-process, compiled into the host) connectors, and each is also implemented by
 **out-of-process** (Track-B) connectors — see
 [Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract).
 
-`CodeCI`, `CodeHost` and `Tracker` are native-only today: none carries a `.proto`
+`CodeCI`, `CodeHost`, `Tracker` and `Search` are native-only today: none carries a `.proto`
 or a Track-B wire binding, the same position the other three each started from
 before their own wire protocol landed as a separate piece of work.
 
@@ -28,6 +29,20 @@ The set of classes is **closed**: `connector.Classes()` is the whole list,
 `implements` enum is *derived* from that same list rather than restating it — so
 a class the SDK knows is always declarable in a manifest, and a class it does
 not know is refused before a host loads anything.
+
+## The Search contract
+
+Revision-scoped lexical retrieval. Core constructs scope and fuses evidence; the adapter never sees vendor SQL from the caller and never decides principal authority. Vectors (`vectors`) and remote serving (`remote_serving`) may be undeclared. Writer publication is a separate capability (`write`). Facets and edges are optional (`facets`, `edges`).
+
+| Method | Semantics |
+| --- | --- |
+| `Query(ctx, Query) (Hits, error)` | Lexical candidate retrieval bound to `Query.Scope` (sources, revisions, profile digest, generation, scope handle). Selectors, limits and cancellation apply. Continuation tokens cannot change principal, source set, generation or selection. No SQL string is a selector. Rank evidence is backend-native and not comparable across SQLite and PostgreSQL. |
+| `Get(ctx, GetRequest) (Record, error)` | Exact read of one record identity at the scoped revision. Missing partition is unavailable, not empty. Stale generation is refused. |
+| `List(ctx, ListRequest) (Resolution[Record], error)` | Bounded browse under the same scope and generation. Truncation is a typed failure, never a shorter complete list. Complete-empty is `EmptyList`, distinct from unavailable. |
+
+Optional: `Faceter.Facets`, `Edger.Edges`, `Writer.Stage` / `Writer.Publish`. `Publish` is conditional: a generation computed before a newer edit is not applied. Readers retain immutable generation handles.
+
+SQLite FTS5 versus PostgreSQL FTS/pgvector differ in tokenizer, rank scale, transactions, tenant filtering and ANN lossiness; mapping examples live with the connector, not as a second ABC here.
 
 ## ⚠️ What this document does NOT cover: the act kernel's public half
 
