@@ -86,11 +86,11 @@ func TestKnownCapabilities_IncludeAbsentVectorAndRemote(t *testing.T) {
 }
 
 func TestMappingExamples_ExposeBackendDifferencesWithoutSQLInContract(t *testing.T) {
-	sqlite, err := os.ReadFile(filepath.Join("testdata", "sqlite-mapping.yml"))
+	sqlite, err := os.ReadFile(filepath.Join("testdata", "sqlite-mapping.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pg, err := os.ReadFile(filepath.Join("testdata", "postgres-mapping.yml"))
+	pg, err := os.ReadFile(filepath.Join("testdata", "postgres-mapping.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
