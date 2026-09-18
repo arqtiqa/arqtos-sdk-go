@@ -55,6 +55,20 @@ func TestGet_RefusesEmptyIdentity(t *testing.T) {
 	}
 }
 
+func TestStageRequest_CarriesRecordsWithoutSQL(t *testing.T) {
+	req := StageRequest{
+		Scope:   validScope(),
+		Key:     PartitionKey{TrustDomain: "td", SourceIdentity: "src", Revision: "rev", ProfileDigest: "digest-1"},
+		Records: []InputRecord{{Path: "a.md", RecordID: "uid-1", Title: "A", Body: "hello", Kind: "note"}},
+	}
+	if err := req.Key.Validate("Stage"); err != nil {
+		t.Fatal(err)
+	}
+	if req.Records[0].Body == "SELECT * FROM record" {
+		t.Fatal("fixture leaked SQL")
+	}
+}
+
 func TestPublish_IsConditional(t *testing.T) {
 	err := PublishRequest{Handle: GenerationHandle{ID: "g1"}}.Validate()
 	if cerr.KindOf(err) != cerr.KindInvalid {
