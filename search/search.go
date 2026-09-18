@@ -276,9 +276,18 @@ type EdgeReport struct {
 	Envelope Envelope
 }
 
+type InputRecord struct {
+	Path     string
+	RecordID string
+	Title    string
+	Body     string
+	Kind     string
+}
+
 type StageRequest struct {
-	Scope Scope
-	Key   PartitionKey
+	Scope   Scope
+	Key     PartitionKey
+	Records []InputRecord
 }
 
 type PartitionKey struct {
