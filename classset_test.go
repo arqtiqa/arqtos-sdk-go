@@ -314,6 +314,7 @@ func TestConnectorClassSetIsExactlyTheRegistry(t *testing.T) {
 		connector.ClassCodeHost,
 		connector.ClassCredentialLoader,
 		connector.ClassRoster,
+		connector.ClassSearch,
 		connector.ClassTracker,
 	}
 	got := connector.Classes()
