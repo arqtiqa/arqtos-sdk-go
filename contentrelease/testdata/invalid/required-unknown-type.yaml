@@ -1,0 +1,25 @@
+schema_version: 1
+kind: content-release
+profile: portable
+qualification: reviewed-digest
+identity:
+  id: arqtos-seed/knowledge-starter
+  type: golden-base-release
+  publisher: arqtiqa
+  source: arqtos-seed
+revision: "0.5.0"
+digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+files:
+  - path: skills/arqtos-way/skill.yaml
+    digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+artefacts:
+  - id: index:embeddings
+    type: embeddings-index
+    digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    required: true
+    lifecycle: managed
+trust:
+  publisher: arqtiqa
+  namespace: arqtos-seed
+  signer_ref: ns:arqtiqa/signers/content
+  update_root_ref: ns:arqtiqa/tuf/root

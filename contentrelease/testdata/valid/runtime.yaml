@@ -1,0 +1,41 @@
+schema_version: 1
+kind: content-release
+profile: runtime
+qualification: dsse-tuf
+identity:
+  id: aqa-seed/org-overlay
+  type: golden-base-release
+  publisher: aqa
+  source: aqa-seed
+revision: "0.1.0"
+digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+files:
+  - path: packs/scrum/pack.yaml
+    digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+artefacts:
+  - id: pack:scrum
+    type: pack
+    digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    required: true
+    lifecycle: managed
+    depends_on:
+      - skill:arqtos-way
+  - id: skill:arqtos-way
+    type: skill
+    digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    required: true
+    lifecycle: managed
+  - id: template:session-note
+    type: template
+    digest: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    required: false
+    lifecycle: scaffold
+runtime:
+  min_binary: "0.5.0"
+clients:
+  - name: claude-code
+trust:
+  publisher: aqa
+  namespace: aqa-seed
+  signer_ref: ns:aqa/signers/content
+  update_root_ref: ns:aqa/tuf/root
