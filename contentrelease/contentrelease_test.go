@@ -47,9 +47,10 @@ func TestInvalidFixtures_Refuse(t *testing.T) {
 		"duplicate-id.yaml":          "duplicate",
 		"wrong-publisher.yaml":       "publisher",
 		"wrong-namespace.yaml":       "namespace",
-		"self-trust.yaml":            "trust",
-		"self-update-root.yaml":      "trust",
-		"foreign-root.yaml":          "bind",
+		"self-trust.yaml":            "establish",
+		"self-update-root.yaml":      "establish",
+		"foreign-signer.yaml":        "bind",
+		"foreign-update-root.yaml":   "bind",
 		"secret-ref.yaml":            "op://",
 		"missing-dep.yaml":           "depends_on",
 	}

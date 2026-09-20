@@ -21,5 +21,5 @@ artefacts:
 trust:
   publisher: aqa
   namespace: aqa-seed
-  signer_ref: ns:arqtiqa/signers/content
+  signer_ref: ns:aqa/signers/content
   update_root_ref: ns:arqtiqa/tuf/root

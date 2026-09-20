@@ -1,0 +1,25 @@
+schema_version: 1
+kind: content-release
+profile: portable
+qualification: reviewed-digest
+identity:
+  id: aqa-seed/org-overlay
+  type: golden-base-release
+  publisher: aqa
+  source: aqa-seed
+revision: "0.1.0"
+digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+files:
+  - path: skills/arqtos-way/skill.yaml
+    digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+artefacts:
+  - id: skill:arqtos-way
+    type: skill
+    digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    required: true
+    lifecycle: managed
+trust:
+  publisher: aqa
+  namespace: aqa-seed
+  signer_ref: ns:arqtiqa/signers/content
+  update_root_ref: ns:aqa/tuf/root
