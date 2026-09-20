@@ -265,7 +265,14 @@ func (t Trust) validate(id Identity) error {
 	if selfRef(t.SignerRef) || selfRef(t.UpdateRootRef) {
 		return fmt.Errorf("contentrelease: trust refs must not establish the release's own trust")
 	}
+	if !namespaceRef(t.SignerRef, id.Publisher, id.Source) || !namespaceRef(t.UpdateRootRef, id.Publisher, id.Source) {
+		return fmt.Errorf("contentrelease: trust refs must bind to publisher %q or source namespace %q", id.Publisher, id.Source)
+	}
 	return nil
+}
+
+func namespaceRef(ref, publisher, source string) bool {
+	return strings.HasPrefix(ref, "ns:"+publisher+"/") || strings.HasPrefix(ref, "ns:"+source+"/")
 }
 
 func selfRef(s string) bool {

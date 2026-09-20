@@ -3,14 +3,14 @@ kind: content-release
 profile: portable
 qualification: reviewed-digest
 identity:
-  id: arqtos-seed/knowledge-starter
+  id: aqa-seed/org-overlay
   type: golden-base-release
-  publisher: arqtiqa
-  source: arqtos-seed
-revision: "0.5.0"
+  publisher: aqa
+  source: aqa-seed
+revision: "0.1.0"
 digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 files:
-  - path: Users/mw/Arqtos/secret/skill.yaml
+  - path: skills/arqtos-way/skill.yaml
     digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 artefacts:
   - id: skill:arqtos-way
@@ -19,7 +19,7 @@ artefacts:
     required: true
     lifecycle: managed
 trust:
-  publisher: arqtiqa
-  namespace: arqtos-seed
+  publisher: aqa
+  namespace: aqa-seed
   signer_ref: ns:arqtiqa/signers/content
   update_root_ref: ns:arqtiqa/tuf/root

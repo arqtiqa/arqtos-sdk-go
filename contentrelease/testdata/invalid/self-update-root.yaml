@@ -10,7 +10,7 @@ identity:
 revision: "0.5.0"
 digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 files:
-  - path: Users/mw/Arqtos/secret/skill.yaml
+  - path: skills/arqtos-way/skill.yaml
     digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 artefacts:
   - id: skill:arqtos-way
@@ -22,4 +22,4 @@ trust:
   publisher: arqtiqa
   namespace: arqtos-seed
   signer_ref: ns:arqtiqa/signers/content
-  update_root_ref: ns:arqtiqa/tuf/root
+  update_root_ref: self

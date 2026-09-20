@@ -41,13 +41,17 @@ func TestInvalidFixtures_Refuse(t *testing.T) {
 		"unknown-version.yaml":       "schema_version",
 		"connector-kind.yaml":        "kind",
 		"latest-alias.yaml":          "latest",
-		"private-path.yaml":          "path",
+		"private-path.yaml":          "private",
 		"required-unknown-type.yaml": "type",
 		"cycle.yaml":                 "cycle",
 		"duplicate-id.yaml":          "duplicate",
 		"wrong-publisher.yaml":       "publisher",
+		"wrong-namespace.yaml":       "namespace",
 		"self-trust.yaml":            "trust",
+		"self-update-root.yaml":      "trust",
+		"foreign-root.yaml":          "bind",
 		"secret-ref.yaml":            "op://",
+		"missing-dep.yaml":           "depends_on",
 	}
 	ents, err := os.ReadDir(filepath.Join("testdata", "invalid"))
 	if err != nil {
