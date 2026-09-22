@@ -61,6 +61,7 @@ func TestClassesIsTheClosedSetAndEveryConstantIsInIt(t *testing.T) {
 		connector.ClassTracker,
 		connector.ClassAuthenticator,
 		connector.ClassSearch,
+		connector.ClassCertificate,
 	}
 	got := connector.Classes()
 	if len(got) != len(want) {

@@ -75,6 +75,7 @@ var classes = []Class{
 	ClassAuthenticator,
 	ClassCodeHost,
 	ClassSearch,
+	ClassCertificate,
 }
 
 // Classes returns the closed set of connector classes, sorted, as a copy. A

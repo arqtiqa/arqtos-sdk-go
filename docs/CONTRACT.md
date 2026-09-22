@@ -13,9 +13,10 @@ contract method returns errors in.
 | [`CodeHost`](#the-codehost-contract) | a code host's repository and git surface | [`codehost`](../codehost/codehost.go) | [`codehostconform`](../codehostconform/) |
 | [`Tracker`](#the-tracker-contract) | one work tracker — one board on one instance of one provider | [`tracker`](../tracker/tracker.go) | [`trackerconform`](../trackerconform/) |
 | [`Authenticator`](#the-authenticator-contract) | an identity provider, for establishing who is driving this session | [`authenticator`](../authenticator/authenticator.go) | [`authconform`](../authconform/) |
+| [`Certificate`](#the-certificate-contract) | a signing-key backend whose private material never leaves | [`certificate`](../certificate/certificate.go) | [`certconform`](../certconform/) |
 | [`Search`](#the-search-contract) | revision-scoped lexical retrieval over one index partition | [`search`](../search/search.go) | [`searchconform`](../searchconform/) |
 
-`CredentialLoader`, `Roster` and `Authenticator` are implemented by **native**
+`CredentialLoader`, `Roster`, `Authenticator` and `Certificate` are implemented by **native**
 (in-process, compiled into the host) connectors, and each is also implemented by
 **out-of-process** (Track-B) connectors — see
 [Track-B: the out-of-process wire contract](#track-b-the-out-of-process-wire-contract).
@@ -156,6 +157,27 @@ refresh path and a step-up path were each identified and not added, because a
 capability nothing gates on is a speculative feature flag. The manifest closes
 the vocabulary against that empty set, so a capability declared for this class is
 refused.
+
+## The `Certificate` contract
+
+Signs and verifies without exporting private keys. It is the **inverted**
+invariant of `CredentialLoader`: a secret class is defined by material
+*leaving* the backend; this class is defined by material *never* leaving.
+Data goes in, a signature comes back. Same vendors often serve both; they
+must never be one class.
+
+| operation | contract |
+|---|---|
+| `Sign(ctx, keyID, payload) (Signature, error)` | Signs `payload` under `keyID`. The returned `Signature` carries algorithm and bytes. It never includes a private key. |
+| `Verify(ctx, keyID, payload, signature) error` | Checks `signature` over `payload` for `keyID`. A mismatch is `cerr.KindInvalid`. A missing key is `cerr.KindNotFound`. Success is a nil error, never a boolean that proto3 would default to false. |
+| `PublicKey(ctx, keyID) (PublicKey, error)` | Returns the **public** key for `keyID`. Empty bytes are a contract fault. |
+
+There is **no Export operation**. Adding one is a published-contract change
+that `TestCertificateServiceHasNoExport` must turn red.
+
+### Capabilities
+
+**Empty at v1.** Sign, Verify and PublicKey are required, not optional tiers.
 
 ## The base contract
 
@@ -1763,6 +1785,14 @@ runs `rosterconform` in-process; [`roundtrip_test.go`](../examples/roster-provid
 builds the binary and runs `rosterconform.RunOutOfProcess` against it as a real
 subprocess, drives the host-side dial API directly, and confirms the process
 actually exits after `Kill` (dies-with-session).
+
+#### `Certificate` over the wire
+
+| Layer | Package | What it is |
+|---|---|---|
+| Contract | [`proto/connector/v1/certificate.proto`](../proto/connector/v1/certificate.proto) | The `.proto` defining `Sign`/`Verify`/`PublicKey` and the `Certificate` gRPC service. There is **no Export RPC**. |
+| Transport binding | [`plugin/certificate.go`](../plugin/certificate.go) | `plugin.CertificateName`, `plugin.CertificatePluginMap(impl)` for the provider, and `plugin.CertificateHostPluginMap(name, manifest, hostVersion)` for the host. `Dispense` returns a `certificate.Certificate`. |
+| Conformance | [`certconform`](../certconform/) | In-process: sign then verify, tamper then refuse. |
 
 Out of scope here (a separate, later Story): the host-side connector
 **registry** — discovery, manifest loading, lifecycle and the broker wiring a

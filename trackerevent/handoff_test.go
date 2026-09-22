@@ -38,8 +38,8 @@ func TestTracker_IsStillExactlyFiveOperations(t *testing.T) {
 
 func TestClasses_StaySixAndDoNotGrowAReceiverClass(t *testing.T) {
 	got := connector.Classes()
-	if len(got) != 7 {
-		t.Fatalf("Classes()=%v, want seven — a receiver class is a contract change", got)
+	if len(got) != 8 {
+		t.Fatalf("Classes()=%v, want eight — a receiver class is a contract change", got)
 	}
 	if slices.Contains(got, connector.Class("Receiver")) || slices.Contains(got, connector.Class("Event")) {
 		t.Fatalf("Classes() grew a receiver/event class: %v", got)
