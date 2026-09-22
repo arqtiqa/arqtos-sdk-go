@@ -1,0 +1,19 @@
+schema_version: 1
+kind: org-adoption
+org_id: example-arqtos
+home:
+  source_id: example-arqtos
+  locator:
+    host: code.example.test
+    owner: example
+    name: example-arqtos
+  expected_revision: "4f3c2b1a"
+declaration:
+  revision: "1"
+  upstream:
+    identity: arqtos-seed/knowledge-starter
+    revision: "0.5.0"
+    digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+lock:
+  declaration_revision: "1"
+  digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

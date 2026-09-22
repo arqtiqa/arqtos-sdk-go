@@ -1,0 +1,26 @@
+schema_version: 1
+kind: org-adoption
+org_id: org_0192f4b5
+home:
+  source_id: src_0192f4c0
+  locator:
+    host: code.example.test
+    owner: example
+    name: example-arqtos
+  expected_revision: "4f3c2b1a"
+declaration:
+  revision: "1"
+  upstream:
+    identity: arqtos-seed/knowledge-starter
+    revision: "0.5.0"
+    digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  org_seed:
+    identity: example-seed/org-overlay
+    revision: "0.1.0"
+    digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+lock:
+  declaration_revision: "1"
+  digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+secrets:
+  - name: code-host
+    ref: cred://org/code-host
