@@ -39,15 +39,15 @@ func TestValidFixtures_ParseAndValidate(t *testing.T) {
 
 func TestInvalidFixtures_Refuse(t *testing.T) {
 	want := map[string]string{
-		"unknown-version.yaml":     "schema_version",
-		"unknown-field.yaml":       "field",
-		"name-as-identity.yaml":    "repository name",
-		"missing-org-id.yaml":      "org_id",
-		"ambiguous-root.yaml":      "ambiguous",
-		"lock-drift.yaml":          "independently writable",
-		"inline-secret.yaml":       "reference-only",
-		"latest-revision.yaml":     "latest",
-		"missing-upstream.yaml":    "upstream",
+		"unknown-version.yaml":  "schema_version",
+		"unknown-field.yaml":    "field",
+		"name-as-identity.yaml": "repository name",
+		"missing-org-id.yaml":   "org_id",
+		"ambiguous-root.yaml":   "ambiguous",
+		"lock-drift.yaml":       "independently writable",
+		"inline-secret.yaml":    "reference-only",
+		"latest-revision.yaml":  "latest",
+		"missing-upstream.yaml": "upstream",
 	}
 	ents, err := os.ReadDir(filepath.Join("testdata", "invalid"))
 	if err != nil {
