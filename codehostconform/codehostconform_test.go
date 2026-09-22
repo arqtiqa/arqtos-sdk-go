@@ -169,8 +169,21 @@ func (exactRefStub) ReadExact(context.Context, codehost.ExactReadRequest) (codeh
 	return codehost.ExactReadResult{}, nil
 }
 
-func (exactRefStub) CompareAndSwap(context.Context, codehost.CASRequest) (codehost.CASReceipt, error) {
-	return codehost.CASReceipt{}, nil
+func (exactRefStub) CompareAndSwap(_ context.Context, req codehost.CASRequest) (codehost.CASReceipt, error) {
+	if err := req.Validate(); err != nil {
+		return codehost.CASReceipt{}, err
+	}
+	return codehost.CASReceipt{Outcome: codehost.CASApplied}, nil
+}
+
+type sourceLessExactRefStub struct{ *stub }
+
+func (sourceLessExactRefStub) ReadExact(context.Context, codehost.ExactReadRequest) (codehost.ExactReadResult, error) {
+	return codehost.ExactReadResult{}, nil
+}
+
+func (sourceLessExactRefStub) CompareAndSwap(context.Context, codehost.CASRequest) (codehost.CASReceipt, error) {
+	return codehost.CASReceipt{Outcome: codehost.CASApplied}, nil
 }
 
 var (
@@ -179,6 +192,7 @@ var (
 	_ codehost.RunnerTokenMinter   = tokenMintingStub{}
 	_ codehost.ProtectionInspector = protectionInspectingStub{}
 	_ codehost.ExactRefTransport   = exactRefStub{}
+	_ codehost.ExactRefTransport   = sourceLessExactRefStub{}
 )
 
 func stubManifest(caps ...connector.Capability) manifest.Doc {
@@ -398,6 +412,13 @@ func TestConform_AcceptsExactRefDeclaredAndImplemented(t *testing.T) {
 	if err := rep.Err(); err != nil {
 		t.Fatalf("a connector that declares and implements exact_ref was failed: %v\n%s", err, rep)
 	}
+}
+
+func TestConform_CatchesSourceLessCAS(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codehost.CapExactRef}
+	rep := run(t, sourceLessExactRefStub{s}, stubManifest(codehost.CapExactRef))
+	requireFailed(t, rep, codehostconform.CheckExactRefSource)
 }
 
 // TestConform_CatchesAnEmptySuccess drives the shape this whole contract is

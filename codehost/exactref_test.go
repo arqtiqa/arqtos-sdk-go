@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	oidA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	oidB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	oidC = "cccccccccccccccccccccccccccccccccccccccc"
+	oidA           = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	oidB           = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	oidC           = "cccccccccccccccccccccccccccccccccccccccc"
+	explicitSource = "/tmp/explicit-repository"
 )
 
 func TestKnownCapabilities_IncludesExactRef(t *testing.T) {
@@ -74,21 +75,21 @@ func TestRequestTypes_CarryNoCredentialCommandOrUntypedMap(t *testing.T) {
 func TestMemTransport_CompareAndSwap_AppliedMismatchIndeterminateCancellation(t *testing.T) {
 	ctx := t.Context()
 	m := newMemTransport()
-	req := CASRequest{Realm: "forge", NativeID: "42", Ref: "refs/arqtos/reservations", New: ObjectID(oidA)}
+	req := CASRequest{Realm: "forge", NativeID: "42", Ref: "refs/arqtos/reservations", New: ObjectID(oidA), SourceDir: explicitSource}
 	got, err := m.CompareAndSwap(ctx, req)
 	if err != nil || got.Outcome != CASApplied || got.New != ObjectID(oidA) {
 		t.Fatalf("create: %+v %v", got, err)
 	}
-	stale, err := m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: req.Ref, Expected: ObjectID(oidB), New: ObjectID(oidC)})
+	stale, err := m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: req.Ref, Expected: ObjectID(oidB), New: ObjectID(oidC), SourceDir: explicitSource})
 	if err != nil || stale.Outcome != CASMismatch || stale.Observed != ObjectID(oidA) {
 		t.Fatalf("stale: %+v %v", stale, err)
 	}
-	applied, err := m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: req.Ref, Expected: ObjectID(oidA), New: ObjectID(oidB)})
+	applied, err := m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: req.Ref, Expected: ObjectID(oidA), New: ObjectID(oidB), SourceDir: explicitSource})
 	if err != nil || applied.Outcome != CASApplied {
 		t.Fatalf("swap: %+v %v", applied, err)
 	}
 	m.indeterminate = true
-	unk, err := m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: req.Ref, Expected: ObjectID(oidB), New: ObjectID(oidC)})
+	unk, err := m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: req.Ref, Expected: ObjectID(oidB), New: ObjectID(oidC), SourceDir: explicitSource})
 	if err != nil || unk.Outcome != CASIndeterminate {
 		t.Fatalf("indeterminate: %+v %v", unk, err)
 	}
@@ -105,7 +106,7 @@ func TestMemTransport_CompareAndSwap_AppliedMismatchIndeterminateCancellation(t 
 func TestMemTransport_ReadExact_ClassifiesDeniedRedirectAndMismatch(t *testing.T) {
 	ctx := t.Context()
 	m := newMemTransport()
-	_, _ = m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: "refs/heads/main", New: ObjectID(oidA)})
+	_, _ = m.CompareAndSwap(ctx, CASRequest{Realm: "forge", NativeID: "42", Ref: "refs/heads/main", New: ObjectID(oidA), SourceDir: explicitSource})
 	m.denied = true
 	_, err := m.ReadExact(ctx, ExactReadRequest{Realm: "forge", NativeID: "42", Ref: "refs/heads/main"})
 	if cerr.KindOf(err) != cerr.KindUnauthorized {
