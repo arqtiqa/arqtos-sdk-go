@@ -11,5 +11,14 @@ const ModulePath = "github.com/arqtiqa/arqtos-sdk-go"
 
 // Line5Runtime is the connector-class set the first line-5 runtime consumes.
 func Line5Runtime() []connector.Class {
-	return nil
+	return []connector.Class{
+		connector.ClassCredentialLoader,
+		connector.ClassRoster,
+		connector.ClassCodeCI,
+		connector.ClassTracker,
+		connector.ClassAuthenticator,
+		connector.ClassCodeHost,
+		connector.ClassSearch,
+		connector.ClassCertificate,
+	}
 }

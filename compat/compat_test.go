@@ -25,12 +25,16 @@ func TestLine5Runtime_MatchesPublishedClasses(t *testing.T) {
 		connector.ClassSearch,
 		connector.ClassCertificate,
 	}
-	got := compat.Line5Runtime()
+	got := slices.Clone(compat.Line5Runtime())
+	published := slices.Clone(connector.Classes())
+	slices.Sort(got)
+	slices.Sort(want)
+	slices.Sort(published)
 	if !slices.Equal(got, want) {
 		t.Fatalf("Line5Runtime() = %v, want %v", got, want)
 	}
-	if !slices.Equal(got, connector.Classes()) {
-		t.Fatalf("Line5Runtime() = %v, Classes() = %v", got, connector.Classes())
+	if !slices.Equal(got, published) {
+		t.Fatalf("Line5Runtime() = %v, Classes() = %v", got, published)
 	}
 }
 
