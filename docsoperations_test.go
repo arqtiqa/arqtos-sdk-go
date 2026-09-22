@@ -71,6 +71,7 @@ var classContracts = map[connector.Class]struct {
 	connector.ClassAuthenticator:    {"authenticator", "Authenticator"},
 	connector.ClassCodeHost:         {"codehost", "CodeHost"},
 	connector.ClassSearch:           {"search", "Search"},
+	connector.ClassCertificate:      {"certificate", "Certificate"},
 }
 
 // TestPendingClassesHaveNoContractPackageYet is the anti-abuse guard on the

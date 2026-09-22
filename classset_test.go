@@ -304,6 +304,11 @@ func TestConnectorClassSetIsExactlyTheRegistry(t *testing.T) {
 	// fail for a reason that has nothing to do with the set's contents.
 	want := []connector.Class{
 		connector.ClassAuthenticator,
+		// ClassCertificate joined with arqtos-sdk-go#138: Sign, Verify,
+		// PublicKey, no Export. The registry row in
+		// arqtos-5-connector-architecture.md §3.1 already intended the class;
+		// this list is the live registry update that test requires.
+		connector.ClassCertificate,
 		connector.ClassCodeCI,
 		// ClassCodeHost joined on 2026-08-12, graduating in from
 		// arqtos-connectors/connectorkit/codehost carrying the narrowed

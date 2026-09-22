@@ -37,6 +37,7 @@ func TestCloseBinding_OnlyTheServicesThatBindItAreClaimedTo(t *testing.T) {
 		"roster.proto":           true,
 		"authenticator.proto":    true,
 		"credentialloader.proto": false,
+		"certificate.proto":      true,
 	}
 
 	dir := filepath.Join("proto", "connector", "v1")

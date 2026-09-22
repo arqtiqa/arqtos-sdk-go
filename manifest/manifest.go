@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/arqtiqa/arqtos-sdk-go/authenticator"
+	"github.com/arqtiqa/arqtos-sdk-go/certificate"
 	"github.com/arqtiqa/arqtos-sdk-go/codeci"
 	"github.com/arqtiqa/arqtos-sdk-go/codehost"
 	"github.com/arqtiqa/arqtos-sdk-go/connector"
@@ -104,8 +105,9 @@ var classCapabilities = map[connector.Class]connector.Capabilities{
 	// codehost.ValidateManifest in that repository, because this map could not
 	// name a class the SDK did not publish — which is exactly the split this
 	// entry removes.
-	connector.ClassCodeHost: codehost.KnownCapabilities(),
-	connector.ClassSearch:   search.KnownCapabilities(),
+	connector.ClassCodeHost:    codehost.KnownCapabilities(),
+	connector.ClassSearch:      search.KnownCapabilities(),
+	connector.ClassCertificate: certificate.KnownCapabilities(),
 }
 
 // envNameRE matches a bare environment-variable NAME (e.g. INFISICAL_TOKEN):

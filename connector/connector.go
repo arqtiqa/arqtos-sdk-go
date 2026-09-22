@@ -54,6 +54,11 @@ const (
 	// optional writer publication. Vectors and remote serving are capabilities
 	// that may be absent. See the search package.
 	ClassSearch Class = "Search"
+	// ClassCertificate signs and verifies without exporting private keys.
+	// Secret and certificate classes are never merged: a secret class is
+	// defined by material leaving; this class is defined by material never
+	// leaving. arqtos-sdk-go#138.
+	ClassCertificate Class = "Certificate"
 	// ClassRecordStore, ... land with their designs.
 )
 
@@ -70,6 +75,7 @@ var classes = []Class{
 	ClassAuthenticator,
 	ClassCodeHost,
 	ClassSearch,
+	ClassCertificate,
 }
 
 // Classes returns the closed set of connector classes, sorted, as a copy. A

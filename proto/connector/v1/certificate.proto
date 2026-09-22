@@ -1,0 +1,64 @@
+// The Track-B wire contract for the arqtos Certificate connector class:
+// data goes in, a signature comes back, and private key material never leaves.
+//
+// This file is the contract for provider authors who will never read the Go
+// SDK. If the Go interface and this file disagree, this file is what the
+// wire actually carries.
+//
+// # The inverted invariant
+//
+// CredentialLoader is defined by material LEAVING the backend. This class is
+// defined by material NEVER leaving: a host sends bytes, a signature comes
+// back. There is no Export RPC, and adding one is a contract change that
+// TestCertificateServiceHasNoExport must catch (arqtos-sdk-go#138).
+//
+// # Verify failures are status errors, never a successful "invalid" answer
+//
+// A missing key is NOT_FOUND. A signature that does not match is
+// INVALID_ARGUMENT. Do not return an empty success for a tampered payload.
+
+syntax = "proto3";
+
+package connector.v1;
+
+import "connector.proto";
+
+option go_package = "github.com/arqtiqa/arqtos-sdk-go/connectorpb";
+
+message SignRequest {
+  string key_id = 1;
+  bytes payload = 2;
+}
+
+message SignResponse {
+  bytes signature = 1;
+  string algorithm = 2;
+}
+
+message VerifyRequest {
+  string key_id = 1;
+  bytes payload = 2;
+  bytes signature = 3;
+}
+
+message VerifyResponse {}
+
+message PublicKeyRequest {
+  string key_id = 1;
+}
+
+message PublicKeyResponse {
+  bytes public_key = 1;
+  string algorithm = 2;
+}
+
+// Certificate is the out-of-process service a provider serves and a host dials.
+// It mirrors certificate.Certificate 1:1. There is no Export operation.
+service Certificate {
+  rpc Sign(SignRequest) returns (SignResponse);
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+  rpc PublicKey(PublicKeyRequest) returns (PublicKeyResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+  rpc Close(CloseRequest) returns (CloseResponse);
+}
