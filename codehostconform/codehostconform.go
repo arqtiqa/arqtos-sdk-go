@@ -114,6 +114,9 @@ const (
 	// CheckGetRepoPrivate covers GetRepo on a private repository the
 	// credential cannot see failing as KindUnauthorized, not KindNotFound.
 	CheckGetRepoPrivate = "repo/private-is-unauthorized"
+	// CheckExactRefSource covers CompareAndSwap refusing a request that names
+	// no explicit local object source. An OID is not a transfer of bytes.
+	CheckExactRefSource = "exact_ref/source-is-required"
 )
 
 // Options are the fixtures a conformance run needs. Every field is required: a
@@ -286,6 +289,7 @@ func Run(ctx context.Context, c codehost.CodeHost, opts Options) (Report, error)
 	checkProtectionMissing(ctx, &rep, c, opts)
 	checkNativeIdentity(ctx, &rep, c, opts)
 	checkGetRepoPrivate(ctx, &rep, c, opts)
+	checkExactRefSource(ctx, &rep, c)
 
 	return rep, nil
 }
@@ -648,4 +652,26 @@ func checkGetRepoPrivate(ctx context.Context, rep *Report, c codehost.CodeHost, 
 		return
 	}
 	rep.add(CheckGetRepoPrivate, true, fmt.Sprintf("%s -> %s", opts.UnreadableProtectionRepo, cerr.KindOf(err)))
+}
+
+func checkExactRefSource(ctx context.Context, rep *Report, c codehost.CodeHost) {
+	x, ok := c.(codehost.ExactRefTransport)
+	if !ok {
+		rep.add(CheckExactRefSource, true,
+			"NOT EXERCISED: this connector does not implement ExactRefTransport, so there was nothing to drive")
+		return
+	}
+	_, err := x.CompareAndSwap(ctx, codehost.CASRequest{
+		Realm:    "forge",
+		NativeID: "42",
+		Ref:      "refs/heads/main",
+		New:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	})
+	if err == nil || cerr.KindOf(err) != cerr.KindInvalid {
+		rep.add(CheckExactRefSource, false, fmt.Sprintf(
+			"source-less CompareAndSwap: %v, want %s; an object id names bytes and does not transfer them",
+			err, cerr.KindInvalid))
+		return
+	}
+	rep.add(CheckExactRefSource, true, "source-less CAS refused")
 }
