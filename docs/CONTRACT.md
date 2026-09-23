@@ -1372,6 +1372,18 @@ as a smaller success — the same fail-closed property described under
 return values, because a resolution carrying one item would be the same
 conflation in another shape.
 
+### `CodeHost` exact history acquisition
+
+`CapExactHistory` (`exact_history`) declares the native-only `ExactHistoryAcquirer.AcquireExact(ctx, ExactHistoryRequest)` operation. It is independent of `exact_ref`: reading a ref's OID does not download its objects. A connector must both declare the capability and implement the interface.
+
+The request contains `Realm`, `NativeID`, `Ref`, a full nonzero commit `Expected` OID and an absolute clean `DestinationDir`. The caller supplies an empty directory it owns on the linked application's filesystem. Request validation checks syntax without touching disk; the connector verifies ownership, emptiness and symlink confinement before effects. Provider URLs and credentials stay in connector construction state. No remote-plugin path handoff is implied.
+
+Success materializes isolated bare storage containing the complete reachable commit ancestry, trees and blobs, with no shallow/partial-clone gaps, alternates or promisor dependencies. The connector must not inherit hooks, arbitrary Git configuration or ambient credentials, mutate source repositories or remote refs, or follow/overwrite existing symlinked content. The result binds realm, repository, ref, acquired OID and destination to the exact request and sets `Complete`. `ExactHistoryResult.Validate(request)` refuses a mismatched or incomplete result with `cerr.KindContractViolation`; this verifies the receipt, not the actual object database or policy acceptance.
+
+A ref that no longer equals `Expected` fails with `cerr.KindInvalid` wrapping `codehost.ErrRefChanged`, never a silently substituted head. Cancellation/deadline fails with `cerr.KindTimeout` wrapping `ctx.Err()`. Every failure returns a zero result. Partial destination contents remain untrusted caller-owned recovery data and must not be consumed as success or automatically reused as an empty destination.
+
+`codehostconform.Run` requires `Options.ExactHistory` when acquisition is implemented: a valid request, a known-stale request and a cancellation request, each with a separate empty destination. The harness checks capability honesty, bound complete receipts, invalid input refusal, typed ref-race refusal and cancellation. It performs no filesystem verification; connector real-Git tests must prove object completeness, credential isolation and preservation of existing data. Consumers still verify admitted history and journal semantics after acquisition.
+
 ### `CodeHost` capabilities and optional operations
 
 Five operations live behind capabilities rather than in the interface. A host
