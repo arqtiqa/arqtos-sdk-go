@@ -21,16 +21,16 @@ func historyRequest() codehost.ExactHistoryRequest {
 
 func TestExactHistoryRequest_InvalidInputIsTyped(t *testing.T) {
 	for name, mutate := range map[string]func(*codehost.ExactHistoryRequest){
-		"realm": func(r *codehost.ExactHistoryRequest) { r.Realm = "https://user:pass@host" },
-		"identity": func(r *codehost.ExactHistoryRequest) { r.NativeID = "../repo" },
-		"ref": func(r *codehost.ExactHistoryRequest) { r.Ref = "HEAD" },
-		"missing oid": func(r *codehost.ExactHistoryRequest) { r.Expected = "" },
-		"short oid": func(r *codehost.ExactHistoryRequest) { r.Expected = "abcd" },
-		"zero oid": func(r *codehost.ExactHistoryRequest) { r.Expected = codehost.ObjectID(strings.Repeat("0", 40)) },
-		"missing destination": func(r *codehost.ExactHistoryRequest) { r.DestinationDir = "" },
+		"realm":                func(r *codehost.ExactHistoryRequest) { r.Realm = "https://user:pass@host" },
+		"identity":             func(r *codehost.ExactHistoryRequest) { r.NativeID = "../repo" },
+		"ref":                  func(r *codehost.ExactHistoryRequest) { r.Ref = "HEAD" },
+		"missing oid":          func(r *codehost.ExactHistoryRequest) { r.Expected = "" },
+		"short oid":            func(r *codehost.ExactHistoryRequest) { r.Expected = "abcd" },
+		"zero oid":             func(r *codehost.ExactHistoryRequest) { r.Expected = codehost.ObjectID(strings.Repeat("0", 40)) },
+		"missing destination":  func(r *codehost.ExactHistoryRequest) { r.DestinationDir = "" },
 		"relative destination": func(r *codehost.ExactHistoryRequest) { r.DestinationDir = "repo" },
-		"root destination": func(r *codehost.ExactHistoryRequest) { r.DestinationDir = "/" },
-		"unclean destination": func(r *codehost.ExactHistoryRequest) { r.DestinationDir = "/tmp/../repo" },
+		"root destination":     func(r *codehost.ExactHistoryRequest) { r.DestinationDir = "/" },
+		"unclean destination":  func(r *codehost.ExactHistoryRequest) { r.DestinationDir = "/tmp/../repo" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := historyRequest()
@@ -51,18 +51,28 @@ func TestExactHistoryRequest_InvalidInputIsTyped(t *testing.T) {
 
 func TestExactHistoryResult_MustBindCompleteRequest(t *testing.T) {
 	r := historyRequest()
-	good := codehost.ExactHistoryResult{Realm:r.Realm, NativeID:r.NativeID, Ref:r.Ref, ObjectID:r.Expected, DestinationDir:r.DestinationDir, Complete:true}
-	if err := good.Validate(r); err != nil { t.Fatal(err) }
-	for name, mutate := range map[string]func(*codehost.ExactHistoryResult){
-		"realm":func(x *codehost.ExactHistoryResult){ x.Realm="other" },
-		"identity":func(x *codehost.ExactHistoryResult){ x.NativeID="other" },
-		"ref":func(x *codehost.ExactHistoryResult){ x.Ref="refs/heads/other" },
-		"oid":func(x *codehost.ExactHistoryResult){ x.ObjectID=codehost.ObjectID(strings.Repeat("b",40)) },
-		"destination":func(x *codehost.ExactHistoryResult){ x.DestinationDir="/other" },
-		"incomplete":func(x *codehost.ExactHistoryResult){ x.Complete=false },
-	} {
-		t.Run(name,func(t *testing.T){ x:=good; mutate(&x); if err:=x.Validate(r); cerr.KindOf(err)!=cerr.KindContractViolation { t.Fatalf("got %v, want contract violation",err) } })
+	good := codehost.ExactHistoryResult{Realm: r.Realm, NativeID: r.NativeID, Ref: r.Ref, ObjectID: r.Expected, DestinationDir: r.DestinationDir, Complete: true}
+	if err := good.Validate(r); err != nil {
+		t.Fatal(err)
 	}
-	r.Expected=""
-	if err:=good.Validate(r); cerr.KindOf(err)!=cerr.KindInvalid { t.Fatalf("bad request: %v",err) }
+	for name, mutate := range map[string]func(*codehost.ExactHistoryResult){
+		"realm":       func(x *codehost.ExactHistoryResult) { x.Realm = "other" },
+		"identity":    func(x *codehost.ExactHistoryResult) { x.NativeID = "other" },
+		"ref":         func(x *codehost.ExactHistoryResult) { x.Ref = "refs/heads/other" },
+		"oid":         func(x *codehost.ExactHistoryResult) { x.ObjectID = codehost.ObjectID(strings.Repeat("b", 40)) },
+		"destination": func(x *codehost.ExactHistoryResult) { x.DestinationDir = "/other" },
+		"incomplete":  func(x *codehost.ExactHistoryResult) { x.Complete = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := good
+			mutate(&x)
+			if err := x.Validate(r); cerr.KindOf(err) != cerr.KindContractViolation {
+				t.Fatalf("got %v, want contract violation", err)
+			}
+		})
+	}
+	r.Expected = ""
+	if err := good.Validate(r); cerr.KindOf(err) != cerr.KindInvalid {
+		t.Fatalf("bad request: %v", err)
+	}
 }

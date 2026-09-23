@@ -123,6 +123,8 @@ const (
 // check that cannot be driven is not skipped, because a report that is green
 // because nothing looked is the failure this harness exists to avoid.
 type Options struct {
+	// ExactHistory is required when the connector implements acquisition.
+	ExactHistory *ExactHistoryFixtures
 	// Manifest is the connector.yaml this connector ships — what its author
 	// wrote and what a host reads. The run compares it against the running
 	// connector rather than trusting either alone.
@@ -290,6 +292,9 @@ func Run(ctx context.Context, c codehost.CodeHost, opts Options) (Report, error)
 	checkNativeIdentity(ctx, &rep, c, opts)
 	checkGetRepoPrivate(ctx, &rep, c, opts)
 	checkExactRefSource(ctx, &rep, c)
+	if err := checkExactHistory(ctx, &rep, c, opts.ExactHistory); err != nil {
+		return Report{}, err
+	}
 
 	return rep, nil
 }
@@ -371,6 +376,7 @@ var optionalOps = []struct {
 	{codehost.CapRunnerTokens, func(c codehost.CodeHost) bool { _, ok := c.(codehost.RunnerTokenMinter); return ok }},
 	{codehost.CapProtectionInspect, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ProtectionInspector); return ok }},
 	{codehost.CapExactRef, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ExactRefTransport); return ok }},
+	{codehost.CapExactHistory, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ExactHistoryAcquirer); return ok }},
 }
 
 func checkOptionalDeclared(rep *Report, c codehost.CodeHost) {
