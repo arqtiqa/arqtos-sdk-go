@@ -47,6 +47,43 @@ func TestLine5Runtime_IncludesContentReleaseAndOrgHome(t *testing.T) {
 	}
 }
 
+func TestCheckTagFreeze_MovedSourceRefused(t *testing.T) {
+	err := compat.CheckTagFreeze("v0.5.0", "aaa", "bbb", "")
+	if err == nil || !strings.Contains(err.Error(), "moved") {
+		t.Fatalf("moved source: %v", err)
+	}
+}
+
+func TestCheckTagFreeze_ExistingTagElsewhereRefused(t *testing.T) {
+	err := compat.CheckTagFreeze("v0.5.0", "aaa", "aaa", "bbb")
+	if err == nil || !strings.Contains(err.Error(), "already points") {
+		t.Fatalf("existing tag: %v", err)
+	}
+}
+
+func TestCheckTagFreeze_MatchingOriginAccepted(t *testing.T) {
+	if err := compat.CheckTagFreeze("v0.5.0", "aaa", "aaa", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := compat.CheckTagFreeze("v0.5.0", "aaa", "aaa", "aaa"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConsumer_RequiresStableModuleVersion(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "consumer", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := compat.ModulePath + " " + compat.ModuleVersion
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("consumer go.mod does not pin %s:\n%s", want, b)
+	}
+	if strings.Contains(string(b), "alpha") {
+		t.Fatalf("consumer still pins an alpha: %s", b)
+	}
+}
+
 func TestConsumer_ResolvesThisModuleViaReplace(t *testing.T) {
 	dir := filepath.Join("testdata", "consumer")
 	cmd := exec.Command("go", "list", "-m", compat.ModulePath)
