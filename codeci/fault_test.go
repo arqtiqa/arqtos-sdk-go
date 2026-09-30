@@ -252,7 +252,7 @@ func TestCheckIdentityNamesAnUnnamedFaultRaisedInsideTheConnector(t *testing.T) 
 // TestFaultsAreNeitherRetryableNorBreakerTripping: the fault is in the
 // connector, not in backend load.
 func TestFaultsAreNeitherRetryableNorBreakerTripping(t *testing.T) {
-	for _, f := range []codeci.Fault{codeci.FaultUnresolved, codeci.FaultPartial, codeci.FaultIncoherentIdentity} {
+	for _, f := range []codeci.Fault{codeci.FaultUnresolved, codeci.FaultPartial, codeci.FaultIncoherentIdentity, codeci.FaultIncoherentSubject} {
 		err := error(&codeci.FaultError{Connector: connectorName, Op: "ListPRs", Fault: f})
 		if cerr.KindOf(err) != cerr.KindContractViolation {
 			t.Fatalf("%s: KindOf = %v, want KindContractViolation", f, cerr.KindOf(err))

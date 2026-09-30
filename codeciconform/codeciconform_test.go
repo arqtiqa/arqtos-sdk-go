@@ -221,6 +221,30 @@ func (checkPublishingStub) PublishCheck(_ context.Context, _ string, p codeci.Ch
 
 var _ codeci.CheckPublisher = checkPublishingStub{}
 
+const fixtureNativeID = "4242"
+
+// subjectReportingStub implements the optional CapAuthenticatedSubject
+// operation. It is a separate type because implementing it is what the
+// harness type-asserts for.
+type subjectReportingStub struct {
+	*stub
+	subject func(context.Context) (codeci.Subject, error)
+}
+
+func (s subjectReportingStub) AuthenticatedSubject(ctx context.Context) (codeci.Subject, error) {
+	if s.subject != nil {
+		return s.subject(ctx)
+	}
+	return codeci.Subject{
+		NativeID:  fixtureNativeID,
+		Authority: "github.com",
+		Kind:      codeci.SubjectKindPAT,
+		Login:     fixtureLogin,
+	}, nil
+}
+
+var _ codeci.SubjectReporter = subjectReportingStub{}
+
 // ⚠️ publishesAnythingStub accepts a publication it must refuse: no external id
 // and an unspecified status. Both failures are PERMANENT rather than noisy — an
 // unspecified status publishes a check no required-check rule can ever be
@@ -507,6 +531,91 @@ func TestRun_AcceptsCheckPublishDeclaredAndImplemented(t *testing.T) {
 	rep := run(t, checkPublishingStub{s}, stubManifest(codeci.CapCheckPublish))
 	if err := rep.Err(); err != nil {
 		t.Fatalf("a connector that declares and implements check_publish was failed: %v\n%s", err, rep)
+	}
+}
+
+func TestRun_CatchesAuthenticatedSubjectDeclaredButAbsent(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapAuthenticatedSubject}
+	rep := run(t, s, stubManifest(codeci.CapAuthenticatedSubject))
+	requireFailed(t, rep, codeciconform.CheckOptionalDeclared)
+	detail, _ := failed(rep, codeciconform.CheckOptionalDeclared)
+	if !strings.Contains(detail, string(codeci.CapAuthenticatedSubject)) {
+		t.Errorf("the failure does not name the capability: %q", detail)
+	}
+}
+
+func TestRun_CatchesAuthenticatedSubjectImplementedButUndeclared(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{}
+	rep := run(t, subjectReportingStub{stub: s}, stubManifest())
+	requireFailed(t, rep, codeciconform.CheckOptionalDeclared)
+}
+
+func TestRun_AcceptsAuthenticatedSubjectDeclaredAndImplemented(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapAuthenticatedSubject}
+	rep := run(t, subjectReportingStub{stub: s}, stubManifest(codeci.CapAuthenticatedSubject))
+	if err := rep.Err(); err != nil {
+		t.Fatalf("a connector that declares and implements authenticated_subject was failed: %v\n%s", err, rep)
+	}
+}
+
+func TestRun_CatchesMissingNativeSubject(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapAuthenticatedSubject}
+	rep := run(t, subjectReportingStub{
+		stub: s,
+		subject: func(context.Context) (codeci.Subject, error) {
+			return codeci.Subject{Authority: "github.com", Kind: codeci.SubjectKindPAT, Login: fixtureLogin}, nil
+		},
+	}, stubManifest(codeci.CapAuthenticatedSubject))
+	detail, did := failed(rep, codeciconform.CheckSubjectCoherent)
+	if !did {
+		t.Fatalf("a connector that omitted native id passed subject/authority-and-native-id\n%s", rep)
+	}
+	if !strings.Contains(detail, "incoherent") {
+		t.Errorf("detail does not name incoherence: %s", detail)
+	}
+}
+
+func TestRun_CatchesLoginUsedAsNativeID(t *testing.T) {
+	s := newStub()
+	s.caps = connector.Capabilities{codeci.CapAuthenticatedSubject}
+	rep := run(t, subjectReportingStub{
+		stub: s,
+		subject: func(context.Context) (codeci.Subject, error) {
+			return codeci.Subject{
+				NativeID:  fixtureLogin,
+				Authority: "github.com",
+				Kind:      codeci.SubjectKindPAT,
+				Login:     fixtureLogin,
+			}, nil
+		},
+	}, stubManifest(codeci.CapAuthenticatedSubject))
+	detail, did := failed(rep, codeciconform.CheckSubjectLoginRename)
+	if !did {
+		t.Fatalf("a connector that used login as native id passed login-rename-preserves-identity\n%s", rep)
+	}
+	if !strings.Contains(detail, fixtureLogin) {
+		t.Errorf("detail does not name the login used as identity: %s", detail)
+	}
+}
+
+func TestRun_SubjectChecksSayWhenTheyWereNotExercised(t *testing.T) {
+	rep := run(t, newStub(), stubManifest())
+	for _, name := range []string{codeciconform.CheckSubjectCoherent, codeciconform.CheckSubjectLoginRename} {
+		for _, res := range rep.Results {
+			if res.Name != name {
+				continue
+			}
+			if !res.Pass {
+				t.Errorf("%s failed on a connector without the tier: %s", name, res.Detail)
+			}
+			if !strings.Contains(res.Detail, "NOT EXERCISED") {
+				t.Errorf("%s passed without saying it was not exercised: %s", name, res.Detail)
+			}
+		}
 	}
 }
 
@@ -1016,6 +1125,31 @@ var violators = map[string]func() (codeci.CodeCI, manifest.Doc){
 			return codeci.Identity{Authenticated: true}, nil // an empty login, reported as a success
 		}
 		return s, stubManifest()
+	},
+	codeciconform.CheckSubjectCoherent: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.caps = connector.Capabilities{codeci.CapAuthenticatedSubject}
+		return subjectReportingStub{
+			stub: s,
+			subject: func(context.Context) (codeci.Subject, error) {
+				return codeci.Subject{Authority: "github.com", Kind: codeci.SubjectKindPAT, Login: fixtureLogin}, nil
+			},
+		}, stubManifest(codeci.CapAuthenticatedSubject)
+	},
+	codeciconform.CheckSubjectLoginRename: func() (codeci.CodeCI, manifest.Doc) {
+		s := newStub()
+		s.caps = connector.Capabilities{codeci.CapAuthenticatedSubject}
+		return subjectReportingStub{
+			stub: s,
+			subject: func(context.Context) (codeci.Subject, error) {
+				return codeci.Subject{
+					NativeID:  fixtureLogin,
+					Authority: "github.com",
+					Kind:      codeci.SubjectKindPAT,
+					Login:     fixtureLogin,
+				}, nil
+			},
+		}, stubManifest(codeci.CapAuthenticatedSubject)
 	},
 	codeciconform.CheckHealth: func() (codeci.CodeCI, manifest.Doc) {
 		s := newStub()

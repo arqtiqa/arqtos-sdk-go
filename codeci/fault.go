@@ -38,6 +38,11 @@ const (
 	// instead — see [Identity] — and this is the host-side half of that
 	// requirement, so that every host does not write the same guard itself.
 	FaultIncoherentIdentity Fault = "incoherent-identity"
+	// FaultIncoherentSubject is a connector returning a [Subject] that is
+	// not [Subject.Coherent] from [SubjectReporter.AuthenticatedSubject] —
+	// a missing native id or authority, an unspecified kind, or a locator
+	// or email used as identity.
+	FaultIncoherentSubject Fault = "incoherent-subject"
 )
 
 // A FaultError reports a CONNECTOR CONTRACT VIOLATION, attributed by name.

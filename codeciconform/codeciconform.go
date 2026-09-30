@@ -109,13 +109,14 @@ const (
 	// the running connector's Capabilities() being the same set.
 	CheckCapabilityHonesty = "capability/manifest-matches-runtime"
 	// CheckOptionalDeclared covers each optional operation being declared
-	// exactly when it is implemented: CapCIControl ↔ CIController and
-	// CapCheckPublish ↔ CheckPublisher. "Implemented" is a Go interface
-	// assertion against the connector's own type, independent of anything it
-	// declares — the same mechanism codehost's optional operations and
-	// roster's Watcher use, and deliberately NOT derived from Capabilities():
-	// a check that read "implemented" off the same signal as "declared" would
-	// agree with itself whatever the connector does.
+	// exactly when it is implemented: CapCIControl ↔ CIController,
+	// CapCheckPublish ↔ CheckPublisher, and CapAuthenticatedSubject ↔
+	// SubjectReporter. "Implemented" is a Go interface assertion against the
+	// connector's own type, independent of anything it declares — the same
+	// mechanism codehost's optional operations and roster's Watcher use, and
+	// deliberately NOT derived from Capabilities(): a check that read
+	// "implemented" off the same signal as "declared" would agree with itself
+	// whatever the connector does.
 	CheckOptionalDeclared = "optional/declared-is-implemented"
 
 	// CheckPublishRefusal covers the optional CheckPublisher tier VALIDATING
@@ -199,6 +200,14 @@ const (
 	// environment, and an empty login asserts the opposite while wearing a
 	// success's shape.
 	CheckIdentity = "identity/answers-with-a-login"
+	// CheckSubjectCoherent covers the optional SubjectReporter tier returning
+	// a Coherent native subject (authority + opaque native id + specified
+	// kind), or a classified failure. Missing or locator-shaped authority or
+	// native id is refused.
+	CheckSubjectCoherent = "subject/authority-and-native-id"
+	// CheckSubjectLoginRename covers NativeID remaining distinct from the
+	// current login: a renameable login is display, not identity.
+	CheckSubjectLoginRename = "subject/login-rename-preserves-identity"
 	// CheckHealth covers Health() answering: a status, or a classified failure.
 	CheckHealth = "health/answers"
 
@@ -457,6 +466,8 @@ func Run(ctx context.Context, c codeci.CodeCI, opts Options) (Report, error) {
 	checkPRsCarryAURL(ctx, &rep, c, opts)
 	checkDraftIsReported(ctx, &rep, c, opts)
 	checkIdentity(ctx, &rep, c)
+	checkSubjectCoherent(ctx, &rep, c)
+	checkSubjectLoginRename(ctx, &rep, c)
 	checkHealth(ctx, &rep, c)
 	checkIssueStateReported(ctx, &rep, c, opts)
 	checkIssueUnresolvableIsAFailure(ctx, &rep, c, opts)
@@ -539,6 +550,7 @@ var optionalOps = []struct {
 }{
 	{codeci.CapCIControl, func(c codeci.CodeCI) bool { _, ok := c.(codeci.CIController); return ok }},
 	{codeci.CapCheckPublish, func(c codeci.CodeCI) bool { _, ok := c.(codeci.CheckPublisher); return ok }},
+	{codeci.CapAuthenticatedSubject, func(c codeci.CodeCI) bool { _, ok := c.(codeci.SubjectReporter); return ok }},
 }
 
 // checkOptionalDeclared fails in both directions, and "implemented" is a Go
@@ -941,6 +953,73 @@ func checkIdentity(ctx context.Context, rep *Report, c codeci.CodeCI) {
 		return
 	}
 	rep.add(CheckIdentity, true, fmt.Sprintf("login=%s", id.Login))
+}
+
+func checkSubjectCoherent(ctx context.Context, rep *Report, c codeci.CodeCI) {
+	reporter, ok := c.(codeci.SubjectReporter)
+	if !ok {
+		rep.add(CheckSubjectCoherent, true,
+			"NOT EXERCISED: this connector does not implement SubjectReporter, so there was nothing to drive")
+		return
+	}
+	s, err := reporter.AuthenticatedSubject(ctx)
+	if err != nil {
+		if !cerr.Classified(err) {
+			rep.add(CheckSubjectCoherent, false, fmt.Sprintf("AuthenticatedSubject() failed with an unclassified error: %v", err))
+			return
+		}
+		rep.add(CheckSubjectCoherent, true, fmt.Sprintf("classified failure: %s", cerr.KindOf(err)))
+		return
+	}
+	if !s.Coherent() {
+		rep.add(CheckSubjectCoherent, false, fmt.Sprintf(
+			"AuthenticatedSubject() reported success with an incoherent subject (native_id=%q authority=%q kind=%s); missing or locator-shaped authority or native id is not a smaller identity",
+			s.NativeID, s.Authority, s.Kind))
+		return
+	}
+	rep.add(CheckSubjectCoherent, true, fmt.Sprintf("native_id=%s authority=%s kind=%s", s.NativeID, s.Authority, s.Kind))
+}
+
+func checkSubjectLoginRename(ctx context.Context, rep *Report, c codeci.CodeCI) {
+	reporter, ok := c.(codeci.SubjectReporter)
+	if !ok {
+		rep.add(CheckSubjectLoginRename, true,
+			"NOT EXERCISED: this connector does not implement SubjectReporter, so there was nothing to drive")
+		return
+	}
+	s, err := reporter.AuthenticatedSubject(ctx)
+	if err != nil {
+		if !cerr.Classified(err) {
+			rep.add(CheckSubjectLoginRename, false, fmt.Sprintf("AuthenticatedSubject() failed with an unclassified error: %v", err))
+			return
+		}
+		rep.add(CheckSubjectLoginRename, true, fmt.Sprintf("classified failure: %s", cerr.KindOf(err)))
+		return
+	}
+	if !s.Coherent() {
+		rep.add(CheckSubjectLoginRename, true,
+			"NOT EXERCISED: subject is incoherent; subject/authority-and-native-id owns that failure")
+		return
+	}
+	id, idErr := c.WhoAmI(ctx)
+	if idErr != nil || !id.Coherent() || !id.Authenticated {
+		rep.add(CheckSubjectLoginRename, true, "NOT EXERCISED: WhoAmI did not yield an authenticated login to compare")
+		return
+	}
+	if s.NativeID == id.Login {
+		rep.add(CheckSubjectLoginRename, false, fmt.Sprintf(
+			"AuthenticatedSubject() native id %q equals WhoAmI login; a renameable login is display, not identity",
+			s.NativeID))
+		return
+	}
+	renamed := s
+	renamed.Login = id.Login + "-renamed"
+	if !s.SameIdentity(renamed) {
+		rep.add(CheckSubjectLoginRename, false,
+			"SameIdentity returned false after a login rename; NativeID must survive the display name changing")
+		return
+	}
+	rep.add(CheckSubjectLoginRename, true, fmt.Sprintf("native_id=%s distinct from login=%s", s.NativeID, id.Login))
 }
 
 func checkHealth(ctx context.Context, rep *Report, c codeci.CodeCI) {
