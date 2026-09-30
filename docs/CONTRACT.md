@@ -1391,6 +1391,16 @@ A ref that no longer equals `Expected` fails with `cerr.KindInvalid` wrapping `c
 
 `codehostconform.Run` requires `Options.ExactHistory` when acquisition is implemented: a valid request, a known-stale request and a cancellation request, each with a separate empty destination. The harness checks capability honesty, bound complete receipts, invalid input refusal, typed ref-race refusal and cancellation. It performs no filesystem verification; connector real-Git tests must prove object completeness, credential isolation and preservation of existing data. Consumers still verify admitted history and journal semantics after acquisition.
 
+### `CodeHost` store fetch
+
+`CapStoreFetch` (`store_fetch`) declares the native-only `StoreFetcher.FetchStore(ctx, StoreFetchRequest)` operation. It is independent of `CloneRepo` (checkout into a working tree) and of `exact_history` (pinned OID into an empty destination). A connector must both declare the capability and implement the interface.
+
+The request contains `Realm`, `NativeID` and an absolute clean `StoreDir`. There is no URL field: locators and credentials stay in connector construction state. Request validation checks syntax without touching disk. `StoreDir` is the registered bare RepositoryStore the caller already owns; the connector must not mutate session trees, write tokens into argv, persistent git config, remote URLs, logs or credential-helper storage. Explicit scoped memory or inherited-descriptor transport is allowed.
+
+Success returns a receipt bound to the same realm, native id and store directory. `StoreFetchResult.Validate(request)` refuses a mismatched receipt with `cerr.KindContractViolation`. Denied credentials are `cerr.KindUnauthorized`; a missing store is `cerr.KindUnavailable`; cancellation/deadline is `cerr.KindTimeout` wrapping `ctx.Err()`. Every failure returns a zero result. No ambient credential fallback.
+
+`codehostconform.Run` requires `Options.StoreFetch` when fetch is implemented: a valid request, a denied-identity request and a cancellation request. The harness checks capability honesty, bound receipts, invalid input refusal, typed unauthorized and cancellation. It performs no filesystem or argv verification; connector real-Git tests prove credential isolation and that session trees are untouched.
+
 ### `CodeHost` capabilities and optional operations
 
 Five operations live behind capabilities rather than in the interface. A host

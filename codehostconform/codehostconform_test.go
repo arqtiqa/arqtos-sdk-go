@@ -193,6 +193,7 @@ var (
 	_ codehost.ProtectionInspector = protectionInspectingStub{}
 	_ codehost.ExactRefTransport   = exactRefStub{}
 	_ codehost.ExactRefTransport   = sourceLessExactRefStub{}
+	_ codehost.StoreFetcher        = storeStub{}
 )
 
 func stubManifest(caps ...connector.Capability) manifest.Doc {

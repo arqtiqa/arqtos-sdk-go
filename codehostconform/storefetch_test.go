@@ -3,6 +3,7 @@ package codehostconform_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/arqtiqa/arqtos-sdk-go/cerr"
@@ -30,10 +31,13 @@ func (s storeStub) FetchStore(ctx context.Context, r codehost.StoreFetchRequest)
 		}
 		return zero, err
 	}
-	if s.fault == "unauthorized" {
-		return zero, cerr.New(cerr.KindUnavailable, "FetchStore", errors.New("masked as missing"))
+	if r.NativeID == "denied" {
+		if s.fault == "unauthorized" {
+			return zero, cerr.New(cerr.KindUnavailable, "FetchStore", errors.New("masked as missing"))
+		}
+		return zero, cerr.New(cerr.KindUnauthorized, "FetchStore", errors.New("denied"))
 	}
-	x := codehost.StoreFetchResult{Realm: r.Realm, NativeID: r.NativeID, StoreDir: r.StoreDir}
+	x := codehost.StoreFetchResult(r)
 	if s.fault == "receipt" {
 		x.NativeID = "other"
 	}
@@ -65,7 +69,7 @@ func storeOptions(t *testing.T) codehostconform.Options {
 }
 
 func TestConform_StoreFetchRejectsBadBehavior(t *testing.T) {
-	for _, fault := range []string{"", "receipt", "cancel", "invalid"} {
+	for _, fault := range []string{"", "receipt", "cancel", "invalid", "unauthorized"} {
 		t.Run(fault, func(t *testing.T) {
 			s := newStub()
 			s.caps = connector.Capabilities{codehost.CapStoreFetch}
@@ -111,8 +115,13 @@ func TestConform_StoreFetchRequiresFixturesAndCapability(t *testing.T) {
 }
 
 func TestConform_UnimplementedStoreFetchIsNotExercised(t *testing.T) {
-	rep := run(t, newStub(), stubManifest())
+	rep := run(t, newStub(), stubManifest(codehost.CapNativeReview))
 	if !rep.OK() {
 		t.Fatal(rep.String())
+	}
+	for _, res := range rep.Results {
+		if strings.HasPrefix(res.Name, "store_fetch/") {
+			t.Fatalf("unimplemented store fetch was exercised: %s", res.Name)
+		}
 	}
 }

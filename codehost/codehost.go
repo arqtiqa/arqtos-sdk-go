@@ -114,6 +114,10 @@ const (
 	CapExactRef connector.Capability = "exact_ref"
 	// CapExactHistory declares pinned object acquisition via ExactHistoryAcquirer.
 	CapExactHistory connector.Capability = "exact_history"
+	// CapStoreFetch declares credential-safe fetch into a registered bare
+	// RepositoryStore, via [StoreFetcher]. Independent of CloneRepo (checkout)
+	// and CapExactHistory (pinned OID into an empty destination).
+	CapStoreFetch connector.Capability = "store_fetch"
 )
 
 // knownCapabilities is the closed capability vocabulary of this class. A
@@ -121,7 +125,7 @@ const (
 // host does not recognise is a capability the host will not use, and a typo is
 // indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
-	CapWebhooks, CapRunnerTokens, CapFileRead, CapNativeReview, CapProtectionInspect, CapExactRef, CapExactHistory,
+	CapWebhooks, CapRunnerTokens, CapFileRead, CapNativeReview, CapProtectionInspect, CapExactRef, CapExactHistory, CapStoreFetch,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for this class,
@@ -241,7 +245,7 @@ type Branch struct {
 // Optional operations live behind capabilities rather than in this interface:
 // [FileReader] behind [CapFileRead], [WebhookRegistrar] behind [CapWebhooks],
 // [RunnerTokenMinter] behind [CapRunnerTokens], [ExactRefTransport] behind
-// [CapExactRef]. A host type-asserts for them,
+// [CapExactRef], [StoreFetcher] behind [CapStoreFetch]. A host type-asserts for them,
 // and [github.com/arqtiqa/arqtos-sdk-go/codehostconform.Run] fails a connector
 // that declares one without implementing it — in both directions.
 type CodeHost interface {

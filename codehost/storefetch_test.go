@@ -19,7 +19,7 @@ func TestKnownCapabilities_CarriesStoreFetch(t *testing.T) {
 
 func storeRequest() codehost.StoreFetchRequest {
 	return codehost.StoreFetchRequest{
-		Realm:    "github.com",
+		Realm:    "host-a",
 		NativeID: "424242",
 		StoreDir: "/unused/registered-bare-store",
 	}
@@ -67,7 +67,7 @@ func TestStoreFetchRequest_HasNoURLField(t *testing.T) {
 
 func TestStoreFetchResult_MustBindRequest(t *testing.T) {
 	req := storeRequest()
-	good := codehost.StoreFetchResult{Realm: req.Realm, NativeID: req.NativeID, StoreDir: req.StoreDir}
+	good := codehost.StoreFetchResult(req)
 	if err := good.Validate(req); err != nil {
 		t.Fatalf("bound receipt refused: %v", err)
 	}

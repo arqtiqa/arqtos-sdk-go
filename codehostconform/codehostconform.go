@@ -125,6 +125,8 @@ const (
 type Options struct {
 	// ExactHistory is required when the connector implements acquisition.
 	ExactHistory *ExactHistoryFixtures
+	// StoreFetch is required when the connector implements StoreFetcher.
+	StoreFetch *StoreFetchFixtures
 	// Manifest is the connector.yaml this connector ships — what its author
 	// wrote and what a host reads. The run compares it against the running
 	// connector rather than trusting either alone.
@@ -295,6 +297,9 @@ func Run(ctx context.Context, c codehost.CodeHost, opts Options) (Report, error)
 	if err := checkExactHistory(ctx, &rep, c, opts.ExactHistory); err != nil {
 		return Report{}, err
 	}
+	if err := checkStoreFetch(ctx, &rep, c, opts.StoreFetch); err != nil {
+		return Report{}, err
+	}
 
 	return rep, nil
 }
@@ -377,6 +382,7 @@ var optionalOps = []struct {
 	{codehost.CapProtectionInspect, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ProtectionInspector); return ok }},
 	{codehost.CapExactRef, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ExactRefTransport); return ok }},
 	{codehost.CapExactHistory, func(c codehost.CodeHost) bool { _, ok := c.(codehost.ExactHistoryAcquirer); return ok }},
+	{codehost.CapStoreFetch, func(c codehost.CodeHost) bool { _, ok := c.(codehost.StoreFetcher); return ok }},
 }
 
 func checkOptionalDeclared(rep *Report, c codehost.CodeHost) {
