@@ -179,6 +179,24 @@ const (
 	// either without the other, so collapsing them would make a host that
 	// checked one capability act on a wrong assumption about the other.
 	CapCheckPublish connector.Capability = "check_publish"
+
+	// CapAuthenticatedSubject declares that this connector can report the
+	// provider-native authenticated subject its credential binds, via
+	// [SubjectReporter].
+	//
+	// It is optional, and a NEW interface rather than a field on [Identity]
+	// or a method on [CIController] or [CheckPublisher]: adding required
+	// fields to Identity would break every existing WhoAmI implementer at
+	// compile time in THEIR repository after release, and login is not
+	// identity.
+	//
+	// The first supported profile is a PAT-backed GitHub user
+	// ([SubjectKindPAT] + authority "github.com"). GitHub App installations,
+	// GitHub service accounts, and GitLab subjects are cerr.KindUnsupported
+	// until a later qualification names them. A credential the code host
+	// rejected is cerr.KindUnauthorized; a subject that could not be read is
+	// cerr.KindUnavailable.
+	CapAuthenticatedSubject connector.Capability = "authenticated_subject"
 )
 
 // knownCapabilities is the closed capability vocabulary of this class. A
@@ -186,7 +204,7 @@ const (
 // host does not recognise is a capability the host will not use, and a typo
 // is indistinguishable from a capability that has yet to ship.
 var knownCapabilities = connector.Capabilities{
-	CapCIControl, CapCheckPublish,
+	CapCIControl, CapCheckPublish, CapAuthenticatedSubject,
 }
 
 // KnownCapabilities returns the closed capability vocabulary for the CodeCI

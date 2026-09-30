@@ -1223,12 +1223,17 @@ an empty login as a success.
 | `CapCIControl` | `ci_control` | Reading and mutating CI are plausibly different permissions: a token or app installation scoped for review can read check/pipeline status without holding the separately-privileged, write-scoped permission a rerun or cancel needs — the same reasoning `codehost`'s runner-token capability is built on. Optional operation: `CIController` (`RerunWorkflow`, `CancelWorkflow`). |
 
 | `CapCheckPublish` | `check_publish` | Publishing a check the connector's own identity OWNS is a different permission from re-running a workflow it did not create — on GitHub an app installation can hold either without the other, so collapsing them into one capability would have a host act on a wrong assumption about the half it did not check. ⚠️ A separate INTERFACE too, never a method added to `CIController`: adding a method to a published optional tier breaks every existing implementer, and it breaks them at compile time in *their* repository, after release. Optional operation: `CheckPublisher` (`PublishCheck`). |
+| `CapAuthenticatedSubject` | `authenticated_subject` | `WhoAmI` reports a renameable **login**, which cannot bind a Line-5 principal. This optional tier reports the provider-native subject: opaque `NativeID` + provider `Authority` + provisioning `Kind`. ⚠️ A NEW interface (`SubjectReporter.AuthenticatedSubject`), never required fields on `Identity` and never a method on `CIController`/`CheckPublisher`. Login and email are display, not identity. First supported profile: **PAT-backed GitHub** (`SubjectKindPAT` + authority `github.com`). GitHub App, GitHub service, and GitLab return `cerr.KindUnsupported` until qualified; a rejected credential is `KindUnauthorized`; a subject that could not be read is `KindUnavailable`. A host MUST NOT infer human membership from App/service. SDK contains no vendor HTTP. |
 
 A connector without `CapCIControl` MUST still implement every required,
 read-only `CodeCI` operation; it simply has nothing behind `CIController`.
 
 A connector without `CapCheckPublish` can still READ check status through
 `GetCheckRuns`; it simply cannot publish one of its own.
+
+A connector without `CapAuthenticatedSubject` still implements `WhoAmI`
+(`{Login, Authenticated}`); it simply cannot report a stable native subject.
+Existing `CodeCI` implementers stay source-compatible.
 
 ⚠️ `CheckPublication` is addressed by **`HeadSHA`, never by branch or change-request
 number**. A check published against a branch is a claim about whatever that branch
@@ -1283,7 +1288,7 @@ if err := rep.Err(); err != nil {
 | `manifest/valid` | the manifest validates and declares this class |
 | `class/implements` | `Implements()` reports `connector.ClassCodeCI` |
 | `capability/manifest-matches-runtime` | the manifest's `capabilities` and the running connector's `Capabilities()` are the same set |
-| `optional/declared-is-implemented` | `ci_control` is declared exactly when `CIController` is implemented, and `check_publish` is declared exactly when `CheckPublisher` is implemented — "implemented" is a Go type assertion against the connector's own type, **never** derived from `Capabilities()` |
+| `optional/declared-is-implemented` | `ci_control` is declared exactly when `CIController` is implemented, `check_publish` exactly when `CheckPublisher` is implemented, and `authenticated_subject` exactly when `SubjectReporter` is implemented — "implemented" is a Go type assertion against the connector's own type, **never** derived from `Capabilities()` |
 | `check-publish/refuses-before-publishing` | `PublishCheck` refuses an invalid publication with `cerr.KindInvalid` **before publishing anything**. ⚠️ Driven entirely through a REFUSAL — the harness never publishes a real check run, so a conformance run stays safe to repeat against a live repository. The property is worth checking because its failure is PERMANENT rather than noisy: a check published with an unspecified status can never satisfy a required-check rule, so it blocks the change request forever with nothing in the log to say why; and with no `external_id`, a retry after an ambiguous call creates a second check instead of updating the first. A connector without the tier reports the check as **NOT EXERCISED** rather than as a pass. |
 | `lists/no-empty-success` | `ListPRs`, `ListBranches`, `GetCheckRuns` and `GetDiff` against the fixtures all resolve **readable, with entries** |
 | `lists/failure-is-typed-and-fail-closed` | `ListPRs(UnknownRepo)` and `GetDiff(Repo, UnknownPR)` each fail with a classified `cerr.Kind` **and** an unreadable resolution |
@@ -1295,6 +1300,8 @@ if err := rep.Err(); err != nil {
 | `prs/comment-refuses-empty-body` | `CommentPR(Repo, OpenPR, "")` is refused with a classified error **and** returns no comment id, so a connector that posted first and refused afterwards is caught |
 | `prs/carry-a-url` | every `PR` from `ListPRs(Repo)` carries a non-empty `URL` |
 | `identity/answers-with-a-login` | `WhoAmI()` reports an authenticated identity with a non-empty login, or fails with a classified error. An empty login reported as a success is **refused** |
+| `subject/authority-and-native-id` | When `SubjectReporter` is implemented, `AuthenticatedSubject()` returns a `Coherent()` subject (opaque native id + provider realm + specified kind) or a classified failure. Missing or locator-shaped authority/native id is **refused**. A connector without the tier reports **NOT EXERCISED**. |
+| `subject/login-rename-preserves-identity` | When `SubjectReporter` is implemented and the subject is coherent, native id is distinct from `WhoAmI` login, and `SameIdentity` holds across a login rename. Using login as native id is **refused**. |
 | `health/answers` | `Health()` reports a status or a classified failure |
 
 **The two merge checks and the create check call the mutating operations for
