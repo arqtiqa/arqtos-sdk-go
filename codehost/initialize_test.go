@@ -21,6 +21,9 @@ func TestRefuseInitialize_IsTypedUnsupportedNamingTheOperation(t *testing.T) {
 	if got := cerr.KindOf(err); got != cerr.KindUnsupported {
 		t.Fatalf("kind=%v; want unsupported", got)
 	}
+	if !strings.HasPrefix(err.Error(), "CreateRepo:") {
+		t.Fatalf("error %q does not name the operation", err)
+	}
 	if !strings.Contains(err.Error(), "initial revision") {
 		t.Fatalf("error %q does not name the unmet option", err)
 	}
