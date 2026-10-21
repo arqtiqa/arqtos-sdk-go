@@ -222,6 +222,15 @@ type CreateRepoOpts struct {
 	Private     bool
 	Description string
 	Topics      []string
+	// Initialize asks the provider to create the repository with its default
+	// branch and one initial commit, so a clone or fetch of the new repository
+	// finds a revision. It is provider-native: the connector maps it to the
+	// host's own option and never fabricates the commit with a push.
+	//
+	// A connector that cannot honour it MUST refuse with [RefuseInitialize]
+	// before creating anything. Creating an empty repository and reporting
+	// success would hand the caller a resource that cannot be composed.
+	Initialize bool
 }
 
 // A Branch is a named branch tip.
@@ -274,7 +283,9 @@ type CodeHost interface {
 	ListRepos(ctx context.Context, owner string) (Resolution[Repo], error)
 
 	// CreateRepo creates a repository and returns it as the host now holds
-	// it, including any topics that were applied.
+	// it, including any topics that were applied. opts.Initialize requests an
+	// initial revision; a connector that cannot honour it refuses with
+	// [RefuseInitialize].
 	CreateRepo(ctx context.Context, opts CreateRepoOpts) (Repo, error)
 
 	// SetTopics replaces the repository's topic labels with topics.
